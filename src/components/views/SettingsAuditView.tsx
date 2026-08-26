@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Settings, Shield, Users, History,
-  Check, Sparkles, Building, UserPlus2, Pencil
+  Check, Sparkles, Building, UserPlus2, Pencil, Globe, RefreshCw, AlertTriangle
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
@@ -24,12 +24,26 @@ const ROLE_BADGE_VARIANT: Record<string, 'gold' | 'purple' | 'emerald' | 'sky' |
 export const SettingsAuditView: React.FC = () => {
   const { language, t } = useLanguage();
   const { currentUser, staffDirectory } = useAuth();
-  const { auditLogs, showToast } = useCRM();
+  const { auditLogs, showToast, getReconciliationReport } = useCRM();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit' | 'connect'>('general');
   const [addStaffOpen, setAddStaffOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<User | null>(null);
+  const [reconciliationReport, setReconciliationReport] = useState<any[]>([]);
+  const [loadingReport, setLoadingReport] = useState(false);
   const isAdmin = currentUser.role === 'ceo' || currentUser.role === 'admin';
+
+  const loadReconciliation = async () => {
+    setLoadingReport(true);
+    try {
+      const rep = await getReconciliationReport();
+      setReconciliationReport(rep);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingReport(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -80,6 +94,18 @@ export const SettingsAuditView: React.FC = () => {
           }`}
         >
           {language === 'ar' ? `سجل التدقيق الأمني (${auditLogs.length})` : `Security Audit Trail (${auditLogs.length})`}
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('connect');
+            if (reconciliationReport.length === 0) loadReconciliation();
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+            activeTab === 'connect' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <span>{language === 'ar' ? 'ربط الموقع العام (SPLENDOR Connect)' : 'SPLENDOR Connect & Website Sync'}</span>
         </button>
       </div>
 
@@ -321,6 +347,137 @@ export const SettingsAuditView: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 4: SPLENDOR Connect Public Website Sync & Reconciliation */}
+      {activeTab === 'connect' && (
+        <div className="space-y-6 text-xs">
+          <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-zinc-100 font-bold text-sm">
+                  <Globe className="w-4 h-4 text-[#D4AF37]" />
+                  <span>{language === 'ar' ? 'تقرير التوفيق والمطابقة بين الأسطول والموقع العام' : 'Fleet ↔ Website Reconciliation & Public Fleet Engine'}</span>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-1">
+                  {language === 'ar'
+                    ? 'فحص ومطابقة حالة جميع مركبات الأسطول، الأسعار العامة، والتحقق من عدم تسريب أي بيانات تشغيلية داخلية للواجهة العامة'
+                    : 'Audit public showroom publication status, public daily rates, and enforce strict zero-leakage security boundaries'}
+                </p>
+              </div>
+
+              <button
+                onClick={loadReconciliation}
+                disabled={loadingReport}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold transition-all"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-[#D4AF37] ${loadingReport ? 'animate-spin' : ''}`} />
+                <span>{language === 'ar' ? 'تحديث الفحص الآن' : 'Run Audit Check'}</span>
+              </button>
+            </div>
+
+            {/* Architecture Rules Pill Strip */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+              <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800/80">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block mb-1">
+                  ✓ Operational Single Source of Truth
+                </span>
+                <p className="text-zinc-300 text-[11px]">
+                  {language === 'ar'
+                    ? 'نظام الـCRM هو المرجع النهائي للبيانات، واللوحات ليست معرفاً ثابتاً للمركبة بل ترتبط بـVIN.'
+                    : 'The CRM is the operational source of truth. VIN is the primary identity, plates are historical intervals.'}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800/80">
+                <span className="text-[10px] text-sky-400 font-bold uppercase tracking-wider block mb-1">
+                  ✓ Public Data Sanitization (DTOs)
+                </span>
+                <p className="text-zinc-300 text-[11px]">
+                  {language === 'ar'
+                    ? 'الموقع لا يتلقى أي بيانات للمالكين، التكاليف، أرقام الشاسيه (VIN)، أو هوامش الربح.'
+                    : 'All public endpoints strip internal revenue, expenses, GPS, VIN, and contractor data.'}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800/80">
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block mb-1">
+                  ✓ Historical Attribution Guarantee
+                </span>
+                <p className="text-zinc-300 text-[11px]">
+                  {language === 'ar'
+                    ? 'بوابات سالك ودرب والمخالفات ترتبط تلقائياً بالعقود حتى بعد استبدال لوحة المركبة.'
+                    : 'Salik & Darb toll reconciliation operates on exact plate assignment datetime spans.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Reconciliation Table */}
+            <div className="rounded-2xl border border-zinc-800 overflow-hidden mt-4">
+              <table className="w-full text-start">
+                <thead>
+                  <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
+                    <th className="p-3 text-start font-medium">{language === 'ar' ? 'المركبة' : 'Vehicle'}</th>
+                    <th className="p-3 text-start font-medium">{language === 'ar' ? 'اللوحة الحالية' : 'Current Plate'}</th>
+                    <th className="p-3 text-start font-medium">{language === 'ar' ? 'حالة الـCRM' : 'CRM Status'}</th>
+                    <th className="p-3 text-start font-medium">{language === 'ar' ? 'نشر الموقع' : 'Website Status'}</th>
+                    <th className="p-3 text-start font-medium">{language === 'ar' ? 'سعر الموقع' : 'Public Rate'}</th>
+                    <th className="p-3 text-start font-medium">{language === 'ar' ? 'المطابقة' : 'Reconciliation'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
+                  {reconciliationReport.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-6 text-center text-zinc-500">
+                        {loadingReport ? (language === 'ar' ? 'جاري الفحص...' : 'Auditing sync status...') : (language === 'ar' ? 'انقر على "تحديث الفحص الآن" لعرض تقرير المطابقة' : 'Click "Run Audit Check" to inspect synchronization.')}
+                      </td>
+                    </tr>
+                  ) : (
+                    reconciliationReport.map(item => (
+                      <tr key={item.vehicleId} className="hover:bg-zinc-900/40 transition-colors">
+                        <td className="p-3 font-semibold text-zinc-200">
+                          {item.vehicleName}
+                          <span className="block text-[10px] text-zinc-500 font-mono">{item.vehicleId}</span>
+                        </td>
+                        <td className="p-3 font-mono text-zinc-300">{item.currentPlate || '—'}</td>
+                        <td className="p-3">
+                          <Badge variant={item.crmStatus === 'available' ? 'emerald' : 'purple'} size="sm">
+                            {item.crmStatus.toUpperCase()}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          {item.websiteEnabled ? (
+                            <Badge variant="sky" size="sm">{item.websiteVisibility}</Badge>
+                          ) : (
+                            <Badge variant="zinc" size="sm">UNPUBLISHED</Badge>
+                          )}
+                        </td>
+                        <td className="p-3 font-mono text-zinc-200">
+                          {item.websiteDailyRate ? `${item.websiteDailyRate.toLocaleString()} AED` : '—'}
+                        </td>
+                        <td className="p-3">
+                          {item.syncStatus === 'SYNCED' ? (
+                            <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                              <Check className="w-3.5 h-3.5" />
+                              <span>SYNCED</span>
+                            </div>
+                          ) : item.syncStatus === 'UNPUBLISHED' ? (
+                            <span className="text-zinc-500 font-medium">PRIVATE</span>
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-amber-400 font-semibold">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              <span>{item.syncStatus}</span>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

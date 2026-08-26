@@ -5,7 +5,8 @@ import {
   Payment, Invoice, BankImportBatch, BankTransaction,
   CRMTask, Communication, CRMDocument, AuditLog,
   CustomFieldDefinition, NumberingConfig, NotificationItem,
-  TollTransaction, TollImportBatch, TollPricingConfig
+  TollTransaction, TollImportBatch, TollPricingConfig,
+  WebsiteVehiclePublication, VehicleLifecycleStatus, WebsiteReconciliationItem
 } from '../types';
 import { FirestoreService, COLLECTIONS } from '../firebase/firestoreService';
 import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
@@ -95,6 +96,10 @@ interface CRMContextType {
   
   addVehicle: (data: Partial<Vehicle>) => Promise<Vehicle>;
   updateVehicle: (id: string, data: Partial<Vehicle>) => Promise<Vehicle>;
+  assignPlate: (vehicleId: string, plateNumber: string, plateCity: string, reason: string) => Promise<Vehicle>;
+  publishToWebsite: (vehicleId: string, publication: Partial<WebsiteVehiclePublication>) => Promise<Vehicle>;
+  updateLifecycleStatus: (vehicleId: string, lifecycleStatus: VehicleLifecycleStatus, reason: string, saleRecord?: any) => Promise<Vehicle>;
+  getReconciliationReport: () => Promise<WebsiteReconciliationItem[]>;
   checkVehicleAvailability: (vehicleId: string, startDate: string, endDate: string, excludeResId?: string) => Promise<{ available: boolean; conflictingRecords: any[] }>;
   
   createQuotation: (data: Partial<Quotation>) => Promise<Quotation>;
@@ -439,7 +444,8 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const [
         cRes, lRes, oRes, vRes, qRes, rRes, conRes,
         chgRes, depRes, payRes, invRes, bbRes, btRes,
-        tRes, commRes, dRes, aRes, cfRes, numRes, notRes
+        tRes, commRes, dRes, aRes, cfRes, numRes, notRes,
+        tollRes, tollBatchRes
       ] = await Promise.all([
         fetch('/api/customers').then(r => r.json()).catch(() => customers),
         fetch('/api/leads').then(r => r.json()).catch(() => leads),
@@ -460,7 +466,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/audit-logs').then(r => r.json()).catch(() => auditLogs),
         fetch('/api/settings/custom-fields').then(r => r.json()).catch(() => customFields),
         fetch('/api/settings/numbering').then(r => r.json()).catch(() => numberingConfigs),
-        fetch('/api/notifications').then(r => r.json()).catch(() => notifications)
+        fetch('/api/notifications').then(r => r.json()).catch(() => notifications),
+        fetch('/api/tolls').then(r => r.json()).catch(() => tollTransactions),
+        fetch('/api/toll-batches').then(r => r.json()).catch(() => tollImportBatches)
       ]);
 
       const result = await FirestoreService.seedFullCRMToFirestore({
@@ -483,7 +491,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         auditLogs: aRes,
         customFields: cfRes,
         numberingConfigs: numRes,
-        notifications: notRes
+        notifications: notRes,
+        tollTransactions: tollRes,
+        tollImportBatches: tollBatchRes
       });
 
       await refreshFirebaseStats();
@@ -667,6 +677,83 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     showToast('Fleet Updated', `Vehicle ${updated.make} ${updated.model} saved.`);
     return updated;
+  };
+
+  const assignPlate = async (vehicleId: string, plateNumber: string, plateCity: string, reason: string) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/assign-plate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plateNumber, plateCity, reason })
+    });
+    const result = await res.json();
+    if (!res.ok || !result.success) {
+      throw new Error(result.error || 'Plate assignment failed');
+    }
+    const updated: Vehicle = result.vehicle;
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    try {
+      await FirestoreService.update(COLLECTIONS.VEHICLES, vehicleId, updated);
+    } catch (e) {
+      console.warn('Firestore update vehicle plate warning:', e);
+    }
+    showToast('Plate Assigned', `Vehicle ${updated.make} ${updated.model} now carries plate ${plateCity} ${plateNumber}.`);
+    return updated;
+  };
+
+  const publishToWebsite = async (vehicleId: string, publication: Partial<WebsiteVehiclePublication>) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/website-publish`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publication })
+    });
+    const result = await res.json();
+    if (!res.ok || !result.success) {
+      throw new Error(result.error || 'Website publish failed');
+    }
+    const updated: Vehicle = result.vehicle;
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    try {
+      await FirestoreService.update(COLLECTIONS.VEHICLES, vehicleId, updated);
+    } catch (e) {
+      console.warn('Firestore update vehicle publish warning:', e);
+    }
+    showToast(
+      publication.enabled ? 'Showroom Published' : 'Showroom Hidden',
+      `Vehicle ${updated.make} ${updated.model} website status is now ${publication.visibility || 'UPDATED'}.`
+    );
+    return updated;
+  };
+
+  const updateLifecycleStatus = async (
+    vehicleId: string,
+    lifecycleStatus: VehicleLifecycleStatus,
+    reason: string,
+    saleRecord?: any
+  ) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/lifecycle`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lifecycleStatus, reason, saleRecord })
+    });
+    const result = await res.json();
+    if (!res.ok || !result.success) {
+      throw new Error(result.error || 'Lifecycle update failed');
+    }
+    const updated: Vehicle = result.vehicle;
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    try {
+      await FirestoreService.update(COLLECTIONS.VEHICLES, vehicleId, updated);
+    } catch (e) {
+      console.warn('Firestore update vehicle lifecycle warning:', e);
+    }
+    showToast('Lifecycle Updated', `Vehicle ${updated.make} ${updated.model} is now ${lifecycleStatus}.`);
+    return updated;
+  };
+
+  const getReconciliationReport = async (): Promise<WebsiteReconciliationItem[]> => {
+    const res = await fetch('/api/fleet/reconciliation/report');
+    const data = await res.json();
+    return data.report || [];
   };
 
   const checkVehicleAvailability = async (vehicleId: string, startDate: string, endDate: string, excludeResId?: string) => {
@@ -1197,7 +1284,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchData, showToast, toasts, dismissToast,
       addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer,
       addLead, updateLead, convertLeadToCustomer,
-      addVehicle, updateVehicle, checkVehicleAvailability,
+      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability,
       createQuotation, convertQuotationToReservation,
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,

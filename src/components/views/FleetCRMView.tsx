@@ -9,6 +9,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Vehicle, VehicleCategory, VehicleStatus } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { VehicleDetailMasterModal } from '../fleet/VehicleDetailMasterModal';
 
 export const FleetCRMView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -234,64 +235,11 @@ export const FleetCRMView: React.FC = () => {
       </div>
 
       {/* Vehicle Detail Drawer/Modal */}
-      {activeVehicle && (
-        <Modal
-          isOpen={!!selectedVehicleId}
+      {selectedVehicleId && (
+        <VehicleDetailMasterModal
+          vehicleId={selectedVehicleId}
           onClose={() => setSelectedVehicleId(null)}
-          title={`${activeVehicle.make} ${activeVehicle.model} (${activeVehicle.year})`}
-          subtitle={`${activeVehicle.plateCity} ${activeVehicle.plateNumber} • VIN: ${activeVehicle.vin}`}
-          maxWidth="4xl"
-        >
-          <div className="space-y-6 text-xs">
-            {/* Top photos strip */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <img
-                src={activeVehicle.thumbnail}
-                alt={activeVehicle.model}
-                className="w-full h-56 object-cover rounded-2xl border border-zinc-800"
-              />
-              <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3 flex flex-col justify-between">
-                <div>
-                  <h4 className="text-sm font-bold text-zinc-100 uppercase tracking-wide">Fleet Financial Performance</h4>
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
-                      <p className="text-zinc-400 text-[10px]">Total Historical Revenue</p>
-                      <p className="text-base font-bold text-emerald-400 mt-1">{(activeVehicle.totalRevenue || 0).toLocaleString()} AED</p>
-                    </div>
-                    <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
-                      <p className="text-zinc-400 text-[10px]">Operational Profitability</p>
-                      <p className="text-base font-bold text-[#f5d97f] mt-1">{activeVehicle.profitabilityScore}/100 Score</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
-                  <p className="text-zinc-400"><strong>Insurance:</strong> Valid until {activeVehicle.insuranceExpiry}</p>
-                  <p className="text-zinc-400"><strong>RTA Registration:</strong> Valid until {activeVehicle.registrationExpiry}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Maintenance History */}
-            <div className="space-y-3">
-              <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Scheduled Maintenance & Service Logs</h4>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <p className="text-zinc-400 text-[10px]">Status</p>
-                  <p className="font-bold text-zinc-200 mt-1 capitalize">{activeVehicle.maintenanceStatus.replace('_', ' ')}</p>
-                </div>
-                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <p className="text-zinc-400 text-[10px]">Last Serviced At</p>
-                  <p className="font-bold text-zinc-200 mt-1">{(activeVehicle.lastMaintenanceMileage || 0).toLocaleString()} km</p>
-                </div>
-                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <p className="text-zinc-400 text-[10px]">Next Service Due</p>
-                  <p className="font-bold text-zinc-200 mt-1">{(activeVehicle.nextMaintenanceMileage || 0).toLocaleString()} km</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </Modal>
+        />
       )}
 
       {/* Conflict & Availability Tester Modal */}

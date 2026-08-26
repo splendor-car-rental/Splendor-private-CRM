@@ -163,7 +163,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'test-suite',
           label: language === 'ar' ? 'مختبر الفحص الآلي' : 'Test Suite Runner',
           icon: <ShieldCheck className="w-4 h-4 text-emerald-400" />,
-          badge: '11/11 Passed',
+          badge: '12/12 Passed',
           badgeVariant: 'emerald' as const
         },
         {

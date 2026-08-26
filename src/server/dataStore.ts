@@ -4,7 +4,9 @@ import {
   BankImportBatch, BankTransaction, CRMTask, Communication,
   CRMDocument, DocumentTemplate, AuditLog, CustomFieldDefinition,
   NumberingConfig, SystemHealth, NotificationItem, User,
-  TollTransaction, TollImportBatch, TollPricingConfig
+  TollTransaction, TollImportBatch, TollPricingConfig,
+  PlateAssignmentHistory, VehicleTimelineEvent, PublicVehicleDTO,
+  WebsiteVehiclePublication, WebsiteReconciliationItem
 } from '../types';
 import { DEFAULT_TOLL_PRICING } from '../lib/tollCalculations';
 
@@ -254,6 +256,86 @@ export class DataStore {
       monthlyRate: 185000,
       minDeposit: 10000,
       status: 'rented',
+      lifecycleStatus: 'ACTIVE',
+      ownershipSource: 'OWNED',
+      publicVehicleId: 'rolls-royce-spectre-bespoke-mandarin',
+      website: {
+        enabled: true,
+        visibility: 'FEATURED',
+        featured: true,
+        publicVehicleId: 'rolls-royce-spectre-bespoke-mandarin',
+        publicName: 'Rolls-Royce Spectre Bespoke Mandarin Edition',
+        publicNameAr: 'رولز رويس سبكتر إصدار ماندرين الفاخر',
+        publicDescription: 'The world’s first ultra-luxury electric super coupé in Black Diamond with Bespoke Mandarin interior and Starlight Headliner.',
+        publicDescriptionAr: 'أول كوبيه كهربائية فائقة الفخامة في العالم بلون الماس الأسود مع مقصورة ماندرين وسقف النجوم المميز.',
+        category: 'ultra_luxury_sedan',
+        images: [
+          'https://images.unsplash.com/photo-1631295868223-63265b40d9e4?w=800&auto=format&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1563720223185-11003d516935?w=800&auto=format&fit=crop&q=80'
+        ],
+        features: ['Starlight Headliner', 'Bespoke Audio 18-Speaker', 'Effortless Doors', 'Chilled Champagne Console'],
+        featuresAr: ['سقف النجوم المضيء', 'نظام صوتي بيسبوك 18 مكبر صوت', 'أبواب كهربائية باللمس', 'مبرد المشروبات الفاخر'],
+        dailyRate: 8500,
+        weeklyRate: 51000,
+        monthlyRate: 185000,
+        deposit: 10000,
+        mileageAllowance: 250,
+        slug: 'rolls-royce-spectre-bespoke-mandarin',
+        lastPublishedAt: '2026-08-20T10:00:00Z',
+        lastPublishedBy: 'USR-001',
+        lastPublishedByName: 'Ahmed Morsy'
+      },
+      currentPlateAssignmentId: 'PLT-0001',
+      plateHistory: [
+        {
+          id: 'PLT-0001',
+          plateNumber: '1007',
+          plateCity: 'Dubai VIP (Code X)',
+          vehicleId: 'VEH-0001',
+          vehicleVin: 'SCA684S51PUX01007',
+          vehicleName: 'Rolls-Royce Spectre Ultra-Luxury Coupé',
+          startDate: '2025-01-05T10:00:00Z',
+          isCurrent: true,
+          reason: 'Initial VIP plate registration at vehicle purchase',
+          assignedBy: 'USR-005',
+          assignedByName: 'Khalid Ben-Zayed',
+          createdAt: '2025-01-05T10:00:00Z'
+        }
+      ],
+      timeline: [
+        {
+          id: 'EVT-0001',
+          vehicleId: 'VEH-0001',
+          date: '2025-01-05T09:00:00Z',
+          action: 'CREATED',
+          reason: 'Initial vehicle procurement from Rolls-Royce Motor Cars Dubai',
+          userId: 'USR-001',
+          userName: 'Ahmed Morsy',
+          createdAt: '2025-01-05T09:00:00Z'
+        },
+        {
+          id: 'EVT-0002',
+          vehicleId: 'VEH-0001',
+          date: '2025-01-05T10:00:00Z',
+          action: 'PLATE_ASSIGNED',
+          newState: { plateNumber: '1007', plateCity: 'Dubai VIP (Code X)' },
+          reason: 'VIP Plate 1007 assigned',
+          userId: 'USR-005',
+          userName: 'Khalid Ben-Zayed',
+          createdAt: '2025-01-05T10:00:00Z'
+        },
+        {
+          id: 'EVT-0003',
+          vehicleId: 'VEH-0001',
+          date: '2026-08-20T10:00:00Z',
+          action: 'PUBLISHED_TO_WEB',
+          newState: { visibility: 'FEATURED', publicDailyRate: 8500 },
+          reason: 'Published to Splendor VIP Website showroom',
+          userId: 'USR-001',
+          userName: 'Ahmed Morsy',
+          createdAt: '2026-08-20T10:00:00Z'
+        }
+      ],
       currentLocation: 'Bulgari Resort Jumeirah Bay',
       currentCustomerId: 'CUS-000003',
       currentContractId: 'CON-000001',

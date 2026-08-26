@@ -143,12 +143,86 @@ export interface Opportunity {
   quotationId?: string;
   notes: string;
   lostReason?: string;
+  source?: 'direct' | 'referral' | 'instagram' | 'corporate' | 'partner' | 'website';
+  campaign?: string;
+  sourcePage?: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export type VehicleStatus = 'available' | 'reserved' | 'rented' | 'maintenance' | 'unavailable';
+export type VehicleLifecycleStatus = 'ACTIVE' | 'INACTIVE' | 'SOLD' | 'ARCHIVED' | 'DISPOSED' | 'TRANSFERRED';
+export type VehicleOwnershipSource = 'OWNED' | 'LEASED' | 'PARTNER' | 'EXTERNAL' | 'CONSIGNMENT' | 'OTHER';
+export type WebsiteVisibility = 'INTERNAL_ONLY' | 'WEBSITE' | 'FEATURED' | 'PRIVATE';
 export type VehicleCategory = 'supercar' | 'ultra_luxury_sedan' | 'executive_suv' | 'grand_tourer' | 'exotic_convertible';
+
+export interface PlateAssignmentHistory {
+  id: string; // PLT-0001
+  plateNumber: string;
+  plateCity: string;
+  vehicleId: string;
+  vehicleVin: string;
+  vehicleName: string;
+  startDate: string; // ISO date/time
+  endDate?: string; // ISO date/time (empty if currently active)
+  isCurrent: boolean;
+  reason?: string;
+  assignedBy: string;
+  assignedByName?: string;
+  unassignedBy?: string;
+  unassignedByName?: string;
+  createdAt: string;
+}
+
+export interface VehicleTimelineEvent {
+  id: string; // EVT-0001
+  vehicleId: string;
+  date: string;
+  action: 'CREATED' | 'PURCHASED' | 'REGISTERED' | 'PLATE_ASSIGNED' | 'PLATE_TRANSFERRED' | 'RENTAL_STARTED' | 'RENTAL_COMPLETED' | 'MAINTENANCE_LOGGED' | 'PUBLISHED_TO_WEB' | 'UNPUBLISHED_FROM_WEB' | 'FEATURED_ON_WEB' | 'PRICING_UPDATED' | 'SOLD' | 'ARCHIVED' | 'RESTORED';
+  previousState?: Record<string, any>;
+  newState?: Record<string, any>;
+  reason?: string;
+  userId: string;
+  userName: string;
+  userRole?: string;
+  createdAt: string;
+}
+
+export interface WebsiteVehiclePublication {
+  enabled: boolean;
+  visibility: WebsiteVisibility;
+  featured: boolean;
+  publicVehicleId: string; // Stable slug/id for public URLs, e.g. "rolls-royce-spectre-2025-bespoke"
+  publicName: string;
+  publicNameAr?: string;
+  publicDescription: string;
+  publicDescriptionAr?: string;
+  category: VehicleCategory;
+  images: string[];
+  features?: string[];
+  featuresAr?: string[];
+  dailyRate: number; // Public authorized daily rate
+  weeklyRate: number; // Public authorized weekly rate
+  monthlyRate: number; // Public authorized monthly rate
+  deposit: number; // Public authorized security deposit
+  mileageAllowance: number; // Daily km allowance (e.g. 250 km)
+  slug: string;
+  lastPublishedAt?: string;
+  lastPublishedBy?: string;
+  lastPublishedByName?: string;
+}
+
+export interface VehicleSaleRecord {
+  saleDate: string;
+  salePrice?: number;
+  buyerName?: string;
+  saleReference?: string;
+  reason?: string;
+  authorizedBy: string;
+  authorizedByName?: string;
+  retainedPlateNumber?: string;
+  retainedPlateCity?: string;
+}
 
 export interface Vehicle {
   id: string; // VEH-0001
@@ -174,6 +248,24 @@ export interface Vehicle {
   minDeposit: number;
   
   status: VehicleStatus;
+  lifecycleStatus?: VehicleLifecycleStatus; // Default ACTIVE
+  ownershipSource?: VehicleOwnershipSource; // Default OWNED
+  
+  // Public website publishing layer
+  publicVehicleId?: string;
+  website?: WebsiteVehiclePublication;
+  
+  // Plate assignment and timeline
+  currentPlateAssignmentId?: string;
+  plateHistory?: PlateAssignmentHistory[];
+  timeline?: VehicleTimelineEvent[];
+  
+  // Sale & Archive records
+  saleRecord?: VehicleSaleRecord;
+  archivedAt?: string;
+  archivedBy?: string;
+  archivedReason?: string;
+  
   currentLocation: string;
   currentCustomerId?: string;
   currentContractId?: string;
@@ -194,6 +286,107 @@ export interface Vehicle {
   createdAt: string;
   updatedAt: string;
   customFields?: Record<string, any>;
+}
+
+// ----------------------------------------------------
+// Public Website Integration Models (DTOs)
+// ----------------------------------------------------
+export interface PublicVehicleDTO {
+  publicVehicleId: string;
+  slug: string;
+  make: string;
+  model: string;
+  year: number;
+  trim: string;
+  category: VehicleCategory;
+  publicName: string;
+  publicNameAr?: string;
+  publicDescription: string;
+  publicDescriptionAr?: string;
+  exteriorColor: string;
+  interiorColor: string;
+  horsepower: number;
+  transmission: string;
+  fuelType: 'petrol' | 'electric' | 'hybrid';
+  images: string[];
+  thumbnail: string;
+  features: string[];
+  featuresAr?: string[];
+  pricing: {
+    dailyRate: number;
+    weeklyRate: number;
+    monthlyRate: number;
+    deposit: number;
+    mileageAllowanceKm: number;
+    currency: string;
+  };
+  featured: boolean;
+  visibility: WebsiteVisibility;
+  isAvailableNow: boolean;
+}
+
+export interface PublicAvailabilityRequest {
+  publicVehicleId: string;
+  pickupDateTime: string; // ISO
+  returnDateTime: string; // ISO
+}
+
+export interface PublicAvailabilityResponse {
+  publicVehicleId: string;
+  isAvailable: boolean;
+  reason?: string;
+  dailyRate?: number;
+  totalDays?: number;
+  estimatedTotal?: number;
+  deposit?: number;
+  currency: string;
+  earliestAvailableDate?: string;
+}
+
+export interface PublicWebsiteLeadRequest {
+  fullName: string;
+  email: string;
+  phone: string;
+  whatsapp?: string;
+  preferredVehicle?: string;
+  publicVehicleId?: string;
+  pickupDateTime?: string;
+  returnDateTime?: string;
+  message?: string;
+  language?: 'en' | 'ar';
+  sourcePage?: string;
+  campaign?: string;
+  idempotencyKey?: string;
+}
+
+export interface PublicWebsiteReservationRequest {
+  publicVehicleId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  whatsapp?: string;
+  pickupDateTime: string;
+  returnDateTime: string;
+  pickupLocation: string;
+  returnLocation: string;
+  specialRequests?: string;
+  sourcePage?: string;
+  campaign?: string;
+  idempotencyKey?: string;
+}
+
+export interface WebsiteReconciliationItem {
+  websiteVehicleId: string;
+  websiteName: string;
+  websiteDailyRate: number;
+  crmVehicleId?: string;
+  crmName?: string;
+  crmDailyRate?: number;
+  matchStatus: 'EXACT_MATCH' | 'POSSIBLE_MATCH' | 'NO_MATCH' | 'CONFLICT';
+  confidence: number; // 0 - 100
+  priceDifference: number;
+  dataDifference: string[];
+  actionRequired: 'NONE' | 'LINK' | 'PRICE_REVIEW' | 'CREATE_CRM_RECORD' | 'RESOLVE_CONFLICT';
 }
 
 export type QuotationStatus = 'draft' | 'sent' | 'viewed' | 'negotiation' | 'accepted' | 'rejected' | 'expired';

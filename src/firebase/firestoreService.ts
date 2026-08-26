@@ -18,7 +18,8 @@ import {
   Reservation, Contract, AdditionalCharge, Deposit, 
   Payment, Invoice, BankImportBatch, BankTransaction, 
   CRMTask, Communication, CRMDocument, AuditLog, 
-  CustomFieldDefinition, NumberingConfig, NotificationItem 
+  CustomFieldDefinition, NumberingConfig, NotificationItem,
+  TollTransaction, TollImportBatch
 } from '../types';
 
 export const COLLECTIONS = {
@@ -198,6 +199,8 @@ export class FirestoreService {
     customFields: CustomFieldDefinition[];
     numberingConfigs: NumberingConfig[];
     notifications: NotificationItem[];
+    tollTransactions?: TollTransaction[];
+    tollImportBatches?: TollImportBatch[];
   }): Promise<{ writtenCount: number }> {
     let written = 0;
 
@@ -240,6 +243,12 @@ export class FirestoreService {
     await commitBatchList(COLLECTIONS.CUSTOM_FIELDS, seedData.customFields);
     await commitBatchList(COLLECTIONS.NUMBERING_CONFIGS, seedData.numberingConfigs);
     await commitBatchList(COLLECTIONS.NOTIFICATIONS, seedData.notifications);
+    if (seedData.tollTransactions) {
+      await commitBatchList(COLLECTIONS.TOLL_TRANSACTIONS, seedData.tollTransactions);
+    }
+    if (seedData.tollImportBatches) {
+      await commitBatchList(COLLECTIONS.TOLL_IMPORT_BATCHES, seedData.tollImportBatches);
+    }
 
     return { writtenCount: written };
   }
