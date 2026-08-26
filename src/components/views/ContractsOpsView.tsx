@@ -190,7 +190,7 @@ export const ContractsOpsView: React.FC = () => {
                       <p className="text-[11px] text-zinc-400 mt-0.5">{contract.vehicleName}</p>
                     </div>
                     <Badge variant={contract.status === 'active' ? 'emerald' : contract.status === 'completed' ? 'sky' : 'zinc'} size="sm">
-                      {contract.status.toUpperCase()}
+                      {(contract.status || '').toUpperCase()}
                     </Badge>
                   </div>
 
@@ -215,7 +215,7 @@ export const ContractsOpsView: React.FC = () => {
                     Contract {activeContract.contractNumber}
                   </h3>
                   <Badge variant={activeContract.status === 'active' ? 'emerald' : activeContract.status === 'completed' ? 'sky' : 'zinc'} size="sm">
-                    {activeContract.status.toUpperCase()}
+                    {(activeContract.status || '').toUpperCase()}
                   </Badge>
                 </div>
                 <p className="text-xs text-zinc-400 mt-1">
@@ -265,7 +265,7 @@ export const ContractsOpsView: React.FC = () => {
                   <div className="space-y-1.5 text-zinc-300">
                     <p><strong>Odometer:</strong> {activeContract.handover.startMileage} km</p>
                     <p><strong>Fuel Level:</strong> {activeContract.handover.fuelLevelPercent}% Tank</p>
-                    <p><strong>Cleanliness:</strong> {activeContract.handover.cleanliness.toUpperCase()}</p>
+                    <p><strong>Cleanliness:</strong> {(activeContract.handover.cleanliness || '').toUpperCase()}</p>
                     <p><strong>Officer:</strong> {activeContract.handover.employeeName}</p>
                   </div>
                 ) : (
@@ -317,7 +317,7 @@ export const ContractsOpsView: React.FC = () => {
                 <div>
                   <span>Payment Status:</span>
                   <Badge variant={activeContract.paymentStatus === 'paid' ? 'emerald' : 'amber'} size="sm">
-                    {activeContract.paymentStatus.toUpperCase()}
+                    {(activeContract.paymentStatus || '').toUpperCase()}
                   </Badge>
                 </div>
               </div>

@@ -173,7 +173,7 @@ export const ReservationsView: React.FC = () => {
                   </td>
                   <td className="p-4 text-center">
                     <Badge variant={res.status === 'confirmed' ? 'sky' : res.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                      {res.status.toUpperCase()}
+                      {(res.status || '').toUpperCase()}
                     </Badge>
                   </td>
                   <td className="p-4 text-end">

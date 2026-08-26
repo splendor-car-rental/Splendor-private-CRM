@@ -141,7 +141,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
             >
               {activeCustomers.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.fullName} ({c.type.toUpperCase()} • {c.phone})
+                  {c.fullName} ({c.type ? c.type.toUpperCase() : ''} • {c.phone})
                 </option>
               ))}
             </select>
@@ -159,7 +159,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
             >
               {vehicles.map(v => (
                 <option key={v.id} value={v.id}>
-                  {v.make} {v.model} ({v.plateNumber} • {v.dailyRate} AED/day • {v.status.toUpperCase()})
+                  {v.make} {v.model} ({v.plateNumber} • {v.dailyRate} AED/day • {v.status ? v.status.toUpperCase() : ''})
                 </option>
               ))}
             </select>

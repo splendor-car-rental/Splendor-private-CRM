@@ -316,7 +316,7 @@ export const FleetCRMView: React.FC = () => {
             >
               {vehicles.map(v => (
                 <option key={v.id} value={v.id}>
-                  {v.make} {v.model} ({v.plateNumber}) - Status: {v.status.toUpperCase()}
+                  {v.make} {v.model} ({v.plateNumber}) - Status: {(v.status || '').toUpperCase()}
                 </option>
               ))}
             </select>

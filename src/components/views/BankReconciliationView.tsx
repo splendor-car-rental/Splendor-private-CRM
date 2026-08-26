@@ -177,7 +177,7 @@ export const BankReconciliationView: React.FC = () => {
                   </td>
                   <td className="p-4 text-center">
                     <Badge variant={txn.status === 'reconciled' ? 'emerald' : txn.status === 'matched' ? 'amber' : 'zinc'} size="sm">
-                      {txn.status.toUpperCase()}
+                      {(txn.status || '').toUpperCase()}
                     </Badge>
                   </td>
                   <td className="p-4 text-end">

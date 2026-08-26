@@ -1413,8 +1413,8 @@ export class DataStore {
   }
 
   public getNextNumber(entityName: string): string {
-    const config = this.numberingConfigs.find(c => c.entity.toLowerCase() === entityName.toLowerCase());
-    if (!config) return `${entityName.toUpperCase().slice(0, 3)}-${Date.now()}`;
+    const config = this.numberingConfigs.find(c => c.entity.toLowerCase() === (entityName || '').toLowerCase());
+    if (!config) return `${(entityName || 'NUM').toUpperCase().slice(0, 3)}-${Date.now()}`;
     const num = config.nextNumber;
     config.nextNumber += 1;
     config.sample = `${config.prefix}${String(config.nextNumber).padStart(config.digits, '0')}`;
@@ -1525,7 +1525,7 @@ export class DataStore {
         date: pay.receivedAt.split('T')[0],
         type: 'payment',
         reference: pay.receiptNumber || pay.id,
-        description: `Payment Received (${pay.method.toUpperCase()} - Ref: ${pay.referenceNumber})`,
+        description: `Payment Received (${(pay.method || 'cash').toUpperCase()} - Ref: ${pay.referenceNumber || 'N/A'})`,
         debit: 0,
         credit: pay.amount,
         runningBalance

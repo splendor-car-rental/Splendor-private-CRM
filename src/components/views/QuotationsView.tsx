@@ -145,7 +145,7 @@ export const QuotationsView: React.FC = () => {
                       <p className="text-[11px] text-zinc-400 mt-0.5">{quote.vehicleName}</p>
                     </div>
                     <Badge variant={quote.status === 'accepted' ? 'emerald' : quote.status === 'sent' ? 'sky' : 'zinc'} size="sm">
-                      {quote.status.toUpperCase()}
+                      {(quote.status || '').toUpperCase()}
                     </Badge>
                   </div>
 

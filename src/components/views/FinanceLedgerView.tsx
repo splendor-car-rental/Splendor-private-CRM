@@ -187,7 +187,7 @@ export const FinanceLedgerView: React.FC = () => {
                     <td className="p-4 text-end font-mono font-bold text-rose-400">{inv.balanceDue.toLocaleString()} AED</td>
                     <td className="p-4 text-center">
                       <Badge variant={inv.status === 'paid' ? 'emerald' : inv.status === 'partially_paid' ? 'amber' : 'rose'} size="sm">
-                        {inv.status.toUpperCase()}
+                        {(inv.status || '').toUpperCase()}
                       </Badge>
                     </td>
                   </tr>
@@ -228,7 +228,7 @@ export const FinanceLedgerView: React.FC = () => {
                     <td className="p-4 text-end font-mono font-bold text-emerald-400">{dep.balance.toLocaleString()} AED</td>
                     <td className="p-4 text-center">
                       <Badge variant={dep.status === 'held' ? 'gold' : dep.status === 'refunded' ? 'emerald' : 'zinc'} size="sm">
-                        {dep.status.toUpperCase()}
+                        {(dep.status || '').toUpperCase()}
                       </Badge>
                     </td>
                     <td className="p-4 text-end space-x-2">

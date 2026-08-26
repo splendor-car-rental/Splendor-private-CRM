@@ -323,7 +323,7 @@ export const DashboardView: React.FC = () => {
                         </p>
                       </div>
                       <Badge variant="emerald" size="sm">
-                        {contract.status.toUpperCase()}
+                        {(contract.status || '').toUpperCase()}
                       </Badge>
                     </div>
                   </div>

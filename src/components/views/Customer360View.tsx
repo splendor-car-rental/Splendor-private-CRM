@@ -262,7 +262,7 @@ export const Customer360View: React.FC = () => {
                     <h3 className="text-lg font-bold text-zinc-100 font-display">{activeCustomer.fullName}</h3>
                     {activeCustomer.isVIP && <Badge variant="gold" size="sm">VIP GUEST</Badge>}
                     <Badge variant={activeCustomer.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                      {activeCustomer.status.toUpperCase()}
+                      {(activeCustomer.status || '').toUpperCase()}
                     </Badge>
                   </div>
                   <p className="text-xs text-zinc-400 mt-1 flex items-center gap-3">
@@ -396,9 +396,9 @@ export const Customer360View: React.FC = () => {
                   <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2.5">
                     <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Identification & Licensing</h4>
                     <div className="text-xs text-zinc-300 space-y-1.5">
-                      <p><strong>{activeCustomer.idType.toUpperCase()}:</strong> {activeCustomer.idNumber} (Exp: {activeCustomer.idExpiryDate})</p>
+                      <p><strong>{(activeCustomer.idType || 'ID').toUpperCase()}:</strong> {activeCustomer.idNumber} (Exp: {activeCustomer.idExpiryDate})</p>
                       <p><strong>Driver License:</strong> {activeCustomer.licenseNumber} ({activeCustomer.licenseCountry}, Exp: {activeCustomer.licenseExpiryDate})</p>
-                      <p><strong>Acquisition Source:</strong> {activeCustomer.source.toUpperCase()}</p>
+                      <p><strong>Acquisition Source:</strong> {(activeCustomer.source || 'Direct').toUpperCase()}</p>
                     </div>
                   </div>
                 </div>
@@ -447,7 +447,7 @@ export const Customer360View: React.FC = () => {
                       <div className="text-end">
                         <p className="text-sm font-bold text-zinc-100">{contract.grandTotal.toLocaleString()} AED</p>
                         <Badge variant={contract.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                          {contract.status.toUpperCase()}
+                          {(contract.status || '').toUpperCase()}
                         </Badge>
                       </div>
                     </div>
@@ -495,7 +495,7 @@ export const Customer360View: React.FC = () => {
                           <td className="py-3 text-end text-emerald-400 font-medium">{inv.paidAmount.toLocaleString()}</td>
                           <td className="py-3 text-end">
                             <Badge variant={inv.status === 'paid' ? 'emerald' : 'rose'} size="sm">
-                              {inv.status.toUpperCase()}
+                              {(inv.status || '').toUpperCase()}
                             </Badge>
                           </td>
                         </tr>
@@ -540,7 +540,7 @@ export const Customer360View: React.FC = () => {
                         </div>
                         <div>
                           <h4 className="text-xs font-semibold text-zinc-200">{doc.title}</h4>
-                          <p className="text-[10px] text-zinc-400">{doc.type.toUpperCase()} • {doc.fileSizeMb} MB</p>
+                          <p className="text-[10px] text-zinc-400">{(doc.type || '').toUpperCase()} • {doc.fileSizeMb} MB</p>
                         </div>
                       </div>
                       <Badge variant="emerald" size="sm">{doc.verificationStatus}</Badge>

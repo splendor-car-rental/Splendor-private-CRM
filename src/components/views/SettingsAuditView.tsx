@@ -222,7 +222,7 @@ export const SettingsAuditView: React.FC = () => {
                 >
                   <div className="flex items-center justify-between">
                     <Badge variant={ROLE_BADGE_VARIANT[usr.role] || 'zinc'} size="sm">
-                      {usr.role.toUpperCase()}
+                      {(usr.role || '').toUpperCase()}
                     </Badge>
                     {isSelf && <Check className="w-4 h-4 text-[#f5d97f]" />}
                   </div>

@@ -199,7 +199,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
               {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : currentUser.name}
             </p>
             <p className="text-[10px] text-zinc-400 uppercase tracking-wider truncate">
-              {currentUser.role.toUpperCase()} • {currentUser.branch.split(' ')[0]}
+              {(currentUser?.role || '').toUpperCase()} • {(currentUser?.branch || '').split(' ')[0]}
             </p>
           </div>
         </div>

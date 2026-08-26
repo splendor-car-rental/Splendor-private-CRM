@@ -74,17 +74,17 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
     // Vehicles
     vehicles.forEach(v => {
       if (
-        `${v.make} ${v.model}`.toLowerCase().includes(q) ||
-        v.plateNumber.toLowerCase().includes(q) ||
-        v.vin.toLowerCase().includes(q) ||
-        v.id.toLowerCase().includes(q)
+        `${v.make || ''} ${v.model || ''}`.toLowerCase().includes(q) ||
+        (v.plateNumber || '').toLowerCase().includes(q) ||
+        (v.vin || '').toLowerCase().includes(q) ||
+        (v.id || '').toLowerCase().includes(q)
       ) {
         matches.push({
           id: v.id,
-          title: `${v.make} ${v.model} (${v.year})`,
-          subtitle: `${v.plateCity} ${v.plateNumber} • ${v.status.toUpperCase()} • ${v.dailyRate} AED/day`,
+          title: `${v.make || ''} ${v.model || ''} (${v.year || ''})`,
+          subtitle: `${v.plateCity || ''} ${v.plateNumber || ''} • ${(v.status || '').toUpperCase()} • ${v.dailyRate || 0} AED/day`,
           type: 'vehicle',
-          badge: v.status,
+          badge: v.status || 'available',
           onClick: () => {
             setSelectedVehicleId(v.id);
             setActiveView('fleet');

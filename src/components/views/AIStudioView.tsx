@@ -238,7 +238,7 @@ export const AIStudioView: React.FC = () => {
                 className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100"
               >
                 {customers.map(c => (
-                  <option key={c.id} value={c.id}>{c.fullName} ({c.tier.toUpperCase()})</option>
+                  <option key={c.id} value={c.id}>{c.fullName} ({(c.tier || 'VIP').toUpperCase()})</option>
                 ))}
               </select>
             </div>
