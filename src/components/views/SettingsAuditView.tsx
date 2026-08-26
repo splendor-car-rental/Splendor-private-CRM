@@ -1,26 +1,31 @@
 import React, { useState } from 'react';
-import { 
-  Settings, Shield, Users, History, 
-  RotateCcw, Check, Sparkles, Building, Lock
+import {
+  Settings, Shield, Users, History,
+  Check, Sparkles, Building, UserPlus2
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
+import { AddStaffModal } from '../auth/AddStaffModal';
+
+const ROLE_BADGE_VARIANT: Record<string, 'gold' | 'purple' | 'emerald' | 'sky' | 'zinc'> = {
+  ceo: 'gold',
+  admin: 'gold',
+  sales: 'purple',
+  fleet: 'sky',
+  finance: 'emerald',
+  operations: 'zinc'
+};
 
 export const SettingsAuditView: React.FC = () => {
   const { language, t } = useLanguage();
-  const { currentUser, switchUserRole } = useAuth();
-  const { auditLogs, resetToDemoData, addToast } = useCRM();
+  const { currentUser, staffDirectory } = useAuth();
+  const { auditLogs, showToast } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit'>('general');
-  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-
-  const handleResetData = async () => {
-    await resetToDemoData();
-    setResetConfirmOpen(false);
-    addToast('Demo database successfully restored to pristine state', 'success');
-  };
+  const [addStaffOpen, setAddStaffOpen] = useState(false);
+  const isAdmin = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -35,13 +40,15 @@ export const SettingsAuditView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setResetConfirmOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-rose-500/40 bg-rose-950/30 text-rose-300 text-xs font-semibold hover:bg-rose-950/60 transition-all"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>{language === 'ar' ? 'إعادة ضبط البيانات التجريبية' : 'Reset Demo Data'}</span>
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setAddStaffOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 text-xs font-bold shadow-md shadow-[#D4AF37]/25 hover:brightness-110 transition-all"
+          >
+            <UserPlus2 className="w-3.5 h-3.5" />
+            <span>{t('addStaffButton')}</span>
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
@@ -60,7 +67,7 @@ export const SettingsAuditView: React.FC = () => {
             activeTab === 'roles' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          User Roles & RBAC Simulation
+          {t('staffDirectory')}
         </button>
         <button
           onClick={() => setActiveTab('audit')}
@@ -193,47 +200,50 @@ export const SettingsAuditView: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 2: User Roles & RBAC Simulation */}
+      {/* Tab 2: Staff Directory (read-only) */}
       {activeTab === 'roles' && (
         <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-6 text-xs">
           <div>
-            <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-wide">Live RBAC Switcher</h3>
-            <p className="text-zinc-400 text-xs mt-0.5">Switch active user identity to test role-based permissions and interface boundaries</p>
+            <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-wide">{t('staffDirectory')}</h3>
+            <p className="text-zinc-400 text-xs mt-0.5">{t('staffDirectorySubtitle')}</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { id: 'usr-admin-1', name: 'Khalid Al Mansoori', role: 'admin' as const, title: 'Managing Director & Super Admin' },
-              { id: 'usr-sales-1', name: 'Elena Rostova', role: 'sales_executive' as const, title: 'VIP Client Relationship Manager' },
-              { id: 'usr-ops-1', name: 'Ahmed Morsy', role: 'fleet_operations' as const, title: 'Fleet Logistics & Inspection Lead' },
-              { id: 'usr-fin-1', name: 'Siddharth Rao', role: 'accountant' as const, title: 'Head of Financial Controller' }
-            ].map(usr => {
-              const isActive = currentUser.id === usr.id;
+            {staffDirectory.map(usr => {
+              const isSelf = currentUser.id === usr.id;
               return (
                 <div
                   key={usr.id}
-                  onClick={() => switchUserRole(usr.role, usr.name, usr.id)}
-                  className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-2 ${
-                    isActive
+                  className={`p-4 rounded-2xl border space-y-2 ${
+                    isSelf
                       ? 'bg-[#D4AF37]/15 border-[#D4AF37]/60 shadow-lg'
-                      : 'bg-zinc-950/60 border-zinc-800 hover:border-zinc-700'
+                      : 'bg-zinc-950/60 border-zinc-800'
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <Badge variant={usr.role === 'admin' ? 'gold' : usr.role === 'sales_executive' ? 'purple' : usr.role === 'accountant' ? 'emerald' : 'sky'} size="sm">
+                    <Badge variant={ROLE_BADGE_VARIANT[usr.role] || 'zinc'} size="sm">
                       {usr.role.toUpperCase()}
                     </Badge>
-                    {isActive && <Check className="w-4 h-4 text-[#f5d97f]" />}
+                    {isSelf && <Check className="w-4 h-4 text-[#f5d97f]" />}
                   </div>
 
                   <div>
-                    <h4 className="font-bold text-zinc-100 text-sm">{usr.name}</h4>
-                    <p className="text-[11px] text-zinc-400 mt-0.5">{usr.title}</p>
+                    <h4 className="font-bold text-zinc-100 text-sm">
+                      {language === 'ar' && usr.nameAr ? usr.nameAr : usr.name}
+                    </h4>
+                    <p className="text-[11px] text-zinc-400 mt-0.5">{usr.email}</p>
+                    <p className="text-[11px] text-zinc-500 mt-0.5">{usr.branch}</p>
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {!isAdmin && (
+            <div className="p-3 rounded-2xl bg-zinc-950/60 border border-zinc-800 text-[11px] text-zinc-400">
+              {t('adminOnlyStaffNotice')}
+            </div>
+          )}
         </div>
       )}
 
@@ -269,34 +279,11 @@ export const SettingsAuditView: React.FC = () => {
         </div>
       )}
 
-      {/* Reset Confirmation Dialog */}
-      {resetConfirmOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="p-6 rounded-3xl bg-zinc-950 border border-zinc-800 max-w-md w-full space-y-4 shadow-2xl animate-fade-in text-xs">
-            <div className="flex items-center gap-3 text-rose-400">
-              <RotateCcw className="w-6 h-6" />
-              <h3 className="text-base font-bold font-display text-zinc-100">Reset Demo State?</h3>
-            </div>
-            <p className="text-zinc-400">
-              This will restore all Customer 360 dossiers, luxury supercars, quotations, lease contracts, and Emirates NBD bank reconciliation items to their original pristine state.
-            </p>
-            <div className="pt-2 flex items-center justify-end gap-3">
-              <button
-                onClick={() => setResetConfirmOpen(false)}
-                className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-900"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleResetData}
-                className="px-4 py-2 rounded-xl bg-rose-500 text-zinc-950 font-bold hover:bg-rose-400"
-              >
-                Confirm Reset
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AddStaffModal
+        isOpen={addStaffOpen}
+        onClose={() => setAddStaffOpen(false)}
+        onCreated={() => showToast(t('addStaffButton'), t('staffCreatedSuccess'), 'success')}
+      />
     </div>
   );
 };

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { 
-  Search, Bell, Plus, Sparkles, Shield, UserPlus, 
+import {
+  Search, Bell, Plus, Sparkles, Shield, UserPlus,
   Car, FileSignature, Landmark, RefreshCw, Globe, ChevronDown,
-  FileText, CalendarCheck, CheckCircle2
+  FileText, CalendarCheck, CheckCircle2, Menu
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
@@ -17,13 +17,15 @@ interface HeaderProps {
   onOpenNewReservation?: () => void;
   onOpenNewQuotation?: () => void;
   onOpenRecordPayment?: () => void;
+  onMenuClick?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenNewCustomer,
   onOpenNewReservation,
   onOpenNewQuotation,
-  onOpenRecordPayment
+  onOpenRecordPayment,
+  onMenuClick
 }) => {
   const { language, setLanguage, t } = useLanguage();
   const { 
@@ -44,6 +46,17 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <>
       <header className="h-16 px-4 sm:px-6 bg-zinc-950/90 border-b border-zinc-800/80 backdrop-blur-md flex items-center justify-between gap-3 sm:gap-4 sticky top-0 z-20">
+        {/* Mobile menu toggle */}
+        {onMenuClick && (
+          <button
+            onClick={onMenuClick}
+            className="md:hidden p-2 -ms-1 rounded-xl text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-colors shrink-0"
+            aria-label="Open menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        )}
+
         {/* Global Search trigger bar */}
         <div className="flex-1 max-w-xl">
           <button

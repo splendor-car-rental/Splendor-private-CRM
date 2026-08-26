@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { AuthProvider } from './context/AuthContext';
 import { CRMProvider, useCRM } from './context/CRMContext';
@@ -25,6 +25,7 @@ import { SettingsAuditView } from './components/views/SettingsAuditView';
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
   const { activeView } = useCRM();
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const renderActiveView = () => {
     switch (activeView) {
@@ -68,12 +69,12 @@ const MainLayout: React.FC = () => {
       <ToastContainer />
 
       {/* Main Sidebar */}
-      <Sidebar />
+      <Sidebar isMobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
         {/* Top Header with Language Switcher and Action Modals */}
-        <Header />
+        <Header onMenuClick={() => setMobileSidebarOpen(true)} />
 
         {/* View Container */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">

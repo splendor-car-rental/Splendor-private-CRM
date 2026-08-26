@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { FirestoreService, COLLECTIONS } from '../firebase/firestoreService';
 import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
+import { apiFetch as fetch } from '../lib/apiFetch';
 
 interface ToastMessage {
   id: string;

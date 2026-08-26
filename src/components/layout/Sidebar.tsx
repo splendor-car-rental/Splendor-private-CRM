@@ -1,22 +1,35 @@
-import React from 'react';
-import { 
-  LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet, 
-  CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare, 
-  Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe
+import React, { useState } from 'react';
+import {
+  LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
+  CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
+  Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe, KeyRound, X
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { SplendorLogo } from '../common/SplendorLogo';
+import { ChangePasswordModal } from '../auth/ChangePasswordModal';
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  /** Whether the off-canvas drawer is open on small screens (ignored at md+, where the sidebar is always visible). */
+  isMobileOpen: boolean;
+  onMobileClose: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose }) => {
   const { language, setLanguage, t } = useLanguage();
-  const { currentUser, switchRole } = useAuth();
-  const { 
+  const { currentUser, logout } = useAuth();
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const {
     activeView, setActiveView,
-    leads, vehicles, contracts, bankTransactions, tasks 
+    leads, vehicles, contracts, bankTransactions, tasks
   } = useCRM();
+
+  const handleNavClick = (viewId: string) => {
+    setActiveView(viewId);
+    onMobileClose();
+  };
 
   const unreconciledCount = bankTransactions.filter(t => !t.reconciled).length;
   const activeRentalsCount = contracts.filter(c => c.status === 'active').length;
@@ -106,7 +119,21 @@ export const Sidebar: React.FC = () => {
   ];
 
   return (
-    <aside className="w-64 lg:w-72 bg-zinc-950/95 border-r border-zinc-800/80 flex flex-col h-screen shrink-0 z-30 select-none">
+    <>
+      {/* Mobile backdrop: only rendered (and only blocks input) while the drawer is open on small screens */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden"
+          onClick={onMobileClose}
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 start-0 z-50 w-72 bg-zinc-950/95 border-e border-zinc-800/80 flex flex-col h-screen shrink-0 select-none
+          transition-transform duration-300 ease-out
+          ${isMobileOpen ? 'translate-x-0' : 'ltr:-translate-x-full rtl:translate-x-full'}
+          md:static md:z-30 md:translate-x-0 md:w-64 lg:w-72`}
+      >
       {/* Brand Crest */}
       <div className="p-4 sm:p-5 border-b border-zinc-800/80 flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
@@ -120,6 +147,13 @@ export const Sidebar: React.FC = () => {
             </p>
           </div>
         </div>
+        <button
+          onClick={onMobileClose}
+          className="md:hidden p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-colors shrink-0"
+          aria-label="Close menu"
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Nav list */}
@@ -129,7 +163,7 @@ export const Sidebar: React.FC = () => {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveView(item.id)}
+              onClick={() => handleNavClick(item.id)}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all group ${
                 isActive
                   ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/35 shadow-sm shadow-[#D4AF37]/10'
@@ -170,22 +204,27 @@ export const Sidebar: React.FC = () => {
           </div>
         </div>
 
-        {/* Quick Role Simulator dropdown */}
-        <div className="flex items-center justify-between text-[11px] text-zinc-400 bg-zinc-950/80 px-2.5 py-1.5 rounded-lg border border-zinc-800">
-          <span className="text-[10px] uppercase tracking-wider text-zinc-400">Perspective:</span>
-          <select
-            value={currentUser.role}
-            onChange={(e) => switchRole(e.target.value as any)}
-            className="bg-transparent text-[#f5d97f] font-medium text-xs focus:outline-none cursor-pointer"
+        {/* Change password / Sign out */}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => setChangePasswordOpen(true)}
+            className="flex items-center justify-center gap-1.5 text-[11px] font-semibold text-zinc-400 hover:text-[#f5d97f] bg-zinc-950/80 hover:bg-zinc-900 px-2.5 py-2 rounded-lg border border-zinc-800 hover:border-[#D4AF37]/40 transition-colors"
           >
-            <option value="ceo" className="bg-zinc-900 text-zinc-100">CEO / Partner</option>
-            <option value="operations" className="bg-zinc-900 text-zinc-100">Operations Lead</option>
-            <option value="sales" className="bg-zinc-900 text-zinc-100">Sales Executive</option>
-            <option value="finance" className="bg-zinc-900 text-zinc-100">Finance Manager</option>
-            <option value="fleet" className="bg-zinc-900 text-zinc-100">Fleet Director</option>
-          </select>
+            <KeyRound className="w-3.5 h-3.5" />
+            <span className="truncate">{t('changePassword')}</span>
+          </button>
+          <button
+            onClick={() => logout()}
+            className="flex items-center justify-center gap-1.5 text-[11px] font-semibold text-zinc-400 hover:text-rose-300 bg-zinc-950/80 hover:bg-rose-500/10 px-2.5 py-2 rounded-lg border border-zinc-800 hover:border-rose-500/30 transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>{t('logout')}</span>
+          </button>
         </div>
       </div>
-    </aside>
+
+      <ChangePasswordModal isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
+      </aside>
+    </>
   );
 };

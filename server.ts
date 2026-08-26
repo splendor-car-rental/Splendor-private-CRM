@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import admin from 'firebase-admin';
 import { globalStore } from './src/server/dataStore';
 import type { Lead, Contract, Customer, Quotation, Reservation } from './src/types';
 
@@ -9,6 +10,93 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// ----------------------------------------------------
+// AUTHENTICATION MIDDLEWARE
+// ----------------------------------------------------
+// Previously every /api/* route below was reachable by anyone on the
+// internet with no login at all. This verifies a Firebase Authentication
+// ID token (sent as "Authorization: Bearer <token>" by the client -- see
+// src/lib/apiFetch.ts) on every request before it can touch business data.
+//
+// Requires the FIREBASE_SERVICE_ACCOUNT_KEY environment variable to be set
+// (the JSON key downloaded from Firebase Console -> Project Settings ->
+// Service Accounts -> Generate new private key, pasted as a single-line
+// value). If it is not set, the server fails CLOSED -- it rejects all
+// /api/* requests with 503 rather than silently allowing them through.
+function initFirebaseAdmin() {
+  if (admin.apps.length > 0) return;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  if (!raw) {
+    console.warn(
+      '[auth] FIREBASE_SERVICE_ACCOUNT_KEY is not set. All /api/* requests will be rejected until it is configured.'
+    );
+    return;
+  }
+  try {
+    const serviceAccount = JSON.parse(raw);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    console.log('[auth] Firebase Admin initialized -- API requests will be verified.');
+  } catch (error) {
+    console.error('[auth] Failed to parse/initialize FIREBASE_SERVICE_ACCOUNT_KEY:', error);
+  }
+}
+initFirebaseAdmin();
+
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (admin.apps.length === 0) {
+    return res.status(503).json({ error: 'Server authentication is not configured. Contact your administrator.' });
+  }
+
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    (req as any).authUser = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid or expired session. Please sign in again.' });
+  }
+}
+
+// Every /api/* route requires a verified session, except the plain health check.
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health') return next();
+  return requireAuth(req, res, next);
+});
+
+/** Looks up the caller's role from their Firestore users/{uid} profile. */
+async function getRequesterRole(uid: string): Promise<string | null> {
+  const snap = await admin.firestore().collection('users').doc(uid).get();
+  return snap.exists ? ((snap.data() as any)?.role ?? null) : null;
+}
+
+/**
+ * Restricts a route to a specific set of roles (checked against the caller's
+ * real Firestore profile, not anything the client sends). Use this for
+ * actions the app previously only hid behind client-side permission checks
+ * -- e.g. approving a refund -- which meant anyone who could reach the API
+ * directly (not just the UI) could perform them regardless of role.
+ */
+function requireRole(...allowedRoles: string[]) {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const uid = (req as any).authUser?.uid;
+      const role = uid ? await getRequesterRole(uid) : null;
+      if (!role || !allowedRoles.includes(role)) {
+        return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+      }
+      next();
+    } catch (error) {
+      console.error('requireRole check failed:', error);
+      res.status(500).json({ error: 'Could not verify permissions.' });
+    }
+  };
+}
 
 // Lazy initialization of Gemini client
 let geminiClient: GoogleGenAI | null = null;
@@ -35,6 +123,82 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/users', (req, res) => {
   res.json(globalStore.users);
+});
+
+// ----------------------------------------------------
+// STAFF ACCOUNT PROVISIONING (admin/CEO only)
+// ----------------------------------------------------
+// Only the CEO/Admin can create new staff logins and assign their role --
+// no one else can grant themselves or anyone else access just by having an
+// email address. New hires: an admin creates the account here with a
+// temporary password, hands it to the employee, and the employee changes
+// it after their first sign-in (see the "Change Password" control in the
+// app sidebar).
+app.post('/api/admin/users', async (req, res) => {
+  try {
+    const requesterUid = (req as any).authUser?.uid;
+    if (!requesterUid) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterUid).get();
+    const requesterRole = requesterDoc.exists ? (requesterDoc.data() as any)?.role : null;
+    if (requesterRole !== 'ceo' && requesterRole !== 'admin') {
+      return res.status(403).json({ error: 'Only a CEO or Admin account can create new staff logins.' });
+    }
+
+    const { email, password, name, nameAr, role, phone, branch } = req.body || {};
+
+    const validRoles = ['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'];
+    if (!email || !password || !name || !role) {
+      return res.status(400).json({ error: 'Name, email, password, and role are required.' });
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    }
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: 'Invalid role.' });
+    }
+
+    const newUserRecord = await admin.auth().createUser({
+      email,
+      password,
+      displayName: name
+    });
+
+    const profile = {
+      name,
+      nameAr: nameAr || '',
+      email,
+      role,
+      phone: phone || '',
+      branch: branch || '',
+      avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`,
+      status: 'active'
+    };
+
+    await admin.firestore().collection('users').doc(newUserRecord.uid).set(profile);
+
+    // Audit trail: who provisioned this account, and when.
+    await admin.firestore().collection('audit_logs').add({
+      id: `AUD-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      userId: requesterUid,
+      userName: (requesterDoc.data() as any)?.name || requesterUid,
+      action: 'CREATE_STAFF_ACCOUNT',
+      entityType: 'User',
+      entityId: newUserRecord.uid,
+      details: `Created staff account for ${name} (${email}) with role ${role}.`
+    });
+
+    res.json({ id: newUserRecord.uid, ...profile });
+  } catch (error: any) {
+    console.error('Failed to create staff account:', error);
+    const message = error?.code === 'auth/email-already-exists'
+      ? 'An account with this email already exists.'
+      : (error?.message || 'Failed to create staff account.');
+    res.status(400).json({ error: message });
+  }
 });
 
 app.get('/api/notifications', (req, res) => {
@@ -148,7 +312,7 @@ app.put('/api/customers/:id', (req, res) => {
   res.json(updated);
 });
 
-app.post('/api/customers/:id/merge', (req, res) => {
+app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), (req, res) => {
   const { targetCustomerId } = req.body;
   const sourceCust = globalStore.customers.find(c => c.id === req.params.id);
   const targetCust = globalStore.customers.find(c => c.id === targetCustomerId);
@@ -818,7 +982,7 @@ app.post('/api/deposits', (req, res) => {
   res.status(201).json(deposit);
 });
 
-app.post('/api/deposits/:id/apply', (req, res) => {
+app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), (req, res) => {
   const deposit = globalStore.deposits.find(d => d.id === req.params.id);
   if (!deposit) return res.status(404).json({ error: 'Deposit not found' });
 
@@ -851,7 +1015,7 @@ app.post('/api/deposits/:id/apply', (req, res) => {
   res.json({ success: true, deposit });
 });
 
-app.post('/api/deposits/:id/refund', (req, res) => {
+app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), (req, res) => {
   const deposit = globalStore.deposits.find(d => d.id === req.params.id);
   if (!deposit) return res.status(404).json({ error: 'Deposit not found' });
 
@@ -1025,7 +1189,7 @@ app.post('/api/bank-batches', (req, res) => {
   res.status(201).json({ batch, transactions: parsedTxns });
 });
 
-app.post('/api/bank-transactions/:id/reconcile', (req, res) => {
+app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), (req, res) => {
   const txn = globalStore.bankTransactions.find(t => t.id === req.params.id);
   if (!txn) return res.status(404).json({ error: 'Bank transaction not found' });
 
@@ -1132,7 +1296,7 @@ app.get('/api/settings/custom-fields', (req, res) => {
   res.json(globalStore.customFields);
 });
 
-app.post('/api/settings/custom-fields', (req, res) => {
+app.post('/api/settings/custom-fields', requireRole('ceo', 'admin'), (req, res) => {
   const field = {
     ...req.body,
     id: `CF-${String(globalStore.customFields.length + 1).padStart(2, '0')}`
@@ -1145,7 +1309,7 @@ app.get('/api/settings/numbering', (req, res) => {
   res.json(globalStore.numberingConfigs);
 });
 
-app.put('/api/settings/numbering', (req, res) => {
+app.put('/api/settings/numbering', requireRole('ceo', 'admin'), (req, res) => {
   const { entity, prefix, digits } = req.body;
   const config = globalStore.numberingConfigs.find(c => c.entity.toLowerCase() === entity.toLowerCase());
   if (config) {
@@ -1673,7 +1837,7 @@ app.post('/api/tests/run-all', (req, res) => {
     const initialCount = globalStore.auditLogs.length;
     globalStore.logAudit({
       userId: 'USR-001',
-      userName: 'Tariq Al-Mansoor',
+      userName: 'Ahmed Morsy',
       userRole: 'ceo',
       entityType: 'Security',
       entityId: 'SEC-TEST',
@@ -1813,9 +1977,80 @@ app.post('/api/tests/run-all', (req, res) => {
 });
 
 // ----------------------------------------------------
+// 12b. HYDRATE IN-MEMORY STORE FROM FIRESTORE ON BOOT
+// ----------------------------------------------------
+// `globalStore` (src/server/dataStore.ts) is a plain in-memory object -- it
+// starts every process with the same hardcoded demo records and forgets
+// everything on restart/redeploy. Real operational data created through the
+// app IS separately mirrored into Firestore (see FirestoreService calls in
+// CRMContext), so on boot we pull whatever is actually in Firestore back
+// into memory. A collection that's genuinely empty in Firestore is left on
+// its hardcoded demo data, so a brand-new project still has something to
+// look at.
+//
+// This does NOT make Firestore and the in-memory store consistent in real
+// time, and it doesn't change how any existing route reads/writes data --
+// it only fixes what the store looks like right after a restart. Routing
+// every read/write through Firestore directly (removing the in-memory copy
+// entirely) is the more complete fix and a larger, separate change.
+const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
+  users: 'users',
+  customers: 'customers',
+  vehicles: 'vehicles',
+  leads: 'leads',
+  opportunities: 'opportunities',
+  quotations: 'quotations',
+  reservations: 'reservations',
+  contracts: 'contracts',
+  charges: 'charges',
+  deposits: 'deposits',
+  invoices: 'invoices',
+  payments: 'payments',
+  bankImportBatches: 'bank_batches',
+  bankTransactions: 'bank_transactions',
+  tasks: 'tasks',
+  communications: 'communications',
+  documents: 'documents',
+  auditLogs: 'audit_logs',
+  customFields: 'custom_fields',
+  numberingConfigs: 'numbering_configs',
+  notifications: 'notifications'
+};
+
+async function hydrateStoreFromFirestore() {
+  if (admin.apps.length === 0) {
+    console.warn('[hydrate] Skipping Firestore hydration -- FIREBASE_SERVICE_ACCOUNT_KEY not configured. Starting on hardcoded demo data only.');
+    return;
+  }
+
+  let hydratedCollections = 0;
+  let totalDocs = 0;
+
+  await Promise.all(
+    Object.entries(FIRESTORE_COLLECTION_BY_FIELD).map(async ([field, collectionName]) => {
+      try {
+        const snap = await admin.firestore().collection(collectionName).get();
+        if (snap.empty) return; // keep demo data for collections with nothing real yet
+
+        const records = snap.docs.map(d => ({ ...(d.data() as any), id: d.id }));
+        (globalStore as any)[field] = records;
+        hydratedCollections += 1;
+        totalDocs += records.length;
+      } catch (error) {
+        console.error(`[hydrate] Failed to load "${collectionName}" from Firestore:`, error);
+      }
+    })
+  );
+
+  console.log(`[hydrate] Restored ${totalDocs} record(s) across ${hydratedCollections} collection(s) from Firestore.`);
+}
+
+// ----------------------------------------------------
 // 13. VITE MIDDLEWARE & SPA SERVING
 // ----------------------------------------------------
 async function startServer() {
+  await hydrateStoreFromFirestore();
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

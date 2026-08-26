@@ -1,9 +1,69 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // SPLENDOR PRIVATE CRM MASTER RULES
-    match /{document=**} {
-      allow read, write: if true;
+    // Splendor Private CRM Security Rules
+    //
+    // Phase 1a fixed the original "allow read, write: if true" rule, which
+    // let anyone on the internet read, edit, or delete every record with no
+    // login at all. Every collection below now requires a signed-in user.
+    //
+    // Phase 1b (this revision) adds two collection-specific tightenings on
+    // top of that baseline:
+    //   - users/{uid}: anyone signed in can read the staff directory, but a
+    //     user can only write their OWN profile document (needed for the
+    //     first-login bootstrap in AuthContext). Creating OTHER users'
+    //     accounts/roles only happens server-side via the admin-only
+    //     /api/admin/users endpoint (which uses the Admin SDK and bypasses
+    //     these rules entirely, by design).
+    //   - audit_logs/{id}: read-only from the client. All audit entries are
+    //     written server-side (Admin SDK) so ordinary users cannot alter or
+    //     fabricate audit history.
+    //
+    // NOTE: Firestore evaluates ALL matching rules for a path as an OR, so a
+    // broad catch-all rule would silently re-open users/audit_logs even with
+    // the tighter rules above. That's why every other collection is listed
+    // explicitly below instead of using a single {document=**} catch-all.
+    //
+    // KNOWN LIMITATION: everything below still only checks "is signed in",
+    // not "does this specific role have permission for this action" (e.g.
+    // stopping a "sales" account from approving a refund via a direct
+    // Firestore write). The equivalent server-side checks now exist for the
+    // most sensitive actions (deposit apply/refund, bank reconciliation,
+    // customer merge, custom fields, numbering config -- see server.ts's
+    // requireRole()), but those protections apply to the app's REST API, not
+    // to a direct Firestore SDK call. Full per-role Firestore rules (reading
+    // the caller's role via get(/databases/$(database)/documents/users/$(request.auth.uid)))
+    // are the next hardening step and are intentionally not attempted here
+    // without the ability to test them against a live project first --
+    // a mistake in these rules can silently break legitimate app features.
+    match /users/{uid} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid;
     }
+
+    match /audit_logs/{logId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /vehicles/{id} { allow read, write: if request.auth != null; }
+    match /customers/{id} { allow read, write: if request.auth != null; }
+    match /leads/{id} { allow read, write: if request.auth != null; }
+    match /opportunities/{id} { allow read, write: if request.auth != null; }
+    match /quotations/{id} { allow read, write: if request.auth != null; }
+    match /reservations/{id} { allow read, write: if request.auth != null; }
+    match /contracts/{id} { allow read, write: if request.auth != null; }
+    match /charges/{id} { allow read, write: if request.auth != null; }
+    match /deposits/{id} { allow read, write: if request.auth != null; }
+    match /payments/{id} { allow read, write: if request.auth != null; }
+    match /invoices/{id} { allow read, write: if request.auth != null; }
+    match /bank_batches/{id} { allow read, write: if request.auth != null; }
+    match /bank_transactions/{id} { allow read, write: if request.auth != null; }
+    match /tasks/{id} { allow read, write: if request.auth != null; }
+    match /communications/{id} { allow read, write: if request.auth != null; }
+    match /documents/{id} { allow read, write: if request.auth != null; }
+    match /custom_fields/{id} { allow read, write: if request.auth != null; }
+    match /numbering_configs/{id} { allow read, write: if request.auth != null; }
+    match /notifications/{id} { allow read, write: if request.auth != null; }
   }
 }
