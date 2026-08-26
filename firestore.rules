@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Splendor Private CRM Security Rules
+    match /{document=**} {
+      allow read, write: if true; // CRM operational access for splendor-private-crm
+    }
+  }
+}

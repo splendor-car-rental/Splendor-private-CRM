@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Luxury supercar fleet inventory record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "make": { "type": "string" },
+        "model": { "type": "string" },
+        "year": { "type": "number" },
+        "plateNumber": { "type": "string" },
+        "dailyRate": { "type": "number" },
+        "depositRequired": { "type": "number" },
+        "status": { "type": "string", "enum": ["available", "reserved", "rented", "maintenance", "retired"] },
+        "category": { "type": "string" }
+      },
+      "required": ["id", "make", "model", "dailyRate", "status"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "VIP client dossier with KYC and rental history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "customerType": { "type": "string", "enum": ["individual", "corporate", "vip", "celebrity"] },
+        "vipStatus": { "type": "string", "enum": ["standard", "silver", "gold", "black_tier"] }
+      },
+      "required": ["id", "fullName", "email", "phone"]
+    },
+    "Contract": {
+      "title": "Contract",
+      "description": "Signed rental agreement and operational custody record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "contractNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "vehicleName": { "type": "string" },
+        "vehiclePlate": { "type": "string" },
+        "startDateTime": { "type": "string" },
+        "endDateTime": { "type": "string" },
+        "dailyRate": { "type": "number" },
+        "days": { "type": "number" },
+        "subtotal": { "type": "number" },
+        "vatAmount": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "depositAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "pending_payment", "approved", "active", "completed", "cancelled", "disputed"] }
+      },
+      "required": ["id", "customerId", "vehicleId", "grandTotal", "status"]
+    }
+  },
+  "firestore": {
+    "/vehicles/{vehicleId}": {
+      "schema": "Vehicle",
+      "description": "Fleet vehicles and current rental state"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "VIP customer records and driver credentials"
+    },
+    "/contracts/{contractId}": {
+      "schema": "Contract",
+      "description": "Active and archived rental contracts"
+    }
+  }
+}
