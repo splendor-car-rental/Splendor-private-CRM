@@ -10,8 +10,8 @@ export class DataStore {
   public users: User[] = [
     {
       id: 'USR-001',
-      name: 'Tariq Al-Mansoor',
-      nameAr: 'طارق المنصور',
+      name: 'Ahmed Morsy',
+      nameAr: 'أحمد مرسي',
       email: 'ceo@splendor-rental.ae',
       role: 'ceo',
       avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
@@ -21,9 +21,9 @@ export class DataStore {
     },
     {
       id: 'USR-002',
-      name: 'Ahmed Morsy',
-      nameAr: 'أحمد مرسي',
-      email: 'ahmed.morsy@splendor-rental.ae',
+      name: 'Tariq Al-Mansoor',
+      nameAr: 'طارق المنصور',
+      email: 'operations@splendor-rental.ae',
       role: 'operations',
       avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
       phone: '+971 52 444 5566',

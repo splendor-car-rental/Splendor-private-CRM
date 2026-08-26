@@ -31,29 +31,112 @@
       },
       "required": ["id", "fullName", "email", "phone"]
     },
+    "Lead": {
+      "title": "Lead",
+      "description": "Sales inquiry and conversion lead",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "fullName", "status"]
+    },
+    "Quotation": {
+      "title": "Quotation",
+      "description": "Price quotation for VIP rental",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "quotationNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "customerId", "status"]
+    },
+    "Reservation": {
+      "title": "Reservation",
+      "description": "Vehicle booking reservation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reservationNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "customerId", "vehicleId", "status"]
+    },
     "Contract": {
       "title": "Contract",
-      "description": "Signed rental agreement and operational custody record",
+      "description": "Signed rental agreement and custody record",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "contractNumber": { "type": "string" },
         "customerId": { "type": "string" },
-        "customerName": { "type": "string" },
         "vehicleId": { "type": "string" },
-        "vehicleName": { "type": "string" },
-        "vehiclePlate": { "type": "string" },
-        "startDateTime": { "type": "string" },
-        "endDateTime": { "type": "string" },
-        "dailyRate": { "type": "number" },
-        "days": { "type": "number" },
-        "subtotal": { "type": "number" },
-        "vatAmount": { "type": "number" },
-        "grandTotal": { "type": "number" },
-        "depositAmount": { "type": "number" },
-        "status": { "type": "string", "enum": ["draft", "pending_payment", "approved", "active", "completed", "cancelled", "disputed"] }
+        "status": { "type": "string" }
       },
-      "required": ["id", "customerId", "vehicleId", "grandTotal", "status"]
+      "required": ["id", "customerId", "vehicleId", "status"]
+    },
+    "Deposit": {
+      "title": "Deposit",
+      "description": "Security deposit hold or refund",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "depositNumber": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "amount", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Client payment and receipt record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "paymentNumber": { "type": "string" },
+        "amount": { "type": "number" }
+      },
+      "required": ["id", "amount"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Tax invoice with VAT calculation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "total": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "total", "status"]
+    },
+    "BankTransaction": {
+      "title": "BankTransaction",
+      "description": "Bank statement line item for reconciliation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "amount", "status"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Operational task and followup",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "title", "status"]
     }
   },
   "firestore": {
@@ -65,9 +148,41 @@
       "schema": "Customer",
       "description": "VIP customer records and driver credentials"
     },
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Sales leads and inquiries"
+    },
+    "/quotations/{quotationId}": {
+      "schema": "Quotation",
+      "description": "VIP price quotations"
+    },
+    "/reservations/{reservationId}": {
+      "schema": "Reservation",
+      "description": "Fleet vehicle reservations"
+    },
     "/contracts/{contractId}": {
       "schema": "Contract",
       "description": "Active and archived rental contracts"
+    },
+    "/deposits/{depositId}": {
+      "schema": "Deposit",
+      "description": "Security deposits and holds"
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Payments and receipts"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": "Invoice",
+      "description": "Tax invoices and statements"
+    },
+    "/bank_transactions/{bankTransactionId}": {
+      "schema": "BankTransaction",
+      "description": "Imported bank statement transactions"
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Followups and operational tasks"
     }
   }
 }

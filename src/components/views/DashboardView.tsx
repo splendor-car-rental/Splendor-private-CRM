@@ -10,6 +10,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { StatsCard } from '../common/StatsCard';
 import { Badge } from '../common/Badge';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
+import { SplendorLogo } from '../common/SplendorLogo';
 
 export const DashboardView: React.FC = () => {
   const { language } = useLanguage();
@@ -155,20 +156,23 @@ export const DashboardView: React.FC = () => {
       <div className="p-6 rounded-3xl bg-gradient-to-r from-zinc-900 via-zinc-950 to-zinc-900 border border-zinc-800 shadow-2xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-[#D4AF37]/5 rounded-full blur-3xl pointer-events-none" />
         
-        <div className="space-y-2 relative z-10">
-          <div className="flex items-center gap-2">
-            <span className="text-xs uppercase tracking-widest text-[#f5d97f] font-semibold">
-              {language === 'ar' ? 'لوحة القيادة التنفيذية للرئيس التنفيذي' : 'Splendor Executive Command Hub'}
-            </span>
+        <div className="flex items-center gap-4 relative z-10">
+          <SplendorLogo size={68} className="shrink-0 drop-shadow-xl" />
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-widest text-[#f5d97f] font-semibold">
+                {language === 'ar' ? 'سبلندر لتأجير السيارات — مركز القيادة التنفيذي' : 'SPLENDOR CAR RENTAL — Executive Command Hub'}
+              </span>
+            </div>
+            <h2 className="text-2xl lg:text-3xl font-display font-bold text-zinc-100 tracking-tight">
+              {language === 'ar' ? 'مؤشرات الأداء والإيرادات المباشرة' : 'Executive Command & Fleet Telemetry'}
+            </h2>
+            <p className="text-xs lg:text-sm text-zinc-400 max-w-2xl leading-relaxed">
+              {language === 'ar' 
+                ? 'متابعة حية ومحدثة لحظياً عبر قاعدة بيانات فايربيس للأسطول الفاخر، عقود الإيجار، التدفق النقدي، ومطابقة حساب بنك الإمارات دبي الوطني.' 
+                : 'Real-time telemetry synchronized via live Firebase Firestore for luxury supercars, VIP guest contracts, Emirates NBD reconciliation, and revenue optimization.'}
+            </p>
           </div>
-          <h2 className="text-2xl lg:text-3xl font-display font-bold text-zinc-100 tracking-tight">
-            {language === 'ar' ? 'مؤشرات الأداء والإيرادات المباشرة' : 'Executive Command & Fleet Telemetry'}
-          </h2>
-          <p className="text-xs lg:text-sm text-zinc-400 max-w-2xl leading-relaxed">
-            {language === 'ar' 
-              ? 'متابعة حية ومحدثة لحظياً عبر قاعدة بيانات فايربيس للأسطول الفاخر، عقود الإيجار، التدفق النقدي، ومطابقة حساب بنك الإمارات دبي الوطني.' 
-              : 'Real-time telemetry synchronized via live Firebase Firestore for luxury supercars, VIP guest contracts, Emirates NBD reconciliation, and revenue optimization.'}
-          </p>
         </div>
 
         {/* AI Briefing Button */}

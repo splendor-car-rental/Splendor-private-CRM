@@ -1,8 +1,8 @@
 export const translations = {
   en: {
     // Brand & Header
-    brandName: 'SPLENDOR',
-    brandSub: 'CAR RENTAL LLC — PRIVATE CRM',
+    brandName: 'SPLENDOR CAR RENTAL',
+    brandSub: 'PRESTIGE BEYOND LIMITS — DUBAI VIP FLEET CRM',
     executivePortal: 'Executive Command Center',
     searchPlaceholder: 'Search across Customers, Vehicles, Contracts, Leads, Invoices (Press ⌘K)...',
     notifications: 'Notifications',
@@ -294,8 +294,8 @@ export const translations = {
   },
   ar: {
     // Brand & Header
-    brandName: 'سبليندور',
-    brandSub: 'لتأجير السيارات الفارهة ذ.م.م — نظام الإدارة الخاص',
+    brandName: 'سبلندر لتأجير السيارات',
+    brandSub: 'هيبة بلا حدود — نظام إدارة الأسطول الفاره دبي',
     executivePortal: 'مركز القيادة التنفيذي',
     searchPlaceholder: 'ابحث في العملاء، الأسطول، العقود، الحجوزات، الفواتير (اضغط ⌘K)...',
     notifications: 'الإشعارات',

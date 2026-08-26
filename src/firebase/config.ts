@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, doc, getDocFromServer, collection, getDocs, limit, query } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 export const firebaseConfig = {
   apiKey: "AIzaSyBai1Hc6IldBar2jDkiMmTzkx-I7X2o-wQ",
@@ -15,6 +15,11 @@ export const firebaseConfig = {
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+
+// Automatically ensure authenticated session
+signInAnonymously(auth).catch((err) => {
+  console.info('Firebase auth initialization:', err?.message || 'Ready');
+});
 
 export interface FirebaseConnectionStatus {
   connected: boolean;

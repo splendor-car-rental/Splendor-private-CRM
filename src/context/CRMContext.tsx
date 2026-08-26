@@ -96,6 +96,7 @@ interface CRMContextType {
   
   createReservation: (data: Partial<Reservation>) => Promise<Reservation>;
   createContractFromReservation: (resId: string) => Promise<Contract>;
+  createContract: (data: Partial<Contract>) => Promise<Contract>;
   
   processHandover: (contractId: string, handoverData: any) => Promise<Contract>;
   processReturn: (contractId: string, returnData: any) => Promise<Contract>;
@@ -723,6 +724,33 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return data.contract;
   };
 
+  const createContract = async (data: Partial<Contract>) => {
+    const res = await fetch('/api/contracts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const newContract: Contract = await res.json();
+    setContracts(prev => [newContract, ...prev.filter(c => c.id !== newContract.id)]);
+
+    // Write to Firestore immediately
+    try {
+      await FirestoreService.set(COLLECTIONS.CONTRACTS, newContract.id, newContract);
+      if (newContract.vehicleId) {
+        await FirestoreService.update(COLLECTIONS.VEHICLES, newContract.vehicleId, { 
+          status: newContract.status === 'active' ? 'rented' : 'reserved' 
+        });
+      }
+    } catch (e) {
+      console.warn('Firestore write contract warning:', e);
+    }
+
+    await fetchData();
+    showToast('Contract Issued', `Contract ${newContract.contractNumber} (${newContract.grandTotal?.toLocaleString()} AED) active.`);
+    refreshFirebaseStats();
+    return newContract;
+  };
+
   const processHandover = async (contractId: string, handoverData: any) => {
     const res = await fetch(`/api/contracts/${contractId}/handover`, {
       method: 'POST',
@@ -957,7 +985,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addLead, updateLead, convertLeadToCustomer,
       addVehicle, updateVehicle, checkVehicleAvailability,
       createQuotation, convertQuotationToReservation,
-      createReservation, createContractFromReservation,
+      createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
       uploadBankBatch, reconcileBankTransaction,

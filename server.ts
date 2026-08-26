@@ -590,6 +590,77 @@ app.get('/api/contracts', (req, res) => {
   res.json(globalStore.contracts);
 });
 
+app.post('/api/contracts', (req, res) => {
+  const data = req.body;
+  const vehicle = globalStore.vehicles.find(v => v.id === data.vehicleId);
+  const customer = globalStore.customers.find(c => c.id === data.customerId);
+
+  const contractId = globalStore.getNextNumber('Contract');
+  const days = data.days || 3;
+  const dailyRate = data.dailyRate || (vehicle ? vehicle.dailyRate : 2500);
+  const rentalTotal = data.rentalTotal || (dailyRate * days);
+  const vatAmount = data.vatAmount || (rentalTotal * 0.05);
+  const grandTotal = data.grandTotal || (rentalTotal + vatAmount);
+  const depositAmount = data.depositAmount || ((vehicle as any)?.securityDeposit || 5000);
+
+  const contract = {
+    id: contractId,
+    contractNumber: contractId,
+    customerId: data.customerId || (customer ? customer.id : 'CUS-000001'),
+    customerName: data.customerName || (customer ? customer.fullName : 'VIP Client'),
+    customerPhone: data.customerPhone || (customer ? customer.phone : '+971 50 000 0000'),
+    customerAddress: customer ? customer.address : 'Dubai, UAE',
+    vehicleId: data.vehicleId || (vehicle ? vehicle.id : 'VEH-0001'),
+    vehicleName: data.vehicleName || (vehicle ? `${vehicle.make} ${vehicle.model}` : 'Ferrari Purosangue'),
+    vehiclePlate: data.vehiclePlate || (vehicle ? `${vehicle.plateCity} ${vehicle.plateNumber}` : 'DXB A 100'),
+    vehicleVin: vehicle ? vehicle.vin : 'VIN-EMIRATES-01',
+    startDateTime: data.startDateTime || new Date().toISOString(),
+    endDateTime: data.endDateTime || new Date(Date.now() + 86400000 * 3).toISOString(),
+    pickupLocation: data.pickupLocation || 'Dubai Flagship Showroom',
+    returnLocation: data.returnLocation || 'Dubai Flagship Showroom',
+    dailyRate,
+    rentalTotal,
+    vatAmount,
+    grandTotal,
+    depositAmount,
+    mileageAllowancePerDay: data.mileageAllowancePerDay || 250,
+    extraKmRate: data.extraKmRate || 15,
+    status: data.status || 'active',
+    paymentStatus: data.paymentStatus || 'unpaid',
+    depositStatus: data.depositStatus || 'held',
+    termsAccepted: true,
+    notes: data.notes || 'Instant VIP rental agreement',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  globalStore.contracts.unshift(contract as any);
+
+  if (vehicle) {
+    vehicle.status = data.status === 'active' ? 'rented' : 'reserved';
+    vehicle.currentCustomerId = contract.customerId;
+    vehicle.currentContractId = contract.id;
+  }
+
+  if (customer) {
+    customer.totalRentals = (customer.totalRentals || 0) + 1;
+    customer.lifetimeValue = (customer.lifetimeValue || 0) + grandTotal;
+  }
+
+  globalStore.logAudit({
+    userId: data.actorId || 'USR-001',
+    userName: data.actorName || 'Ahmed Morsy',
+    userRole: 'ceo',
+    entityType: 'Contract',
+    entityId: contractId,
+    action: 'create',
+    newValue: `Issued instant contract ${contractId} for ${contract.customerName} (${grandTotal.toLocaleString()} AED)`,
+    reason: 'Executive instant contract creation'
+  });
+
+  res.status(201).json(contract);
+});
+
 app.get('/api/contracts/:id', (req, res) => {
   const contract = globalStore.contracts.find(c => c.id === req.params.id);
   if (!contract) return res.status(404).json({ error: 'Contract not found' });

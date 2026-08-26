@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
 import { CRMProvider, useCRM } from './context/CRMContext';
 
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
-import { GlobalSearchModal } from './components/layout/GlobalSearchModal';
-import { NotificationsDrawer } from './components/layout/NotificationsDrawer';
 import { ToastContainer } from './components/common/ToastContainer';
 
 // Views
@@ -26,8 +24,7 @@ import { SettingsAuditView } from './components/views/SettingsAuditView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
-  const { activeView, searchModalOpen, setSearchModalOpen, notificationsOpen, setNotificationsOpen } = useCRM();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { activeView } = useCRM();
 
   const renderActiveView = () => {
     switch (activeView) {
@@ -47,12 +44,15 @@ const MainLayout: React.FC = () => {
         return <ContractsOpsView />;
       case 'finance':
         return <FinanceLedgerView />;
+      case 'reconciliation':
       case 'bank-reconciliation':
         return <BankReconciliationView />;
       case 'tasks':
         return <TasksFollowupsView />;
+      case 'ai-studio':
       case 'ai-intelligence':
         return <AIStudioView />;
+      case 'test-suite':
       case 'tests':
         return <TestSuiteRunnerView />;
       case 'settings':
@@ -67,28 +67,13 @@ const MainLayout: React.FC = () => {
       {/* Toast Notifications */}
       <ToastContainer />
 
-      {/* Global Search Dialog */}
-      <GlobalSearchModal
-        isOpen={searchModalOpen}
-        onClose={() => setSearchModalOpen(false)}
-      />
-
-      {/* Notifications Drawer */}
-      <NotificationsDrawer
-        isOpen={notificationsOpen}
-        onClose={() => setNotificationsOpen(false)}
-      />
-
       {/* Main Sidebar */}
-      <Sidebar
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
+      <Sidebar />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 lg:ps-64">
-        {/* Top Header */}
-        <Header onOpenSidebar={() => setSidebarOpen(true)} />
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
+        {/* Top Header with Language Switcher and Action Modals */}
+        <Header />
 
         {/* View Container */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">

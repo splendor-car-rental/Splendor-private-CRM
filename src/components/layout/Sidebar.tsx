@@ -2,12 +2,13 @@ import React from 'react';
 import { 
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet, 
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare, 
-  Sparkles, ShieldCheck, Settings, Crown, ChevronRight, LogOut, Globe
+  Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
+import { SplendorLogo } from '../common/SplendorLogo';
 
 export const Sidebar: React.FC = () => {
   const { language, setLanguage, t } = useLanguage();
@@ -107,32 +108,18 @@ export const Sidebar: React.FC = () => {
   return (
     <aside className="w-64 lg:w-72 bg-zinc-950/95 border-r border-zinc-800/80 flex flex-col h-screen shrink-0 z-30 select-none">
       {/* Brand Crest */}
-      <div className="p-6 border-b border-zinc-800/80 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#D4AF37] to-[#997d26] p-0.5 shadow-lg shadow-[#D4AF37]/20 flex items-center justify-center">
-            <div className="w-full h-full bg-zinc-950 rounded-[10px] flex items-center justify-center">
-              <Crown className="w-5 h-5 text-[#D4AF37]" />
-            </div>
-          </div>
-          <div>
-            <h1 className="font-serif text-base tracking-widest text-[#f5d97f] uppercase font-bold leading-none">
-              SPLENDOR
+      <div className="p-4 sm:p-5 border-b border-zinc-800/80 flex items-center justify-between">
+        <div className="flex items-center gap-3 min-w-0">
+          <SplendorLogo size={46} className="shrink-0 hover:scale-105 transition-transform cursor-pointer" />
+          <div className="min-w-0">
+            <h1 className="font-serif text-sm lg:text-[15px] tracking-wide text-[#f5d97f] uppercase font-bold leading-tight truncate">
+              {language === 'ar' ? 'سبلندر لتأجير السيارات' : 'SPLENDOR CAR RENTAL'}
             </h1>
-            <p className="text-[10px] tracking-wider text-zinc-400 uppercase font-medium mt-1">
-              Private CRM & Fleet
+            <p className="text-[10px] tracking-wider text-zinc-400 font-medium mt-0.5 truncate">
+              {language === 'ar' ? 'هيبة بلا حدود • دبي' : 'Prestige Beyond Limits • Dubai'}
             </p>
           </div>
         </div>
-
-        {/* Language switch */}
-        <button
-          onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')}
-          className="p-1.5 rounded-lg border border-zinc-800 hover:border-[#D4AF37]/40 text-xs text-zinc-300 hover:text-[#f5d97f] transition-all flex items-center gap-1"
-          title="Switch Language"
-        >
-          <Globe className="w-3.5 h-3.5" />
-          <span className="font-semibold">{language === 'en' ? 'العربية' : 'EN'}</span>
-        </button>
       </div>
 
       {/* Nav list */}
