@@ -76,8 +76,11 @@ const MainLayout: React.FC = () => {
         {/* Top Header with Language Switcher and Action Modals */}
         <Header onMenuClick={() => setMobileSidebarOpen(true)} />
 
-        {/* View Container */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        {/* View Container -- fills the full remaining width next to the
+            sidebar. Previously capped at max-w-7xl (1280px) and centered,
+            which left large empty margins on wide desktop monitors and
+            made the app look "cut off" instead of using the whole screen. */}
+        <main className="flex-1 w-full p-4 sm:p-6 lg:p-8">
           {renderActiveView()}
         </main>
       </div>

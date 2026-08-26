@@ -747,6 +747,7 @@ export class DataStore {
       depositAmount: 10000,
       mileageAllowancePerDay: 250,
       extraKmRate: 15,
+      depositReleaseDays: 21,
       status: 'active',
       paymentStatus: 'paid',
       depositStatus: 'held',
@@ -797,6 +798,7 @@ export class DataStore {
       depositAmount: 10000,
       mileageAllowancePerDay: 300,
       extraKmRate: 12,
+      depositReleaseDays: 21,
       status: 'active',
       paymentStatus: 'partially_paid',
       depositStatus: 'held',
@@ -1413,8 +1415,8 @@ export class DataStore {
   }
 
   public getNextNumber(entityName: string): string {
-    const config = this.numberingConfigs.find(c => c.entity.toLowerCase() === (entityName || '').toLowerCase());
-    if (!config) return `${(entityName || 'NUM').toUpperCase().slice(0, 3)}-${Date.now()}`;
+    const config = this.numberingConfigs.find(c => c.entity.toLowerCase() === entityName.toLowerCase());
+    if (!config) return `${entityName.toUpperCase().slice(0, 3)}-${Date.now()}`;
     const num = config.nextNumber;
     config.nextNumber += 1;
     config.sample = `${config.prefix}${String(config.nextNumber).padStart(config.digits, '0')}`;

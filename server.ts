@@ -786,8 +786,9 @@ app.post('/api/contracts', (req, res) => {
     vatAmount,
     grandTotal,
     depositAmount,
-    mileageAllowancePerDay: data.mileageAllowancePerDay || 250,
+    mileageAllowancePerDay: data.mileageAllowancePerDay || 200,
     extraKmRate: data.extraKmRate || 15,
+    depositReleaseDays: data.depositReleaseDays || 21,
     status: data.status || 'active',
     paymentStatus: data.paymentStatus || 'unpaid',
     depositStatus: data.depositStatus || 'held',
@@ -1133,9 +1134,9 @@ app.post('/api/bank-batches', (req, res) => {
 
     // Search for customer match in description
     for (const cust of globalStore.customers) {
-      const nameParts = cust.fullName.toUpperCase().split(' ');
+      const nameParts = (cust.fullName || '').toUpperCase().split(' ');
       const matched = nameParts.some(p => p.length > 3 && desc.includes(p)) || 
-                      (cust.companyName && desc.includes(cust.companyName.toUpperCase().slice(0, 8)));
+                      (cust.companyName && desc.includes((cust.companyName || '').toUpperCase().slice(0, 8)));
       
       if (matched) {
         // Find open invoice

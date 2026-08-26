@@ -65,7 +65,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           <p className="text-sm text-emerald-300">{t('passwordChangedSuccess')}</p>
           <button onClick={handleClose}
             className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-bold text-xs">
-            OK
+            {t('ok')}
           </button>
         </div>
       ) : (
@@ -88,7 +88,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           <div className="flex items-center justify-end gap-3 pt-2">
             <button type="button" onClick={handleClose}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-300 text-xs font-semibold hover:bg-zinc-800/60 transition-colors">
-              Cancel
+              {t('cancel')}
             </button>
             <button type="submit" disabled={submitting}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-bold text-xs shadow-md shadow-[#D4AF37]/25 hover:brightness-110 disabled:opacity-60 transition-all">

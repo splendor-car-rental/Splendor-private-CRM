@@ -131,10 +131,10 @@ export const FinanceLedgerView: React.FC = () => {
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto custom-scrollbar">
         <button
           onClick={() => setActiveTab('invoices')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
             activeTab === 'invoices' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -142,7 +142,7 @@ export const FinanceLedgerView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('deposits')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
             activeTab === 'deposits' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -150,7 +150,7 @@ export const FinanceLedgerView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('payments')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
             activeTab === 'payments' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -161,8 +161,8 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Tab 1: Invoices */}
       {activeTab === 'invoices' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-start">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start min-w-[850px]">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">Invoice Number</th>
@@ -201,8 +201,8 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Tab 2: Deposits */}
       {activeTab === 'deposits' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-start">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start min-w-[850px]">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">Deposit ID</th>
@@ -270,8 +270,8 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Tab 3: Payments */}
       {activeTab === 'payments' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-start">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start min-w-[850px]">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">Receipt No.</th>
@@ -369,7 +369,7 @@ export const FinanceLedgerView: React.FC = () => {
               onClick={() => setPaymentModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"
@@ -422,13 +422,15 @@ export const FinanceLedgerView: React.FC = () => {
               onClick={() => setDepositActionModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"
               className={`px-5 py-2 rounded-xl font-semibold text-zinc-950 ${depositActionType === 'refund' ? 'bg-emerald-500' : 'bg-rose-500'}`}
             >
-              Confirm {depositActionType === 'refund' ? 'Refund' : 'Deduction'}
+              {language === 'ar'
+                ? `تأكيد ${depositActionType === 'refund' ? 'الاسترداد' : 'الخصم'}`
+                : `Confirm ${depositActionType === 'refund' ? 'Refund' : 'Deduction'}`}
             </button>
           </div>
         </form>

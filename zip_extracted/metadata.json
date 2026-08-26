@@ -1,6 +1,0 @@
-{
-  "name": "SPLENDOR PRIVATE CRM",
-  "description": "A premium private automotive CRM and luxury rental operations platform for SPLENDOR CAR RENTAL LLC with Customer 360, Fleet CRM, rental operations, bank reconciliation, bilingual EN/AR support, and AI intelligence.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

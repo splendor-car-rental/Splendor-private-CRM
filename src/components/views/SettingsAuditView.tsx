@@ -59,7 +59,7 @@ export const SettingsAuditView: React.FC = () => {
             activeTab === 'general' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          Company & VAT Configuration
+          {t('companyVatConfig')}
         </button>
         <button
           onClick={() => setActiveTab('roles')}
@@ -75,7 +75,7 @@ export const SettingsAuditView: React.FC = () => {
             activeTab === 'audit' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          Security Audit Trail ({auditLogs.length})
+          {language === 'ar' ? `سجل التدقيق الأمني (${auditLogs.length})` : `Security Audit Trail (${auditLogs.length})`}
         </button>
       </div>
 
@@ -85,12 +85,12 @@ export const SettingsAuditView: React.FC = () => {
           <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-4">
             <div className="flex items-center gap-2 text-zinc-100 font-bold text-sm">
               <Building className="w-4 h-4 text-[#D4AF37]" />
-              <span>Legal Entity & Tax Information</span>
+              <span>{language === 'ar' ? 'بيانات الكيان القانوني والضريبة' : 'Legal Entity & Tax Information'}</span>
             </div>
 
             <div className="space-y-3">
               <div>
-                <label className="block text-zinc-400 mb-1">Company Legal Name (English)</label>
+                <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'اسم الشركة القانوني (إنجليزي)' : 'Company Legal Name (English)'}</label>
                 <input
                   type="text"
                   readOnly
@@ -100,19 +100,19 @@ export const SettingsAuditView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-zinc-400 mb-1">Company Legal Name (Arabic)</label>
+                <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'اسم الشركة القانوني (عربي)' : 'Company Legal Name (Arabic)'}</label>
                 <input
                   type="text"
                   readOnly
                   dir="rtl"
-                  value="شركة سبليندور لتأجير السيارات ذ.م.م"
+                  value="شركة سبلندر لتأجير السيارات ش.ذ.م.م"
                   className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200 font-medium"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-zinc-400 mb-1">Federal Tax Number (TRN)</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'الرقم الضريبي الاتحادي (TRN)' : 'Federal Tax Number (TRN)'}</label>
                   <input
                     type="text"
                     readOnly
@@ -121,22 +121,32 @@ export const SettingsAuditView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1">UAE Standard VAT Rate</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'نسبة ضريبة القيمة المضافة' : 'UAE Standard VAT Rate'}</label>
                   <input
                     type="text"
                     readOnly
-                    value="5.0% (Automated)"
+                    value={language === 'ar' ? '5.0% (تلقائي)' : '5.0% (Automated)'}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-emerald-400 font-bold"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-zinc-400 mb-1">Headquarters & Flagship Location</label>
+                <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'عنوان المكتب' : 'Office Address'}</label>
                 <input
                   type="text"
                   readOnly
-                  value="Downtown Luxury District, Sheikh Mohammed bin Rashid Blvd, Dubai, UAE"
+                  value={language === 'ar' ? 'بناية سيتي أفينيو، بورسعيد، ديرة، دبي، الإمارات' : 'City Avenue Building, Port Saeed, Deira, Dubai, UAE'}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200"
+                />
+              </div>
+
+              <div>
+                <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'مكتب الإدارة' : 'Management Office'}</label>
+                <input
+                  type="text"
+                  readOnly
+                  value={language === 'ar' ? 'قرية جميرا الدائرية (JVC)، دبي، الإمارات' : 'Jumeirah Village Circle (JVC), Dubai, UAE'}
                   className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200"
                 />
               </div>
@@ -146,26 +156,31 @@ export const SettingsAuditView: React.FC = () => {
           <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-4">
             <div className="flex items-center gap-2 text-zinc-100 font-bold text-sm">
               <Settings className="w-4 h-4 text-[#D4AF37]" />
-              <span>Rental Operation Defaults</span>
+              <span>{language === 'ar' ? 'إعدادات التأجير الافتراضية' : 'Rental Operation Defaults'}</span>
             </div>
+            <p className="text-[11px] text-zinc-500 -mt-2">
+              {language === 'ar'
+                ? 'دي القيم الافتراضية بس — كل عقد فيه حقول منفصلة تقدر تغيّرها حسب حالة كل عميل.'
+                : 'These are defaults only -- every contract has its own fields you can adjust per customer.'}
+            </p>
 
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-zinc-400 mb-1">Standard Daily Mileage</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'المسافة اليومية القياسية' : 'Standard Daily Mileage'}</label>
                   <input
                     type="text"
                     readOnly
-                    value="250 KM / Day"
+                    value={language === 'ar' ? '200 كم / يوم' : '200 KM / Day'}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1">Excess KM Standard Charge</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'رسوم تجاوز المسافة القياسية' : 'Excess KM Standard Charge'}</label>
                   <input
                     type="text"
                     readOnly
-                    value="15 - 25 AED / KM"
+                    value={language === 'ar' ? '15 - 25 درهم / كم' : '15 - 25 AED / KM'}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200"
                   />
                 </div>
@@ -173,27 +188,29 @@ export const SettingsAuditView: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-zinc-400 mb-1">Operating Currency</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'عملة التشغيل' : 'Operating Currency'}</label>
                   <input
                     type="text"
                     readOnly
-                    value="AED (United Arab Emirates Dirham)"
+                    value={language === 'ar' ? 'درهم إماراتي (AED)' : 'AED (United Arab Emirates Dirham)'}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-[#f5d97f] font-bold"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1">Deposit Release SLA</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'مدة استرداد التأمين' : 'Deposit Release SLA'}</label>
                   <input
                     type="text"
                     readOnly
-                    value="14 Days (Post-Traffic Fine Audit)"
+                    value={language === 'ar' ? '21 يوم (بعد مراجعة المخالفات المرورية)' : '21 Days (Post-Traffic Fine Audit)'}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200"
                   />
                 </div>
               </div>
 
               <div className="p-3 rounded-2xl bg-zinc-950/60 border border-zinc-800 text-[11px] text-zinc-400">
-                All rate calculations and invoice VAT breakdowns adhere to UAE Federal Tax Authority (FTA) regulatory compliance.
+                {language === 'ar'
+                  ? 'كل حسابات الأسعار وتفاصيل ضريبة الفواتير تلتزم بلوائح الهيئة الاتحادية للضرائب بدولة الإمارات (FTA).'
+                  : 'All rate calculations and invoice VAT breakdowns adhere to UAE Federal Tax Authority (FTA) regulatory compliance.'}
               </div>
             </div>
           </div>
@@ -254,11 +271,11 @@ export const SettingsAuditView: React.FC = () => {
             <table className="w-full text-start">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
-                  <th className="p-4 text-start font-medium">Timestamp</th>
-                  <th className="p-4 text-start font-medium">Officer</th>
-                  <th className="p-4 text-start font-medium">Action</th>
-                  <th className="p-4 text-start font-medium">Entity Reference</th>
-                  <th className="p-4 text-start font-medium">Audit Description</th>
+                  <th className="p-4 text-start font-medium">{language === 'ar' ? 'التوقيت' : 'Timestamp'}</th>
+                  <th className="p-4 text-start font-medium">{language === 'ar' ? 'المسؤول' : 'Officer'}</th>
+                  <th className="p-4 text-start font-medium">{language === 'ar' ? 'الإجراء' : 'Action'}</th>
+                  <th className="p-4 text-start font-medium">{language === 'ar' ? 'مرجع السجل' : 'Entity Reference'}</th>
+                  <th className="p-4 text-start font-medium">{language === 'ar' ? 'وصف التدقيق' : 'Audit Description'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">

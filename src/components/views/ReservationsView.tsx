@@ -130,8 +130,8 @@ export const ReservationsView: React.FC = () => {
 
       {/* Reservations Table */}
       <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-start">
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full text-xs text-start min-w-[780px]">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                 <th className="p-4 text-start font-medium">Reservation ID</th>
@@ -263,13 +263,13 @@ export const ReservationsView: React.FC = () => {
               onClick={() => setAddModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"
               className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
             >
-              Confirm Reservation
+              {language === 'ar' ? 'تأكيد الحجز' : 'Confirm Reservation'}
             </button>
           </div>
         </form>

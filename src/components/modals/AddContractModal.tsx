@@ -27,8 +27,9 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
   const [endDate, setEndDate] = useState<string>(threeDaysLater.toISOString().split('T')[0] + 'T18:00');
   const [pickupLocation, setPickupLocation] = useState<string>('Dubai Flagship Showroom');
   const [returnLocation, setReturnLocation] = useState<string>('Dubai Flagship Showroom');
-  const [mileageAllowance, setMileageAllowance] = useState<number>(250);
+  const [mileageAllowance, setMileageAllowance] = useState<number>(200);
   const [extraKmRate, setExtraKmRate] = useState<number>(15);
+  const [depositReleaseDays, setDepositReleaseDays] = useState<number>(21);
   const [notes, setNotes] = useState<string>('Instant Executive Rental Agreement created from Command Center.');
 
   const selectedVehicle = vehicles.find(v => v.id === selectedVehicleId) || vehicles[0];
@@ -81,6 +82,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
         depositAmount,
         mileageAllowancePerDay: mileageAllowance,
         extraKmRate,
+        depositReleaseDays,
         status: 'active',
         paymentStatus: 'unpaid',
         depositStatus: 'held',
@@ -196,7 +198,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Locations & Mileage */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs font-medium text-zinc-300 mb-1.5">
               {language === 'ar' ? 'موقع التسليم' : 'Pickup Location'}
@@ -229,6 +231,18 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
               type="number"
               value={mileageAllowance}
               onChange={e => setMileageAllowance(Number(e.target.value))}
+              className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+              {language === 'ar' ? 'مدة استرداد التأمين (أيام)' : 'Deposit Release (Days)'}
+            </label>
+            <input
+              type="number"
+              value={depositReleaseDays}
+              onChange={e => setDepositReleaseDays(Number(e.target.value))}
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
             />
           </div>

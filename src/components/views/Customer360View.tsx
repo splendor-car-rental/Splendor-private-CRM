@@ -170,8 +170,8 @@ export const Customer360View: React.FC = () => {
 
       {/* Main Grid: Left Directory & Right 360 Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Customer Directory (4 cols) */}
-        <div className="lg:col-span-4 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
+        {/* Left Column: Customer Directory (4 cols on lg, 3 cols on xl/2xl) */}
+        <div className="lg:col-span-4 xl:col-span-3 2xl:col-span-3 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
           {/* Search and Filters */}
           <div className="relative">
             <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -246,9 +246,9 @@ export const Customer360View: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: 360 Deep Profile (8 cols) */}
+        {/* Right Column: 360 Deep Profile */}
         {activeCustomer ? (
-          <div className="lg:col-span-8 p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-6">
+          <div className="lg:col-span-8 xl:col-span-9 2xl:col-span-9 p-4 sm:p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-6">
             {/* VIP Customer Profile Banner */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl bg-zinc-950 border border-zinc-800">
               <div className="flex items-center gap-4">
@@ -337,10 +337,10 @@ export const Customer360View: React.FC = () => {
             </div>
 
             {/* 360 Tab Navigation */}
-            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
+            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto custom-scrollbar">
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
                   activeTab === 'overview' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -348,7 +348,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('rentals')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
                   activeTab === 'rentals' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -356,7 +356,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('statement')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
                   activeTab === 'statement' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -364,7 +364,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('comms')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
                   activeTab === 'comms' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -372,7 +372,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('docs')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
                   activeTab === 'docs' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -540,7 +540,7 @@ export const Customer360View: React.FC = () => {
                         </div>
                         <div>
                           <h4 className="text-xs font-semibold text-zinc-200">{doc.title}</h4>
-                          <p className="text-[10px] text-zinc-400">{(doc.type || '').toUpperCase()} • {doc.fileSizeMb} MB</p>
+                          <p className="text-[10px] text-zinc-400">{(doc.type || 'DOC').toUpperCase()} • {doc.fileSizeMb} MB</p>
                         </div>
                       </div>
                       <Badge variant="emerald" size="sm">{doc.verificationStatus}</Badge>
@@ -686,7 +686,7 @@ export const Customer360View: React.FC = () => {
               onClick={() => setAddModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"
@@ -730,7 +730,7 @@ export const Customer360View: React.FC = () => {
               onClick={() => setMergeModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="button"
@@ -743,7 +743,7 @@ export const Customer360View: React.FC = () => {
               }}
               className="px-5 py-2 rounded-xl bg-sky-500 text-zinc-950 font-semibold shadow-md disabled:opacity-50"
             >
-              Confirm Merge
+              {language === 'ar' ? 'تأكيد الدمج' : 'Confirm Merge'}
             </button>
           </div>
         </div>

@@ -75,9 +75,9 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
     vehicles.forEach(v => {
       if (
         `${v.make || ''} ${v.model || ''}`.toLowerCase().includes(q) ||
-        (v.plateNumber || '').toLowerCase().includes(q) ||
-        (v.vin || '').toLowerCase().includes(q) ||
-        (v.id || '').toLowerCase().includes(q)
+        (v.plateNumber && v.plateNumber.toLowerCase().includes(q)) ||
+        (v.vin && v.vin.toLowerCase().includes(q)) ||
+        (v.id && v.id.toLowerCase().includes(q))
       ) {
         matches.push({
           id: v.id,

@@ -18,7 +18,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose }) => {
-  const { language, setLanguage, t } = useLanguage();
+  const { language, direction, setLanguage, t } = useLanguage();
   const { currentUser, logout } = useAuth();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const {
@@ -131,7 +131,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
       <aside
         className={`fixed inset-y-0 start-0 z-50 w-72 bg-zinc-950/95 border-e border-zinc-800/80 flex flex-col h-screen shrink-0 select-none
           transition-transform duration-300 ease-out
-          ${isMobileOpen ? 'translate-x-0' : 'ltr:-translate-x-full rtl:translate-x-full'}
+          ${isMobileOpen ? 'translate-x-0' : (direction === 'rtl' ? 'translate-x-full' : '-translate-x-full')}
           md:static md:z-30 md:translate-x-0 md:w-64 lg:w-72`}
       >
       {/* Brand Crest */}
@@ -190,16 +190,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
       <div className="p-4 border-t border-zinc-800/80 bg-zinc-900/40">
         <div className="flex items-center gap-3 mb-3">
           <img
-            src={currentUser.avatar}
-            alt={currentUser.name}
+            src={currentUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+            alt={currentUser?.name || 'User'}
             className="w-9 h-9 rounded-xl object-cover border border-[#D4AF37]/40 shadow-sm"
           />
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-zinc-200 truncate">
-              {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : currentUser.name}
+              {language === 'ar' && currentUser?.nameAr ? currentUser.nameAr : (currentUser?.name || 'User')}
             </p>
             <p className="text-[10px] text-zinc-400 uppercase tracking-wider truncate">
-              {(currentUser?.role || '').toUpperCase()} • {(currentUser?.branch || '').split(' ')[0]}
+              {(currentUser?.role || '').toUpperCase()} • {(currentUser?.branch || 'Dubai').split(' ')[0]}
             </p>
           </div>
         </div>

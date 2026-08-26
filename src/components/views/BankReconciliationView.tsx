@@ -103,10 +103,10 @@ export const BankReconciliationView: React.FC = () => {
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto custom-scrollbar">
         <button
           onClick={() => setFilter('all')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
             filter === 'all' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -114,7 +114,7 @@ export const BankReconciliationView: React.FC = () => {
         </button>
         <button
           onClick={() => setFilter('unmatched')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
             filter === 'unmatched' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -122,7 +122,7 @@ export const BankReconciliationView: React.FC = () => {
         </button>
         <button
           onClick={() => setFilter('reconciled')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
             filter === 'reconciled' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -132,8 +132,8 @@ export const BankReconciliationView: React.FC = () => {
 
       {/* Reconciliation Table */}
       <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-start">
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full text-xs text-start min-w-[820px]">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                 <th className="p-4 text-start font-medium">Txn Date</th>
@@ -187,7 +187,7 @@ export const BankReconciliationView: React.FC = () => {
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-semibold transition-all shadow-sm"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Confirm & Post</span>
+                        <span>{language === 'ar' ? 'تأكيد وترحيل' : 'Confirm & Post'}</span>
                       </button>
                     ) : (
                       <span className="text-[11px] text-zinc-500 flex items-center justify-end gap-1 font-mono">

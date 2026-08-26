@@ -350,8 +350,9 @@ export interface Contract {
   vatAmount: number;
   grandTotal: number;
   depositAmount: number;
-  mileageAllowancePerDay: number; // default 250 km/day
+  mileageAllowancePerDay: number; // default 200 km/day -- editable per contract
   extraKmRate: number; // e.g. 15 AED / km
+  depositReleaseDays?: number; // default 21 days -- editable per contract
   
   status: ContractStatus;
   handover?: HandoverInspection;

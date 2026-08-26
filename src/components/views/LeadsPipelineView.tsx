@@ -299,7 +299,7 @@ export const LeadsPipelineView: React.FC = () => {
               onClick={() => setAddModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"

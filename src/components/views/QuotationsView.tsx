@@ -113,8 +113,8 @@ export const QuotationsView: React.FC = () => {
 
       {/* Grid: Quotes List & Printable Document Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Quotes List (4 cols) */}
-        <div className="lg:col-span-4 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
+        {/* Left Column: Quotes List */}
+        <div className="lg:col-span-4 xl:col-span-3 2xl:col-span-3 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
           <div className="relative">
             <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -159,9 +159,9 @@ export const QuotationsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Luxury Formal Quotation Document Preview (8 cols) */}
+        {/* Right Column: Luxury Formal Quotation Document Preview */}
         {activeQuote ? (
-          <div className="lg:col-span-8 p-8 rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-6 print-container">
+          <div className="lg:col-span-8 xl:col-span-9 2xl:col-span-9 p-4 sm:p-8 rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-6 print-container">
             {/* Formal Document Header */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800 pb-6">
               <div>
@@ -366,7 +366,7 @@ export const QuotationsView: React.FC = () => {
               onClick={() => setAddModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"

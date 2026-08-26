@@ -142,7 +142,7 @@ export const FleetCRMView: React.FC = () => {
       </div>
 
       {/* Vehicle Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5 sm:gap-6">
         {filteredVehicles.map(vehicle => {
           const statusBadge = {
             available: <Badge variant="emerald" size="sm">Available</Badge>,
@@ -447,7 +447,7 @@ export const FleetCRMView: React.FC = () => {
               onClick={() => setAddModalOpen(false)}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"
