@@ -48,7 +48,7 @@ export const AIStudioView: React.FC = () => {
     setChatLoading(true);
 
     try {
-      const res = await queryAI(userText);
+      const res = await queryAI(userText, language);
       setChatMessages(prev => [...prev, { 
         role: 'assistant', 
         text: res.text || 'Analysis completed successfully.', 
@@ -69,7 +69,7 @@ export const AIStudioView: React.FC = () => {
     if (!selectedCustId) return;
     setCustSummaryLoading(true);
     try {
-      const res = await generateCustomerAISummary(selectedCustId);
+      const res = await generateCustomerAISummary(selectedCustId, language);
       setCustSummaryResult(res);
     } catch (err) {
       console.error(err);
@@ -83,10 +83,10 @@ export const AIStudioView: React.FC = () => {
     const cust = customers.find(c => c.id === draftCustId);
     const veh = vehicles.find(v => v.id === draftVehId);
 
-    const prompt = `Write a bespoke luxury ${draftTone.replace('_', ' ')} car rental proposal message in ${draftLang === 'ar' ? 'Arabic' : 'English'} for VIP client ${cust?.fullName || 'VIP'} for the vehicle ${veh?.make} ${veh?.model} (${veh?.dailyRate} AED/day). Mention 250 km allowance, complimentary delivery to client location, and Splendor concierge service.`;
+    const prompt = `Write a bespoke luxury ${draftTone.replace('_', ' ')} car rental proposal message in ${draftLang === 'ar' ? 'Arabic' : 'English'} for VIP client ${cust?.fullName || 'VIP'} for the vehicle ${veh?.make} ${veh?.model} (${veh?.dailyRate} AED/day). Mention 200 km daily allowance, complimentary delivery to client location, and Splendor concierge service.`;
 
     try {
-      const res = await queryAI(prompt);
+      const res = await queryAI(prompt, draftLang);
       setDraftResult(res.text);
     } catch (err) {
       setDraftResult('Error generating proposal draft.');
@@ -117,10 +117,10 @@ export const AIStudioView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto custom-scrollbar">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
         <button
           onClick={() => setActiveTab('chat')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
             activeTab === 'chat' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -128,7 +128,7 @@ export const AIStudioView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('customer_summary')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
             activeTab === 'customer_summary' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -136,7 +136,7 @@ export const AIStudioView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('proposal_drafter')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
             activeTab === 'proposal_drafter' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -238,7 +238,7 @@ export const AIStudioView: React.FC = () => {
                 className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100"
               >
                 {customers.map(c => (
-                  <option key={c.id} value={c.id}>{c.fullName} ({(c.tier || 'VIP').toUpperCase()})</option>
+                  <option key={c.id} value={c.id}>{c.fullName} ({(c.tier || '').toUpperCase()})</option>
                 ))}
               </select>
             </div>
@@ -259,7 +259,7 @@ export const AIStudioView: React.FC = () => {
               <div className="p-5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-4 text-xs">
                 <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
                   <span className="font-bold text-zinc-100 text-sm">Customer Risk & Preferences Dossier</span>
-                  <span className="font-mono text-emerald-400 font-bold">Confidence: {Math.round(custSummaryResult.confidence * 100)}%</span>
+                  <span className="font-mono text-emerald-400 font-bold">Confidence: {Math.round(custSummaryResult.confidence)}%</span>
                 </div>
                 <div className="text-zinc-300 leading-relaxed whitespace-pre-wrap">
                   {custSummaryResult.summary}

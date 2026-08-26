@@ -63,7 +63,7 @@ export const QuotationsView: React.FC = () => {
         vehicleName: `${veh.make} ${veh.model} (${veh.year})`,
         category: veh.category,
         dailyRate: veh.dailyRate,
-        securityDeposit: veh.securityDeposit
+        securityDeposit: veh.minDeposit
       }));
     }
   };
@@ -79,11 +79,14 @@ export const QuotationsView: React.FC = () => {
     setActiveView('reservations');
   };
 
-  const filteredQuotes = quotations.filter(q =>
-    q.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    q.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    q.vehicleName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredQuotes = quotations.filter(q => {
+    const s = (searchTerm || '').toLowerCase();
+    return (
+      (q.id || '').toLowerCase().includes(s) ||
+      (q.customerName || '').toLowerCase().includes(s) ||
+      (q.vehicleName || '').toLowerCase().includes(s)
+    );
+  });
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -107,14 +110,14 @@ export const QuotationsView: React.FC = () => {
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold text-xs lg:text-sm shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
         >
           <Plus className="w-4 h-4" />
-          <span>{t('newQuotation')}</span>
+          <span>{language === 'ar' ? 'إنشاء عرض سعر جديد' : 'New Quotation'}</span>
         </button>
       </div>
 
       {/* Grid: Quotes List & Printable Document Preview */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Quotes List */}
-        <div className="lg:col-span-4 xl:col-span-3 2xl:col-span-3 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
+        {/* Left Column: Quotes List (4 cols) */}
+        <div className="lg:col-span-4 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
           <div className="relative">
             <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -151,7 +154,7 @@ export const QuotationsView: React.FC = () => {
 
                   <div className="mt-2 pt-2 border-t border-zinc-800/50 flex items-center justify-between text-[11px] text-zinc-400">
                     <span className="font-mono text-zinc-500">{quote.id}</span>
-                    <span className="font-bold text-zinc-200">{quote.grandTotal.toLocaleString()} AED</span>
+                    <span className="font-bold text-zinc-200">{(quote.grandTotal || 0).toLocaleString()} AED</span>
                   </div>
                 </div>
               );
@@ -159,9 +162,9 @@ export const QuotationsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Luxury Formal Quotation Document Preview */}
+        {/* Right Column: Luxury Formal Quotation Document Preview (8 cols) */}
         {activeQuote ? (
-          <div className="lg:col-span-8 xl:col-span-9 2xl:col-span-9 p-4 sm:p-8 rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-6 print-container">
+          <div className="lg:col-span-8 p-8 rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-6 print-container">
             {/* Formal Document Header */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800 pb-6">
               <div>
@@ -169,7 +172,7 @@ export const QuotationsView: React.FC = () => {
                   SPLENDOR CAR RENTAL LLC
                 </h1>
                 <p className="text-[10px] tracking-wider text-zinc-400 uppercase font-medium mt-1">
-                  شركة سبليندور لتأجير السيارات ذ.م.م • TRN: 100482910300003
+                  شركة سبلندر لتأجير السيارات ذ.م.م • TRN: 100482910300003
                 </p>
                 <p className="text-xs text-zinc-400 mt-1">Downtown Flagship Showroom, Dubai, UAE</p>
               </div>
@@ -220,8 +223,8 @@ export const QuotationsView: React.FC = () => {
                       <p className="text-[11px] text-zinc-400">Includes 250 km/day allowance & full comprehensive VIP insurance</p>
                     </td>
                     <td className="py-3 text-center">{activeQuote.durationDays} Days</td>
-                    <td className="py-3 text-end font-mono">{activeQuote.dailyRate.toLocaleString()}</td>
-                    <td className="py-3 text-end font-mono">{activeQuote.baseTotal.toLocaleString()}</td>
+                    <td className="py-3 text-end font-mono">{(activeQuote.dailyRate || 0).toLocaleString()}</td>
+                    <td className="py-3 text-end font-mono">{(activeQuote.baseTotal || 0).toLocaleString()}</td>
                   </tr>
                   {activeQuote.extraServices?.map((svc, idx) => (
                     <tr key={idx}>
@@ -240,19 +243,19 @@ export const QuotationsView: React.FC = () => {
               <div className="w-72 space-y-2 text-xs">
                 <div className="flex justify-between text-zinc-400">
                   <span>Subtotal (Net):</span>
-                  <span className="font-mono text-zinc-200">{(activeQuote.baseTotal + (activeQuote.extraServicesTotal || 0) - (activeQuote.discountAmount || 0)).toLocaleString()} AED</span>
+                  <span className="font-mono text-zinc-200">{((activeQuote.baseTotal || 0) + (activeQuote.extraServicesTotal || 0) - (activeQuote.discountAmount || 0)).toLocaleString()} AED</span>
                 </div>
                 <div className="flex justify-between text-zinc-400">
                   <span>UAE VAT (5%):</span>
-                  <span className="font-mono text-zinc-200">{activeQuote.vatAmount.toLocaleString()} AED</span>
+                  <span className="font-mono text-zinc-200">{(activeQuote.vatAmount || 0).toLocaleString()} AED</span>
                 </div>
                 <div className="flex justify-between text-base font-bold text-zinc-100 pt-2 border-t border-zinc-800">
                   <span>Grand Total:</span>
-                  <span className="font-mono text-[#f5d97f]">{activeQuote.grandTotal.toLocaleString()} AED</span>
+                  <span className="font-mono text-[#f5d97f]">{(activeQuote.grandTotal || 0).toLocaleString()} AED</span>
                 </div>
                 <div className="flex justify-between text-xs text-zinc-400 pt-1">
                   <span>Security Deposit (Refundable):</span>
-                  <span className="font-mono text-zinc-300">{activeQuote.securityDeposit.toLocaleString()} AED</span>
+                  <span className="font-mono text-zinc-300">{(activeQuote.securityDeposit || 0).toLocaleString()} AED</span>
                 </div>
               </div>
             </div>

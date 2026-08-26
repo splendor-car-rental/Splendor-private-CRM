@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Lock, Mail, AlertCircle, LogOut, Loader2 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { SplendorLogo } from '../common/SplendorLogo';
+import scrGoldLogo from '../../assets/scr-gold-logo.jpg';
 
 /**
  * Full-screen splash shown while Firebase Auth is resolving the current session.
@@ -49,11 +50,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, errorKey }) =
     <div dir={direction} className={`min-h-screen bg-zinc-950 flex items-center justify-center p-4 ${language === 'ar' ? 'font-arabic' : ''}`}>
       <div className="w-full max-w-md">
         <div className="flex flex-col items-center mb-8">
-          <SplendorLogo size="lg" className="mb-4" />
-          <h1 className="font-serif text-lg tracking-wide text-[#f5d97f] uppercase font-bold text-center">
-            {t('brandName')}
-          </h1>
-          <p className="text-[11px] text-zinc-500 tracking-wider mt-1 text-center">{t('brandSub')}</p>
+          <img
+            src={scrGoldLogo}
+            alt="Splendor Car Rental"
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = '/scr-gold-logo.jpg';
+            }}
+            className="w-full max-w-[320px] rounded-2xl shadow-2xl shadow-[#D4AF37]/10 select-none"
+          />
         </div>
 
         <form

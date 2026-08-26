@@ -66,11 +66,14 @@ export const LeadsPipelineView: React.FC = () => {
     setActiveView('customers');
   };
 
-  const filteredLeads = leads.filter(l => 
-    l.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    l.phone.includes(searchTerm) ||
-    l.email.toLowerCase().includes(searchTerm)
-  );
+  const filteredLeads = leads.filter(l => {
+    const s = (searchTerm || '').toLowerCase();
+    return (
+      (l.fullName || '').toLowerCase().includes(s) ||
+      (l.phone || '').includes(searchTerm || '') ||
+      (l.email || '').toLowerCase().includes(s)
+    );
+  });
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -114,7 +117,7 @@ export const LeadsPipelineView: React.FC = () => {
                 </div>
               </div>
               <div className="text-[11px] font-mono text-zinc-400">
-                {totalStageValue.toLocaleString()} AED
+                {(totalStageValue || 0).toLocaleString()} AED
               </div>
 
               {/* Cards */}
@@ -135,7 +138,7 @@ export const LeadsPipelineView: React.FC = () => {
 
                     <div className="text-[11px] text-zinc-400 space-y-1">
                       <p className="truncate flex items-center gap-1"><Phone className="w-3 h-3 text-zinc-500" /> {lead.phone}</p>
-                      <p className="truncate font-semibold text-zinc-300">{lead.estimatedValue.toLocaleString()} AED</p>
+                      <p className="truncate font-semibold text-zinc-300">{(lead.estimatedValue || 0).toLocaleString()} AED</p>
                     </div>
 
                     {lead.notes && (

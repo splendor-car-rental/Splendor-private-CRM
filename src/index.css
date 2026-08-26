@@ -10,27 +10,87 @@
 
   html[dir="rtl"] {
     font-family: var(--font-arabic);
+    letter-spacing: normal;
   }
 
   html[dir="ltr"] {
     font-family: var(--font-sans);
   }
+
+  body {
+    background-color: #09090b;
+    color: #f4f4f5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+  }
+
+  html[dir="rtl"] h1, 
+  html[dir="rtl"] h2, 
+  html[dir="rtl"] h3, 
+  html[dir="rtl"] h4,
+  html[dir="rtl"] .font-display {
+    font-family: var(--font-arabic);
+    letter-spacing: normal;
+  }
 }
 
 /* Custom sleek scrollbar for luxury CRM */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(15, 15, 15, 0.5);
+  background: #09090b;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(163, 163, 163, 0.2);
+  background: #27272a;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(217, 119, 6, 0.4);
+  background: #3f3f46;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+.luxury-card {
+  background: rgba(18, 18, 20, 0.85);
+  border: 1px solid rgba(39, 39, 42, 0.8);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+}
+
+.luxury-card-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.luxury-card-hover:hover {
+  border-color: rgba(212, 175, 55, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 35px -10px rgba(0, 0, 0, 0.65), 0 0 15px -3px rgba(212, 175, 55, 0.06);
+}
+
+.table-row-hover {
+  transition: background-color 0.15s ease;
+}
+.table-row-hover:hover {
+  background-color: rgba(24, 24, 27, 0.6);
 }
 
 @media print {

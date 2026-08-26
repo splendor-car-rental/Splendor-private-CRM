@@ -50,16 +50,16 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
     // Customers
     customers.forEach(c => {
       if (
-        c.fullName.toLowerCase().includes(q) ||
-        c.phone.includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        c.id.toLowerCase().includes(q) ||
+        (c.fullName || '').toLowerCase().includes(q) ||
+        (c.phone || '').includes(q) ||
+        (c.email || '').toLowerCase().includes(q) ||
+        (c.id || '').toLowerCase().includes(q) ||
         (c.companyName && c.companyName.toLowerCase().includes(q))
       ) {
         matches.push({
           id: c.id,
           title: c.fullName,
-          subtitle: `${c.id} • ${c.phone} • LTV: ${c.lifetimeValue.toLocaleString()} AED`,
+          subtitle: `${c.id} • ${c.phone || ''} • LTV: ${(c.lifetimeValue || 0).toLocaleString()} AED`,
           type: 'customer',
           badge: c.isVIP ? 'VIP' : undefined,
           onClick: () => {
@@ -75,16 +75,16 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
     vehicles.forEach(v => {
       if (
         `${v.make || ''} ${v.model || ''}`.toLowerCase().includes(q) ||
-        (v.plateNumber && v.plateNumber.toLowerCase().includes(q)) ||
-        (v.vin && v.vin.toLowerCase().includes(q)) ||
-        (v.id && v.id.toLowerCase().includes(q))
+        (v.plateNumber || '').toLowerCase().includes(q) ||
+        (v.vin || '').toLowerCase().includes(q) ||
+        (v.id || '').toLowerCase().includes(q)
       ) {
         matches.push({
           id: v.id,
           title: `${v.make || ''} ${v.model || ''} (${v.year || ''})`,
           subtitle: `${v.plateCity || ''} ${v.plateNumber || ''} • ${(v.status || '').toUpperCase()} • ${v.dailyRate || 0} AED/day`,
           type: 'vehicle',
-          badge: v.status || 'available',
+          badge: v.status,
           onClick: () => {
             setSelectedVehicleId(v.id);
             setActiveView('fleet');
@@ -97,14 +97,14 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
     // Contracts
     contracts.forEach(cnt => {
       if (
-        cnt.contractNumber.toLowerCase().includes(q) ||
-        cnt.customerName.toLowerCase().includes(q) ||
-        cnt.vehicleName.toLowerCase().includes(q)
+        (cnt.contractNumber || '').toLowerCase().includes(q) ||
+        (cnt.customerName || '').toLowerCase().includes(q) ||
+        (cnt.vehicleName || '').toLowerCase().includes(q)
       ) {
         matches.push({
           id: cnt.id,
-          title: `Contract ${cnt.contractNumber}`,
-          subtitle: `${cnt.customerName} • ${cnt.vehicleName} • ${cnt.grandTotal.toLocaleString()} AED`,
+          title: `Contract ${cnt.contractNumber || ''}`,
+          subtitle: `${cnt.customerName || ''} • ${cnt.vehicleName || ''} • ${(cnt.grandTotal || 0).toLocaleString()} AED`,
           type: 'contract',
           badge: cnt.status,
           onClick: () => {
@@ -119,14 +119,14 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
     // Quotations
     quotations.forEach(quo => {
       if (
-        quo.id.toLowerCase().includes(q) ||
-        quo.customerName.toLowerCase().includes(q) ||
-        quo.vehicleName.toLowerCase().includes(q)
+        (quo.id || '').toLowerCase().includes(q) ||
+        (quo.customerName || '').toLowerCase().includes(q) ||
+        (quo.vehicleName || '').toLowerCase().includes(q)
       ) {
         matches.push({
           id: quo.id,
-          title: `Quotation ${quo.id}`,
-          subtitle: `${quo.customerName} • ${quo.vehicleName} • ${quo.grandTotal.toLocaleString()} AED`,
+          title: `Quotation ${quo.id || ''}`,
+          subtitle: `${quo.customerName || ''} • ${quo.vehicleName || ''} • ${(quo.grandTotal || 0).toLocaleString()} AED`,
           type: 'quotation',
           badge: quo.status,
           onClick: () => {

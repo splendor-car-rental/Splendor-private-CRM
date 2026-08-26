@@ -1,10 +1,12 @@
-import { 
-  Customer, Lead, Opportunity, Vehicle, Quotation, Reservation, 
-  Contract, AdditionalCharge, Deposit, Payment, Invoice, 
-  BankImportBatch, BankTransaction, CRMTask, Communication, 
-  CRMDocument, DocumentTemplate, AuditLog, CustomFieldDefinition, 
-  NumberingConfig, SystemHealth, NotificationItem, User 
+import {
+  Customer, Lead, Opportunity, Vehicle, Quotation, Reservation,
+  Contract, AdditionalCharge, Deposit, Payment, Invoice,
+  BankImportBatch, BankTransaction, CRMTask, Communication,
+  CRMDocument, DocumentTemplate, AuditLog, CustomFieldDefinition,
+  NumberingConfig, SystemHealth, NotificationItem, User,
+  TollTransaction, TollImportBatch, TollPricingConfig
 } from '../types';
+import { DEFAULT_TOLL_PRICING } from '../lib/tollCalculations';
 
 export class DataStore {
   public users: User[] = [
@@ -1213,6 +1215,20 @@ export class DataStore {
     }
   ];
 
+  // Salik/Darb/Parking transactions and their import batches. No demo seed
+  // data on purpose -- this is real financial data the owner imports/enters
+  // himself, unlike the illustrative sample data elsewhere in this store.
+  public tollTransactions: TollTransaction[] = [];
+  public tollImportBatches: TollImportBatch[] = [];
+
+  // Live default Salik/Darb/Parking rates -- starts equal to the fixed
+  // defaults the owner confirmed, but is editable at runtime (Settings >
+  // Tolls & Parking > Pricing, CEO/Admin/Finance/Sales only) since rates can
+  // rise or fall. Every calculateTollTransaction() call should read this
+  // instead of the DEFAULT_TOLL_PRICING constant so a rate change applies
+  // immediately to new entries/imports.
+  public tollPricingConfig: TollPricingConfig = { ...DEFAULT_TOLL_PRICING };
+
   public documents: CRMDocument[] = [
     {
       id: 'DOC-000001',
@@ -1281,7 +1297,7 @@ export class DataStore {
       nameAr: 'عقد تأجير المركبات الفاخرة الرئيسي',
       category: 'rental_contract',
       content: 'This Rental Agreement is made between SPLENDOR CAR RENTAL LLC and {{customer.name}} (ID: {{customer.id_number}}) for the lease of {{vehicle.make}} {{vehicle.model}} (Plate: {{vehicle.plate_number}}).',
-      contentAr: 'تم إبرام هذا العقد بين شركة سبليندور لتأجير السيارات ذ.م.م والعميل {{customer.name}} (رقم الهوية: {{customer.id_number}}) لتأجير المركبة {{vehicle.make}} {{vehicle.model}} (رقم اللوحة: {{vehicle.plate_number}}).',
+      contentAr: 'تم إبرام هذا العقد بين شركة سبلندر لتأجير السيارات ذ.م.م والعميل {{customer.name}} (رقم الهوية: {{customer.id_number}}) لتأجير المركبة {{vehicle.make}} {{vehicle.model}} (رقم اللوحة: {{vehicle.plate_number}}).',
       variables: ['contract.number', 'customer.name', 'customer.id_number', 'vehicle.make', 'vehicle.model', 'vehicle.plate_number', 'dates.start', 'dates.end', 'pricing.grand_total'],
       isDefault: true,
       updatedAt: '2026-08-01T00:00:00Z'
@@ -1364,7 +1380,8 @@ export class DataStore {
     { entity: 'Payment', prefix: 'PAY-', digits: 6, nextNumber: 3, sample: 'PAY-000003' },
     { entity: 'Receipt', prefix: 'RCP-2026-', digits: 5, nextNumber: 111, sample: 'RCP-2026-00111' },
     { entity: 'Deposit', prefix: 'DEP-', digits: 6, nextNumber: 4, sample: 'DEP-000004' },
-    { entity: 'Task', prefix: 'TSK-', digits: 6, nextNumber: 5, sample: 'TSK-000005' }
+    { entity: 'Task', prefix: 'TSK-', digits: 6, nextNumber: 5, sample: 'TSK-000005' },
+    { entity: 'TollTransaction', prefix: 'TOL-', digits: 6, nextNumber: 1, sample: 'TOL-000001' }
   ];
 
   public notifications: NotificationItem[] = [
@@ -1438,14 +1455,18 @@ export class DataStore {
   }
 
   // Duplicate customer detection
-  public findDuplicateCustomers(email: string, phone: string, licenseNumber?: string, idNumber?: string) {
-    const normalizedPhone = phone.replace(/[^0-9]/g, '');
+  public findDuplicateCustomers(email?: string, phone?: string, licenseNumber?: string, idNumber?: string) {
+    const normalizedPhone = (phone || '').replace(/[^0-9]/g, '');
+    const targetEmail = (email || '').toLowerCase();
+    const targetLicense = (licenseNumber || '').toLowerCase();
+    const targetId = (idNumber || '').toLowerCase();
+
     return this.customers.filter(c => {
-      const cPhone = c.phone.replace(/[^0-9]/g, '');
-      const emailMatch = c.email.toLowerCase() === email.toLowerCase();
+      const cPhone = (c.phone || '').replace(/[^0-9]/g, '');
+      const emailMatch = targetEmail && c.email && c.email.toLowerCase() === targetEmail;
       const phoneMatch = normalizedPhone.length > 6 && cPhone.endsWith(normalizedPhone.slice(-7));
-      const licenseMatch = licenseNumber && c.licenseNumber.toLowerCase() === licenseNumber.toLowerCase();
-      const idMatch = idNumber && c.idNumber.toLowerCase() === idNumber.toLowerCase();
+      const licenseMatch = targetLicense && c.licenseNumber && c.licenseNumber.toLowerCase() === targetLicense;
+      const idMatch = targetId && c.idNumber && c.idNumber.toLowerCase() === targetId;
       return emailMatch || phoneMatch || licenseMatch || idMatch;
     });
   }
@@ -1527,7 +1548,7 @@ export class DataStore {
         date: pay.receivedAt.split('T')[0],
         type: 'payment',
         reference: pay.receiptNumber || pay.id,
-        description: `Payment Received (${(pay.method || 'cash').toUpperCase()} - Ref: ${pay.referenceNumber || 'N/A'})`,
+        description: `Payment Received (${(pay.method || '').toUpperCase()} - Ref: ${pay.referenceNumber || ''})`,
         debit: 0,
         credit: pay.amount,
         runningBalance

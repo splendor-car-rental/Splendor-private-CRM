@@ -32,20 +32,19 @@ export const FleetCRMView: React.FC = () => {
     make: 'Ferrari',
     model: 'Purosangue V12',
     year: 2025,
-    category: 'luxury_suv' as VehicleCategory,
-    color: 'Rosso Corsa',
+    category: 'executive_suv' as VehicleCategory,
+    exteriorColor: 'Rosso Corsa',
     plateNumber: 'DXB P 888',
     plateCity: 'Dubai',
     vin: 'ZFF888PUR9990001',
     dailyRate: 9500,
     weeklyRate: 58000,
     monthlyRate: 190000,
-    securityDeposit: 20000,
+    minDeposit: 20000,
     mileage: 1200,
     fuelType: 'petrol' as const,
     transmission: 'automatic' as const,
     horsepower: 715,
-    acceleration: 3.3,
     status: 'available' as VehicleStatus,
     thumbnail: 'https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80',
     images: ['https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80']
@@ -66,10 +65,11 @@ export const FleetCRMView: React.FC = () => {
   };
 
   const filteredVehicles = vehicles.filter(v => {
+    const s = (searchTerm || '').toLowerCase();
     const matchesSearch = 
-      `${v.make} ${v.model}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.plateNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.vin.toLowerCase().includes(searchTerm.toLowerCase());
+      `${v.make || ''} ${v.model || ''}`.toLowerCase().includes(s) ||
+      (v.plateNumber || '').toLowerCase().includes(s) ||
+      (v.vin || '').toLowerCase().includes(s);
     
     const matchesCat = categoryFilter === 'all' || v.category === categoryFilter;
     const matchesStatus = statusFilter === 'all' || v.status === statusFilter;
@@ -83,7 +83,7 @@ export const FleetCRMView: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-zinc-100">
-            {language === 'ar' ? 'أسطول سبليندور الفاخر ومحرك التوفر' : 'Fleet CRM & Availability Engine'}
+            {language === 'ar' ? 'أسطول سبلندر الفاخر ومحرك التوفر' : 'Fleet CRM & Availability Engine'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
             {language === 'ar' ? 'إدارة السوبركارز، الفحوصات الفنية، والتحقق الفوري من التوفر ومنع الحجز المزدوج' : 'Supercar asset management, live availability schedules & double-booking prevention'}
@@ -127,7 +127,7 @@ export const FleetCRMView: React.FC = () => {
 
         {/* Category Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto">
-          {['all', 'supercar', 'ultra_luxury', 'luxury_suv', 'convertible'].map(cat => (
+          {['all', 'supercar', 'ultra_luxury_sedan', 'executive_suv', 'grand_tourer', 'exotic_convertible'].map(cat => (
             <button
               key={cat}
               onClick={() => setCategoryFilter(cat)}
@@ -142,14 +142,14 @@ export const FleetCRMView: React.FC = () => {
       </div>
 
       {/* Vehicle Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5 sm:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredVehicles.map(vehicle => {
           const statusBadge = {
             available: <Badge variant="emerald" size="sm">Available</Badge>,
             rented: <Badge variant="gold" size="sm">Active Rental</Badge>,
             reserved: <Badge variant="sky" size="sm">Reserved</Badge>,
             maintenance: <Badge variant="amber" size="sm">Maintenance</Badge>,
-            inactive: <Badge variant="zinc" size="sm">Inactive</Badge>
+            unavailable: <Badge variant="zinc" size="sm">Unavailable</Badge>
           }[vehicle.status];
 
           return (
@@ -183,7 +183,7 @@ export const FleetCRMView: React.FC = () => {
                     <h3 className="text-lg font-display font-bold text-zinc-100 group-hover:text-[#f5d97f] transition-colors">
                       {vehicle.make} {vehicle.model}
                     </h3>
-                    <p className="text-xs text-zinc-400 capitalize">{vehicle.year} • {vehicle.color} • {vehicle.category.replace('_', ' ')}</p>
+                    <p className="text-xs text-zinc-400 capitalize">{vehicle.year} • {vehicle.exteriorColor} • {vehicle.category.replace('_', ' ')}</p>
                   </div>
                 </div>
               </div>
@@ -200,15 +200,15 @@ export const FleetCRMView: React.FC = () => {
                   </div>
                   <div className="border-x border-zinc-800">
                     <span className="text-[10px] uppercase text-zinc-500 font-medium flex items-center justify-center gap-1">
-                      <Gauge className="w-3 h-3 text-sky-400" /> 0-100
+                      <Gauge className="w-3 h-3 text-sky-400" /> Engine
                     </span>
-                    <p className="font-bold text-zinc-200 mt-0.5">{vehicle.acceleration}s</p>
+                    <p className="font-bold text-zinc-200 mt-0.5">{vehicle.engine}</p>
                   </div>
                   <div>
                     <span className="text-[10px] uppercase text-zinc-500 font-medium flex items-center justify-center gap-1">
                       <Fuel className="w-3 h-3 text-emerald-400" /> Odo
                     </span>
-                    <p className="font-bold text-zinc-200 mt-0.5">{vehicle.mileage.toLocaleString()} km</p>
+                    <p className="font-bold text-zinc-200 mt-0.5">{(vehicle.mileage || 0).toLocaleString()} km</p>
                   </div>
                 </div>
 
@@ -217,13 +217,13 @@ export const FleetCRMView: React.FC = () => {
                   <div>
                     <span className="text-[10px] text-zinc-400 uppercase font-medium">Daily Rate</span>
                     <p className="text-base font-bold text-zinc-100">
-                      {vehicle.dailyRate.toLocaleString()} <span className="text-xs text-[#D4AF37] font-medium">AED/day</span>
+                      {(vehicle.dailyRate || 0).toLocaleString()} <span className="text-xs text-[#D4AF37] font-medium">AED/day</span>
                     </p>
                   </div>
                   <div className="text-end">
                     <span className="text-[10px] text-zinc-400 uppercase font-medium">Deposit</span>
                     <p className="text-xs font-semibold text-zinc-300">
-                      {vehicle.securityDeposit.toLocaleString()} AED
+                      {(vehicle.minDeposit || 0).toLocaleString()} AED
                     </p>
                   </div>
                 </div>
@@ -256,7 +256,7 @@ export const FleetCRMView: React.FC = () => {
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
                       <p className="text-zinc-400 text-[10px]">Total Historical Revenue</p>
-                      <p className="text-base font-bold text-emerald-400 mt-1">{activeVehicle.totalRevenue.toLocaleString()} AED</p>
+                      <p className="text-base font-bold text-emerald-400 mt-1">{(activeVehicle.totalRevenue || 0).toLocaleString()} AED</p>
                     </div>
                     <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
                       <p className="text-zinc-400 text-[10px]">Operational Profitability</p>
@@ -266,8 +266,8 @@ export const FleetCRMView: React.FC = () => {
                 </div>
 
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
-                  <p className="text-zinc-400"><strong>Insurance:</strong> {activeVehicle.insurancePolicyNumber} ({activeVehicle.insuranceExpiryDate})</p>
-                  <p className="text-zinc-400"><strong>RTA Registration:</strong> Valid until {activeVehicle.registrationExpiryDate}</p>
+                  <p className="text-zinc-400"><strong>Insurance:</strong> Valid until {activeVehicle.insuranceExpiry}</p>
+                  <p className="text-zinc-400"><strong>RTA Registration:</strong> Valid until {activeVehicle.registrationExpiry}</p>
                 </div>
               </div>
             </div>
@@ -275,24 +275,20 @@ export const FleetCRMView: React.FC = () => {
             {/* Maintenance History */}
             <div className="space-y-3">
               <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Scheduled Maintenance & Service Logs</h4>
-              {activeVehicle.maintenanceLogs.length === 0 ? (
-                <div className="p-4 rounded-xl bg-zinc-950 text-center text-zinc-500">All services up to date.</div>
-              ) : (
-                <div className="space-y-2">
-                  {activeVehicle.maintenanceLogs.map(log => (
-                    <div key={log.id} className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-zinc-200 uppercase">{log.serviceType}</span>
-                        <p className="text-zinc-400 mt-0.5">{log.description} ({log.serviceCenter})</p>
-                      </div>
-                      <div className="text-end">
-                        <span className="text-zinc-300 font-semibold">{log.cost.toLocaleString()} AED</span>
-                        <p className="text-zinc-500 text-[10px]">{new Date(log.date).toLocaleDateString()}</p>
-                      </div>
-                    </div>
-                  ))}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
+                  <p className="text-zinc-400 text-[10px]">Status</p>
+                  <p className="font-bold text-zinc-200 mt-1 capitalize">{activeVehicle.maintenanceStatus.replace('_', ' ')}</p>
                 </div>
-              )}
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
+                  <p className="text-zinc-400 text-[10px]">Last Serviced At</p>
+                  <p className="font-bold text-zinc-200 mt-1">{(activeVehicle.lastMaintenanceMileage || 0).toLocaleString()} km</p>
+                </div>
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
+                  <p className="text-zinc-400 text-[10px]">Next Service Due</p>
+                  <p className="font-bold text-zinc-200 mt-1">{(activeVehicle.nextMaintenanceMileage || 0).toLocaleString()} km</p>
+                </div>
+              </div>
             </div>
           </div>
         </Modal>
@@ -434,8 +430,8 @@ export const FleetCRMView: React.FC = () => {
               <input
                 type="number"
                 required
-                value={form.securityDeposit}
-                onChange={(e) => setForm({ ...form, securityDeposit: Number(e.target.value) })}
+                value={form.minDeposit}
+                onChange={(e) => setForm({ ...form, minDeposit: Number(e.target.value) })}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               />
             </div>

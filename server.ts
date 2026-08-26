@@ -3,12 +3,19 @@ import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation } from './src/types';
+import type { Lead, Contract, Customer, Quotation, Reservation, TollType } from './src/types';
+import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
+import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
+import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+// 15mb: base64-encoded file uploads (see POST /api/upload) inflate the raw
+// file size by ~33%, so this needs headroom above the 10MB max file size
+// enforced in that handler, or large-but-valid uploads would be rejected
+// here by the body parser before ever reaching that check.
+app.use(express.json({ limit: '15mb' }));
 
 // ----------------------------------------------------
 // AUTHENTICATION MIDDLEWARE
@@ -34,7 +41,10 @@ function initFirebaseAdmin() {
   }
   try {
     const serviceAccount = JSON.parse(raw);
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket: 'splendor-private-crm.firebasestorage.app'
+    });
     console.log('[auth] Firebase Admin initialized -- API requests will be verified.');
   } catch (error) {
     console.error('[auth] Failed to parse/initialize FIREBASE_SERVICE_ACCOUNT_KEY:', error);
@@ -158,6 +168,12 @@ app.post('/api/admin/users', async (req, res) => {
     if (!validRoles.includes(role)) {
       return res.status(400).json({ error: 'Invalid role.' });
     }
+    // Delegation limit: a requester can only grant a role at their own rank
+    // or lower authority -- an Admin can create another Admin or any
+    // operational role, but never a CEO account.
+    if (ROLE_RANK[role as keyof typeof ROLE_RANK] < ROLE_RANK[requesterRole as keyof typeof ROLE_RANK]) {
+      return res.status(403).json({ error: 'You cannot grant a role with more authority than your own.' });
+    }
 
     const newUserRecord = await admin.auth().createUser({
       email,
@@ -178,16 +194,18 @@ app.post('/api/admin/users', async (req, res) => {
 
     await admin.firestore().collection('users').doc(newUserRecord.uid).set(profile);
 
-    // Audit trail: who provisioned this account, and when.
-    await admin.firestore().collection('audit_logs').add({
-      id: `AUD-${Date.now()}`,
-      timestamp: new Date().toISOString(),
+    // Audit trail: who provisioned this account, and when. Uses the same
+    // in-memory audit log the rest of the app writes to (globalStore.logAudit)
+    // so this shows up in Settings > Security Audit Trail like every other
+    // action, rather than a separate Firestore-only trail nothing reads.
+    globalStore.logAudit({
       userId: requesterUid,
       userName: (requesterDoc.data() as any)?.name || requesterUid,
-      action: 'CREATE_STAFF_ACCOUNT',
+      userRole: requesterRole,
+      action: 'create',
       entityType: 'User',
       entityId: newUserRecord.uid,
-      details: `Created staff account for ${name} (${email}) with role ${role}.`
+      newValue: `Created staff account for ${name} (${email}) with role ${role}.`
     });
 
     res.json({ id: newUserRecord.uid, ...profile });
@@ -197,6 +215,130 @@ app.post('/api/admin/users', async (req, res) => {
       ? 'An account with this email already exists.'
       : (error?.message || 'Failed to create staff account.');
     res.status(400).json({ error: message });
+  }
+});
+
+// Admin/CEO-only: edit an existing staff member's profile (name, contact
+// info, avatar, or role). Uses firebase-admin so it works regardless of
+// Firestore client rules (which only let a user write their own profile
+// doc) -- this is the server-verified path for one staff member managing
+// another's account. Two rank checks: the requester can't touch someone who
+// currently outranks them, and can't promote anyone above their own rank.
+app.patch('/api/admin/users/:id', requireRole('ceo', 'admin'), async (req, res) => {
+  try {
+    const requesterUid = (req as any).authUser?.uid;
+    const requesterRole = await getRequesterRole(requesterUid);
+    const targetId = req.params.id;
+
+    const targetRef = admin.firestore().collection('users').doc(targetId);
+    const targetSnap = await targetRef.get();
+    if (!targetSnap.exists) {
+      return res.status(404).json({ error: 'Staff account not found.' });
+    }
+    const targetData = targetSnap.data() as any;
+
+    if (ROLE_RANK[targetData.role as keyof typeof ROLE_RANK] < ROLE_RANK[requesterRole as keyof typeof ROLE_RANK]) {
+      return res.status(403).json({ error: 'You cannot edit an account with more authority than your own.' });
+    }
+
+    const { name, nameAr, phone, branch, avatar, role, status } = req.body || {};
+    const updates: Record<string, any> = {};
+    if (typeof name === 'string' && name.trim()) updates.name = name;
+    if (typeof nameAr === 'string') updates.nameAr = nameAr;
+    if (typeof phone === 'string') updates.phone = phone;
+    if (typeof branch === 'string') updates.branch = branch;
+    if (typeof avatar === 'string' && avatar.trim()) updates.avatar = avatar;
+    if (typeof status === 'string' && ['active', 'inactive'].includes(status)) updates.status = status;
+    if (typeof role === 'string') {
+      const validRoles = ['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ error: 'Invalid role.' });
+      }
+      if (ROLE_RANK[role as keyof typeof ROLE_RANK] < ROLE_RANK[requesterRole as keyof typeof ROLE_RANK]) {
+        return res.status(403).json({ error: 'You cannot grant a role with more authority than your own.' });
+      }
+      updates.role = role;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update.' });
+    }
+
+    await targetRef.set(updates, { merge: true });
+
+    globalStore.logAudit({
+      userId: requesterUid,
+      userName: requesterUid,
+      userRole: requesterRole,
+      action: 'update',
+      entityType: 'User',
+      entityId: targetId,
+      newValue: `Updated staff account (${Object.keys(updates).join(', ')}) for ${targetData.email || targetId}.`
+    });
+
+    res.json({ id: targetId, ...targetData, ...updates });
+  } catch (error: any) {
+    console.error('Failed to update staff account:', error);
+    res.status(400).json({ error: error?.message || 'Failed to update staff account.' });
+  }
+});
+
+// Any authenticated staff member can upload a file (avatar photo or a
+// customer document/ID scan). Files are sent as base64 JSON rather than
+// multipart form data to avoid adding a new upload-parsing dependency --
+// fine for the photo/scan sizes this app deals with. Uploaded through
+// firebase-admin's Storage bucket (not the client SDK), so no separate
+// Storage security rules need to be published for this to work -- every
+// upload is already authenticated and authorized here, server-side.
+app.post('/api/upload', async (req, res) => {
+  try {
+    const requesterUid = (req as any).authUser?.uid;
+    if (!requesterUid) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    const { folder, fileName, fileType, dataBase64, targetUserId, customerId } = req.body || {};
+    if (!folder || !fileName || !dataBase64) {
+      return res.status(400).json({ error: 'folder, fileName, and dataBase64 are required.' });
+    }
+    if (!['avatars', 'customer-documents'].includes(folder)) {
+      return res.status(400).json({ error: 'Invalid upload folder.' });
+    }
+
+    let storagePath: string;
+    if (folder === 'avatars') {
+      let ownerUid = requesterUid;
+      if (targetUserId && targetUserId !== requesterUid) {
+        // Uploading someone else's avatar -- only CEO/Admin may do this.
+        const requesterRole = await getRequesterRole(requesterUid);
+        if (requesterRole !== 'ceo' && requesterRole !== 'admin') {
+          return res.status(403).json({ error: 'You do not have permission to change this account\'s photo.' });
+        }
+        ownerUid = targetUserId;
+      }
+      storagePath = `avatars/${ownerUid}-${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else {
+      if (!customerId) {
+        return res.status(400).json({ error: 'customerId is required for customer document uploads.' });
+      }
+      storagePath = `customer-documents/${customerId}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    }
+
+    const base64Data = String(dataBase64).includes(',') ? String(dataBase64).split(',').pop()! : String(dataBase64);
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (buffer.length > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: 'File is too large (10MB max).' });
+    }
+
+    const bucket = admin.storage().bucket();
+    const file = bucket.file(storagePath);
+    await file.save(buffer, { metadata: { contentType: fileType || 'application/octet-stream' } });
+    const [url] = await file.getSignedUrl({ action: 'read', expires: '01-01-2500' });
+
+    res.json({ url, path: storagePath });
+  } catch (error: any) {
+    console.error('Failed to upload file:', error);
+    res.status(400).json({ error: error?.message || 'Failed to upload file.' });
   }
 });
 
@@ -730,6 +872,7 @@ app.post('/api/reservations/:id/create-contract', (req, res) => {
     depositAmount: reserv.depositAmount,
     mileageAllowancePerDay: 250,
     extraKmRate: 15,
+    depositReleaseDays: 21,
     status: 'draft' as const,
     paymentStatus: 'unpaid' as const,
     depositStatus: 'pending' as const,
@@ -1136,7 +1279,7 @@ app.post('/api/bank-batches', (req, res) => {
     for (const cust of globalStore.customers) {
       const nameParts = (cust.fullName || '').toUpperCase().split(' ');
       const matched = nameParts.some(p => p.length > 3 && desc.includes(p)) || 
-                      (cust.companyName && desc.includes((cust.companyName || '').toUpperCase().slice(0, 8)));
+                      (cust.companyName && desc.includes(cust.companyName.toUpperCase().slice(0, 8)));
       
       if (matched) {
         // Find open invoice
@@ -1227,6 +1370,426 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
   });
 
   res.json({ success: true, transaction: txn });
+});
+
+// ----------------------------------------------------
+// 9B. TOLLS, PARKING & PROFIT MARGIN (Salik / Darb / Parking)
+// ----------------------------------------------------
+//
+// Pricing rules (confirmed with the business owner):
+//  - Salik: actual company cost is whatever Salik really charged (variable,
+//    read from the import or typed manually); the customer is billed a flat
+//    rate regardless.
+//  - Darb: both the company's cost and the customer's rate default to a
+//    fixed figure (Darb doesn't fluctuate the way Salik does), but either
+//    can still be manually re-entered per transaction.
+//  - Parking: base amount entered by staff, marked up by a flat percentage
+//    for the customer rate.
+// All of the above are DEFAULTS living in globalStore.tollPricingConfig
+// (editable via PATCH /api/toll-pricing-config) rather than hardcoded --
+// rates can rise or fall over time. Overriding the default rate/cost or
+// applying a discount on an individual transaction, and editing the global
+// defaults, is restricted to TOLL_PRICING_EDIT_ROLES (CEO/Admin/Finance/
+// Sales) -- Operations/Fleet can still log entries at the current default.
+
+/** Digits-only plate comparison so "A 12345" / "A-12345" / "12345 A" all match the same way a real plate would. */
+function normalizePlate(plate: string): string {
+  return (plate || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/**
+ * Resolves an imported/manual toll row's plate number to a known Vehicle,
+ * then to whichever Contract had that vehicle out on the toll's date --
+ * exactly how a real crossing gets attributed to the renting customer.
+ */
+function matchPlateToContract(plateNumber: string | undefined, isoDate: string): { vehicleId?: string; contractId?: string; customerId?: string; customerName?: string } {
+  if (!plateNumber) return {};
+  const normalized = normalizePlate(plateNumber);
+  if (!normalized) return {};
+
+  const vehicle = globalStore.vehicles.find(v => normalizePlate(v.plateNumber) === normalized);
+  if (!vehicle) return {};
+
+  const tollTime = new Date(isoDate).getTime();
+  const contract = globalStore.contracts.find(c => {
+    if (c.vehicleId !== vehicle.id) return false;
+    const start = new Date(c.startDateTime).getTime();
+    const end = new Date(c.endDateTime).getTime();
+    if (isNaN(tollTime) || isNaN(start) || isNaN(end)) return false;
+    return tollTime >= start && tollTime <= end;
+  });
+
+  if (!contract) return { vehicleId: vehicle.id };
+  return { vehicleId: vehicle.id, contractId: contract.id, customerId: contract.customerId, customerName: contract.customerName };
+}
+
+/** True if the requester's real (server-verified) role is allowed to override rates/discounts. */
+async function requesterCanEditTollPricing(req: express.Request): Promise<boolean> {
+  const uid = (req as any).authUser?.uid;
+  if (!uid) return false;
+  const role = await getRequesterRole(uid);
+  return !!role && (TOLL_PRICING_EDIT_ROLES as string[]).includes(role);
+}
+
+/** Strips the pricing-override/discount fields from a request body unless the requester is allowed to set them. */
+function sanitizeTollPricingFields<T extends Record<string, any>>(body: T, allowed: boolean): T {
+  if (allowed) return body;
+  const clean = { ...body };
+  delete (clean as any).customerBillingRateOverride;
+  delete (clean as any).discountAmount;
+  delete (clean as any).discountPercent;
+  if ((clean as any).type === 'darb') delete (clean as any).actualCompanyCost; // Darb's cost override is pricing-edit-only; Salik's actualCompanyCost is the real statement figure and always allowed.
+  return clean;
+}
+
+app.get('/api/toll-pricing-config', (req, res) => {
+  res.json(globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING);
+});
+
+app.patch('/api/toll-pricing-config', async (req, res) => {
+  const allowed = await requesterCanEditTollPricing(req);
+  if (!allowed) {
+    return res.status(403).json({ error: 'Only Admin, Finance, Sales, or CEO can change Salik/Darb/Parking pricing.' });
+  }
+
+  const { salikCustomerRate, darbCompanyCost, darbCustomerRate, parkingMarkupPercent, actorId, actorName } = req.body || {};
+  const updates: Partial<typeof globalStore.tollPricingConfig> = {};
+  if (typeof salikCustomerRate === 'number' && salikCustomerRate >= 0) updates.salikCustomerRate = salikCustomerRate;
+  if (typeof darbCompanyCost === 'number' && darbCompanyCost >= 0) updates.darbCompanyCost = darbCompanyCost;
+  if (typeof darbCustomerRate === 'number' && darbCustomerRate >= 0) updates.darbCustomerRate = darbCustomerRate;
+  if (typeof parkingMarkupPercent === 'number' && parkingMarkupPercent >= 0) updates.parkingMarkupPercent = parkingMarkupPercent;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No valid pricing fields to update.' });
+  }
+
+  const previous = { ...globalStore.tollPricingConfig };
+  globalStore.tollPricingConfig = {
+    ...globalStore.tollPricingConfig,
+    ...updates,
+    updatedBy: actorId,
+    updatedByName: actorName,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (admin.apps.length > 0) {
+    admin.firestore().collection('settings').doc('toll_pricing_config').set(globalStore.tollPricingConfig, { merge: true }).catch(err =>
+      console.error('Failed to persist toll pricing config to Firestore:', err)
+    );
+  }
+
+  globalStore.logAudit({
+    userId: actorId || 'USR-001',
+    userName: actorName || 'Admin',
+    userRole: 'admin',
+    entityType: 'TollPricingConfig',
+    entityId: 'default',
+    action: 'update',
+    previousValue: JSON.stringify(previous),
+    newValue: JSON.stringify(globalStore.tollPricingConfig),
+    reason: 'Salik/Darb/Parking pricing changed'
+  });
+
+  res.json(globalStore.tollPricingConfig);
+});
+
+app.get('/api/tolls', (req, res) => {
+  res.json(globalStore.tollTransactions);
+});
+
+app.get('/api/toll-batches', (req, res) => {
+  res.json(globalStore.tollImportBatches);
+});
+
+app.get('/api/tolls/summary', (req, res) => {
+  res.json(analyzeTollsFinancials(globalStore.tollTransactions));
+});
+
+// Manual single-entry (Salik, Darb, or Parking). Always runs through
+// calculateTollTransaction so the math is identical to what an import row
+// gets -- the only difference is the source tag and that plate matching is
+// attempted immediately rather than at import time.
+app.post('/api/tolls', async (req, res) => {
+  try {
+    const allowed = await requesterCanEditTollPricing(req);
+    const body = sanitizeTollPricingFields(req.body || {}, allowed);
+    const { type, date, createdBy } = body;
+
+    if (!type || !['salik', 'darb', 'parking'].includes(type)) {
+      return res.status(400).json({ error: 'A valid type (salik, darb, or parking) is required.' });
+    }
+    if (!date) {
+      return res.status(400).json({ error: 'A date is required.' });
+    }
+
+    const match = body.contractId ? {} : matchPlateToContract(body.plateNumber, date);
+    const pricing = globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING;
+    const calculated = calculateTollTransaction({ ...body, createdBy: createdBy || 'USR-001' }, pricing);
+
+    const newId = globalStore.getNextNumber('TollTransaction' as any) || `TOL-${String(globalStore.tollTransactions.length + 1).padStart(6, '0')}`;
+    const now = new Date().toISOString();
+    const record = {
+      id: newId,
+      ...calculated,
+      vehicleId: calculated.vehicleId || match.vehicleId,
+      contractId: calculated.contractId || match.contractId,
+      customerId: calculated.customerId || match.customerId,
+      customerName: calculated.customerName || match.customerName,
+      source: 'manual' as const,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    globalStore.tollTransactions.unshift(record);
+
+    globalStore.logAudit({
+      userId: createdBy || 'USR-001',
+      userName: body.createdByName || createdBy || 'Staff',
+      userRole: body.actorRole || 'fleet',
+      entityType: 'TollTransaction',
+      entityId: newId,
+      action: 'create',
+      newValue: `Logged ${type.toUpperCase()} transaction ${newId}: ${calculated.totalChargedToCustomer} AED billed to customer, ${calculated.actualCompanyCost} AED actual cost.`,
+      reason: 'Manual toll/parking entry'
+    });
+
+    res.status(201).json(record);
+  } catch (error: any) {
+    console.error('Failed to create toll transaction:', error);
+    res.status(400).json({ error: error?.message || 'Failed to create toll transaction.' });
+  }
+});
+
+// Edit an existing transaction -- reassign to a contract/customer, mark
+// paid/billed, or (pricing-edit roles only) correct the cost/rate/discount
+// after the fact. Recomputes totals through calculateTollTransaction so a
+// rate/discount edit always keeps totalChargedToCustomer and netProfit in
+// sync rather than letting them drift out of formula.
+app.patch('/api/tolls/:id', async (req, res) => {
+  try {
+    const record = globalStore.tollTransactions.find(t => t.id === req.params.id);
+    if (!record) return res.status(404).json({ error: 'Toll transaction not found.' });
+
+    const allowed = await requesterCanEditTollPricing(req);
+    const body = sanitizeTollPricingFields(req.body || {}, allowed);
+
+    const {
+      contractId, reservationId, customerId, customerName, vehicleId,
+      isPaid, billedChargeId, actualCompanyCost, customerBillingRateOverride,
+      discountAmount, discountPercent, actorId, actorName
+    } = body;
+
+    if (contractId !== undefined) record.contractId = contractId || undefined;
+    if (reservationId !== undefined) record.reservationId = reservationId || undefined;
+    if (customerId !== undefined) record.customerId = customerId || undefined;
+    if (customerName !== undefined) record.customerName = customerName || undefined;
+    if (vehicleId !== undefined) record.vehicleId = vehicleId || undefined;
+    if (typeof isPaid === 'boolean') record.isPaid = isPaid;
+    if (billedChargeId !== undefined) record.billedChargeId = billedChargeId || undefined;
+
+    const rateFieldsChanged = actualCompanyCost !== undefined || customerBillingRateOverride !== undefined ||
+      discountAmount !== undefined || discountPercent !== undefined;
+
+    if (rateFieldsChanged) {
+      const pricing = globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING;
+      const recalculated = calculateTollTransaction({
+        type: record.type,
+        date: record.date,
+        time: record.time,
+        locationName: record.locationName,
+        direction: record.direction,
+        tagNumber: record.tagNumber,
+        plateNumber: record.plateNumber,
+        transactionRef: record.transactionRef,
+        isPeakTime: record.isPeakTime,
+        parkingBaseAmount: record.parkingBaseAmount,
+        contractId: record.contractId,
+        reservationId: record.reservationId,
+        customerId: record.customerId,
+        customerName: record.customerName,
+        vehicleId: record.vehicleId,
+        source: record.source,
+        createdBy: record.createdBy,
+        actualCompanyCost: actualCompanyCost ?? record.actualCompanyCost,
+        customerBillingRateOverride: customerBillingRateOverride ?? record.customerBillingRate,
+        discountAmount: discountAmount ?? record.discountAmount,
+        discountPercent: discountPercent ?? record.discountPercent
+      }, pricing);
+
+      record.actualCompanyCost = recalculated.actualCompanyCost;
+      record.customerBillingRate = recalculated.customerBillingRate;
+      record.totalChargedToCustomer = recalculated.totalChargedToCustomer;
+      record.netProfit = recalculated.netProfit;
+      record.discountAmount = recalculated.discountAmount;
+      record.discountPercent = recalculated.discountPercent;
+      record.rateOverridden = true;
+    }
+
+    record.updatedAt = new Date().toISOString();
+
+    globalStore.logAudit({
+      userId: actorId || 'USR-001',
+      userName: actorName || 'Staff',
+      userRole: 'finance',
+      entityType: 'TollTransaction',
+      entityId: record.id,
+      action: 'update',
+      newValue: `Updated toll transaction ${record.id}${rateFieldsChanged ? ' (rate/discount changed)' : ''}.`,
+      reason: 'Toll transaction edit'
+    });
+
+    res.json(record);
+  } catch (error: any) {
+    console.error('Failed to update toll transaction:', error);
+    res.status(400).json({ error: error?.message || 'Failed to update toll transaction.' });
+  }
+});
+
+app.delete('/api/tolls/:id', requireRole('ceo', 'admin', 'finance'), (req, res) => {
+  const index = globalStore.tollTransactions.findIndex(t => t.id === req.params.id);
+  if (index === -1) return res.status(404).json({ error: 'Toll transaction not found.' });
+  const [removed] = globalStore.tollTransactions.splice(index, 1);
+
+  globalStore.logAudit({
+    userId: (req.body && req.body.actorId) || 'USR-001',
+    userName: (req.body && req.body.actorName) || 'Admin',
+    userRole: 'admin',
+    entityType: 'TollTransaction',
+    entityId: removed.id,
+    action: 'delete',
+    previousValue: `${removed.type.toUpperCase()} ${removed.id}, ${removed.totalChargedToCustomer} AED`,
+    reason: 'Toll transaction removed (entry error)'
+  });
+
+  res.json({ success: true });
+});
+
+// File import (Excel/PDF) for Salik or Darb. Client sends the file as
+// base64 (same pattern as /api/upload) plus which provider it's from.
+// Always returns a preview batch for the admin to confirm -- imported
+// financial data is never silently trusted, especially from a PDF.
+app.post('/api/tolls/import', async (req, res) => {
+  try {
+    const { type, fileName, fileBase64, uploadedBy, confirm } = req.body || {};
+    if (!type || !['salik', 'darb'].includes(type)) {
+      return res.status(400).json({ error: 'type must be "salik" or "darb".' });
+    }
+    if (!fileBase64) {
+      return res.status(400).json({ error: 'fileBase64 is required.' });
+    }
+
+    const buffer = Buffer.from(String(fileBase64).split(',').pop() || '', 'base64');
+    const isPdf = /\.pdf$/i.test(fileName || '') || buffer.slice(0, 4).toString('utf8') === '%PDF';
+
+    let parsed: { rows: ParsedTollRow[]; meta: any; warnings: string[] };
+    let fileFormat: 'excel' | 'pdf' | 'csv' = 'excel';
+
+    if (isPdf) {
+      fileFormat = 'pdf';
+      // Dynamic import: keeps pdf-parse (and its own transitive deps) out of
+      // the code path entirely unless a PDF is actually being imported.
+      const pdfParseModule: any = await import('pdf-parse').catch(() => null);
+      if (!pdfParseModule) {
+        return res.status(500).json({ error: 'PDF parsing is not available on this server. Please export an Excel/CSV report instead.' });
+      }
+      const pdfParse = pdfParseModule.default || pdfParseModule;
+      const pdfData = await pdfParse(buffer);
+      parsed = type === 'salik' ? parseSalikPdfText(pdfData.text) : parseSalikPdfText(pdfData.text); // Darb PDF: no real sample yet -- same tolerant line-based parser as a starting point, flagged for manual review either way.
+    } else if (type === 'salik') {
+      parsed = parseSalikExcel(buffer);
+    } else {
+      // Darb: no real sample provided yet -- generic keyword-detection
+      // fallback until a real Darb export can be used to build a precise
+      // parser the same way parseSalikExcel was.
+      parsed = parseGenericTollExcel(buffer);
+    }
+
+    const pricing = globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING;
+    const now = new Date().toISOString();
+    const isConfirmed = confirm === true;
+    // Only actually consume sequence numbers once the import is confirmed --
+    // a preview call must not burn real TOL-/TOLBATCH- numbers for rows that
+    // may never get saved (the client re-parses the same file on confirm).
+    const batchId = isConfirmed
+      ? `TOLBATCH-${String(globalStore.tollImportBatches.length + 1).padStart(4, '0')}`
+      : `PREVIEW-${Date.now()}`;
+
+    let matchedCount = 0;
+    const newRecords = parsed.rows.map((row, idx) => {
+      const match = matchPlateToContract(row.plateNumber, row.date);
+      if (match.contractId) matchedCount++;
+
+      const calculated = calculateTollTransaction({
+        type: type as TollType,
+        date: row.date,
+        time: row.time,
+        locationName: row.locationName,
+        direction: row.direction,
+        tagNumber: row.tagNumber,
+        plateNumber: row.plateNumber,
+        transactionRef: row.transactionRef,
+        actualCompanyCost: row.actualCompanyCost,
+        vehicleId: match.vehicleId,
+        contractId: match.contractId,
+        customerId: match.customerId,
+        customerName: match.customerName,
+        source: (isPdf ? 'pdf_import' : 'excel_import') as 'pdf_import' | 'excel_import',
+        createdBy: uploadedBy || 'USR-001'
+      }, pricing);
+
+      return {
+        id: isConfirmed ? globalStore.getNextNumber('TollTransaction') : `PREVIEW-${idx + 1}`,
+        ...calculated,
+        importBatchId: batchId,
+        createdAt: now,
+        updatedAt: now
+      };
+    });
+
+    const batch = {
+      id: batchId,
+      type: type as TollType,
+      fileName: fileName || (isPdf ? 'statement.pdf' : 'export.xlsx'),
+      fileFormat,
+      accountNumber: parsed.meta.accountNumber,
+      periodStart: parsed.meta.periodStart,
+      periodEnd: parsed.meta.periodEnd,
+      totalTransactions: newRecords.length,
+      matchedCount,
+      unmatchedCount: newRecords.length - matchedCount,
+      totalActualCost: Math.round(newRecords.reduce((a, r) => a + r.actualCompanyCost, 0) * 100) / 100,
+      totalCustomerBilling: Math.round(newRecords.reduce((a, r) => a + r.totalChargedToCustomer, 0) * 100) / 100,
+      totalTopUps: parsed.meta.totalTopUps,
+      uploadedBy: uploadedBy || 'USR-001',
+      uploadedAt: now,
+      status: 'processed' as const
+    };
+
+    // Preview mode (confirm !== true): report what WOULD be imported without
+    // writing anything, so the client can show a review screen first.
+    if (!isConfirmed) {
+      return res.json({ preview: true, batch, transactions: newRecords, warnings: parsed.warnings });
+    }
+
+    globalStore.tollImportBatches.unshift(batch);
+    globalStore.tollTransactions.unshift(...newRecords);
+
+    globalStore.logAudit({
+      userId: uploadedBy || 'USR-001',
+      userName: uploadedBy || 'Staff',
+      userRole: 'finance',
+      entityType: 'TollImportBatch',
+      entityId: batchId,
+      action: 'create',
+      newValue: `Imported ${newRecords.length} ${type.toUpperCase()} transaction(s) from ${batch.fileName} (${matchedCount} auto-matched to a contract).`,
+      reason: 'Toll/parking statement import'
+    });
+
+    res.status(201).json({ preview: false, batch, transactions: newRecords, warnings: parsed.warnings });
+  } catch (error: any) {
+    console.error('Failed to import toll file:', error);
+    res.status(400).json({ error: error?.message || 'Failed to parse the uploaded file. Please check the file format or enter transactions manually.' });
+  }
 });
 
 // ----------------------------------------------------
@@ -1359,7 +1922,7 @@ Clearly distinguish confirmed system data from strategic AI suggestions. Always 
 
   // Fallback intelligent responder if API key not present or network error
   let fallbackAnswer = language === 'ar' 
-    ? `تحليلات سبليندور الذكية:\n- أسطولنا الحالي يضم ${contextData.fleetCount} سيارات فاخرة بإجمالي إيرادات تاريخية ${contextData.totalRevenue.toLocaleString()} د.إ.\n- يوجد ${contextData.availableVehicles.length} مركبات متاحة حالياً للتأجير الفوري.\n- عدد المعاملات البنكية المعلقة للمطابقة: ${contextData.unreconciledBankTransactions}.\n- التوصية التنفيذية: الاستفادة من عطلة نهاية الأسبوع لترقية عملاء VIP إلى فئة السوبركارز مثل لامبورغيني ريفويلتو وفيراري 296 GTB.`
+    ? `تحليلات سبلندر الذكية:\n- أسطولنا الحالي يضم ${contextData.fleetCount} سيارات فاخرة بإجمالي إيرادات تاريخية ${contextData.totalRevenue.toLocaleString()} د.إ.\n- يوجد ${contextData.availableVehicles.length} مركبات متاحة حالياً للتأجير الفوري.\n- عدد المعاملات البنكية المعلقة للمطابقة: ${contextData.unreconciledBankTransactions}.\n- التوصية التنفيذية: الاستفادة من عطلة نهاية الأسبوع لترقية عملاء VIP إلى فئة السوبركارز مثل لامبورغيني ريفويلتو وفيراري 296 GTB.`
     : `Splendor Executive Intelligence Report:\n- Fleet Status: ${contextData.fleetCount} luxury vehicles with cumulative fleet revenue of ${contextData.totalRevenue.toLocaleString()} AED.\n- Ready Available Fleet: ${contextData.availableVehicles.join(', ')}.\n- Unreconciled Bank Transactions: ${contextData.unreconciledBankTransactions} items awaiting review in Emirates NBD batch.\n- Strategic Recommendation: Focus outbound outreach on high-intent VIP leads for the upcoming F1 Grand Prix and luxury weekend demand.`;
 
   res.json({ answer: fallbackAnswer, confidence: 95 });
@@ -1387,7 +1950,7 @@ app.post('/api/ai/customer-summary', async (req, res) => {
   }
 
   const fallback = language === 'ar'
-    ? `• عميل من الفئة البارزة VIP بإجمالي قيمة تعاملات ${customer.lifetimeValue.toLocaleString()} د.إ و${customer.totalRentals} حجوزات ناجحة.\n• يفضل التسليم الخاص الأبيض (White Glove) في موقعه مع باقة عطور سبليندور الحصرية.\n• سجل ائتماني ممتاز مع سداد فوري، مؤهل لتخفيض التأمين وترقية المركبات تلقائياً.`
+    ? `• عميل من الفئة البارزة VIP بإجمالي قيمة تعاملات ${customer.lifetimeValue.toLocaleString()} د.إ و${customer.totalRentals} حجوزات ناجحة.\n• يفضل التسليم الخاص الأبيض (White Glove) في موقعه مع باقة عطور سبلندر الحصرية.\n• سجل ائتماني ممتاز مع سداد فوري، مؤهل لتخفيض التأمين وترقية المركبات تلقائياً.`
     : `• Tier 1 VIP Client with lifetime value of ${customer.lifetimeValue.toLocaleString()} AED across ${customer.totalRentals} rentals.\n• Prefers white-glove enclosed trailer delivery with bespoke vehicle scenting.\n• Flawless payment record with zero damage disputes; qualified for instant reservation approvals.`;
 
   res.json({ summary: fallback, confidence: 96 });
@@ -1643,6 +2206,7 @@ app.post('/api/tests/run-all', (req, res) => {
       depositAmount: 8000,
       mileageAllowancePerDay: 250,
       extraKmRate: 10,
+      depositReleaseDays: 21,
       status: 'approved',
       paymentStatus: 'paid',
       depositStatus: 'held',
@@ -2014,7 +2578,9 @@ const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   auditLogs: 'audit_logs',
   customFields: 'custom_fields',
   numberingConfigs: 'numbering_configs',
-  notifications: 'notifications'
+  notifications: 'notifications',
+  tollTransactions: 'toll_transactions',
+  tollImportBatches: 'toll_import_batches'
 };
 
 async function hydrateStoreFromFirestore() {
@@ -2041,6 +2607,17 @@ async function hydrateStoreFromFirestore() {
       }
     })
   );
+
+  // tollPricingConfig is a single settings record, not a list -- hydrated
+  // separately from the array-shaped collections above.
+  try {
+    const pricingSnap = await admin.firestore().collection('settings').doc('toll_pricing_config').get();
+    if (pricingSnap.exists) {
+      globalStore.tollPricingConfig = { ...globalStore.tollPricingConfig, ...(pricingSnap.data() as any) };
+    }
+  } catch (error) {
+    console.error('[hydrate] Failed to load toll pricing config from Firestore:', error);
+  }
 
   console.log(`[hydrate] Restored ${totalDocs} record(s) across ${hydratedCollections} collection(s) from Firestore.`);
 }

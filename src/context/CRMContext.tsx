@@ -2,13 +2,15 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { 
   Customer, Lead, Opportunity, Vehicle, Quotation, 
   Reservation, Contract, AdditionalCharge, Deposit, 
-  Payment, Invoice, BankImportBatch, BankTransaction, 
-  CRMTask, Communication, CRMDocument, AuditLog, 
-  CustomFieldDefinition, NumberingConfig, NotificationItem 
+  Payment, Invoice, BankImportBatch, BankTransaction,
+  CRMTask, Communication, CRMDocument, AuditLog,
+  CustomFieldDefinition, NumberingConfig, NotificationItem,
+  TollTransaction, TollImportBatch, TollPricingConfig
 } from '../types';
 import { FirestoreService, COLLECTIONS } from '../firebase/firestoreService';
 import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
 import { apiFetch as fetch } from '../lib/apiFetch';
+import { useAuth } from './AuthContext';
 
 interface ToastMessage {
   id: string;
@@ -44,6 +46,9 @@ interface CRMContextType {
   invoices: Invoice[];
   bankBatches: BankImportBatch[];
   bankTransactions: BankTransaction[];
+  tollTransactions: TollTransaction[];
+  tollImportBatches: TollImportBatch[];
+  tollPricingConfig: TollPricingConfig | null;
   tasks: CRMTask[];
   communications: Communication[];
   documents: CRMDocument[];
@@ -108,7 +113,18 @@ interface CRMContextType {
   
   uploadBankBatch: (batchData: any) => Promise<void>;
   reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string) => Promise<void>;
-  
+  runAutoReconciliation: () => Promise<void>;
+
+  addManualToll: (data: any) => Promise<TollTransaction>;
+  updateTollTransaction: (id: string, data: any) => Promise<TollTransaction>;
+  deleteTollTransaction: (id: string) => Promise<void>;
+  previewTollImport: (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }) => Promise<{ batch: TollImportBatch; transactions: TollTransaction[]; warnings: string[] }>;
+  confirmTollImport: (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }) => Promise<{ batch: TollImportBatch; transactions: TollTransaction[]; warnings: string[] }>;
+  updateTollPricingConfig: (data: Partial<TollPricingConfig>) => Promise<TollPricingConfig>;
+
+  queryAI: (prompt: string, language?: string) => Promise<{ text: string; confidence: number }>;
+  generateCustomerAISummary: (customerId: string, language?: string) => Promise<{ summary: string; confidence: number }>;
+
   createTask: (taskData: Partial<CRMTask>) => Promise<CRMTask>;
   updateTask: (id: string, data: Partial<CRMTask>) => Promise<CRMTask>;
   
@@ -119,6 +135,7 @@ interface CRMContextType {
 const CRMContext = createContext<CRMContextType | undefined>(undefined);
 
 export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { firebaseUser } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
@@ -132,6 +149,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [bankBatches, setBankBatches] = useState<BankImportBatch[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
+  const [tollTransactions, setTollTransactions] = useState<TollTransaction[]>([]);
+  const [tollImportBatches, setTollImportBatches] = useState<TollImportBatch[]>([]);
+  const [tollPricingConfig, setTollPricingConfig] = useState<TollPricingConfig | null>(null);
   const [tasks, setTasks] = useState<CRMTask[]>([]);
   const [communications, setCommunications] = useState<Communication[]>([]);
   const [documents, setDocuments] = useState<CRMDocument[]>([]);
@@ -205,7 +225,8 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         custRes, leadRes, oppRes, vehRes, quoteRes,
         resRes, conRes, chgRes, depRes, payRes,
         invRes, bBatchRes, bTxnRes, tskRes, commRes,
-        docRes, auditRes, cfRes, numRes, notifRes
+        docRes, auditRes, cfRes, numRes, notifRes,
+        tollRes, tollBatchRes, tollPricingRes
       ] = await Promise.all([
         fetch('/api/customers').then(r => r.json()).catch(() => []),
         fetch('/api/leads').then(r => r.json()).catch(() => []),
@@ -226,7 +247,10 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/audit-logs').then(r => r.json()).catch(() => []),
         fetch('/api/settings/custom-fields').then(r => r.json()).catch(() => []),
         fetch('/api/settings/numbering').then(r => r.json()).catch(() => []),
-        fetch('/api/notifications').then(r => r.json()).catch(() => [])
+        fetch('/api/notifications').then(r => r.json()).catch(() => []),
+        fetch('/api/tolls').then(r => r.json()).catch(() => []),
+        fetch('/api/toll-batches').then(r => r.json()).catch(() => []),
+        fetch('/api/toll-pricing-config').then(r => r.json()).catch(() => null)
       ]);
 
       if (custRes && custRes.length > 0) setCustomers(custRes);
@@ -249,6 +273,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (cfRes && cfRes.length > 0) setCustomFields(cfRes);
       if (numRes && numRes.length > 0) setNumberingConfigs(numRes);
       if (notifRes && notifRes.length > 0) setNotifications(notifRes);
+      if (tollRes && tollRes.length > 0) setTollTransactions(tollRes);
+      if (tollBatchRes && tollBatchRes.length > 0) setTollImportBatches(tollBatchRes);
+      if (tollPricingRes) setTollPricingConfig(tollPricingRes);
 
       await refreshFirebaseStats();
     } catch (error) {
@@ -259,9 +286,18 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [showToast, refreshFirebaseStats]);
 
-  // Subscribe to real-time Firestore collections
+  // Subscribe to real-time Firestore collections only when authenticated
   useEffect(() => {
     let unsubs: (() => void)[] = [];
+
+    // Always fetch baseline data from backend
+    fetchData();
+
+    if (!firebaseUser) {
+      return () => {
+        unsubs.forEach(unsub => unsub());
+      };
+    }
 
     const setupListeners = async () => {
       try {
@@ -372,18 +408,26 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           })
         );
+
+        // Subscribe to Toll Transactions (Salik/Darb/Parking)
+        unsubs.push(
+          FirestoreService.subscribe<TollTransaction>(COLLECTIONS.TOLL_TRANSACTIONS, (items) => {
+            if (items && items.length > 0) {
+              setTollTransactions(items);
+            }
+          })
+        );
       } catch (err) {
         console.warn('Firebase real-time listener setup:', err);
       }
     };
 
     setupListeners();
-    fetchData();
 
     return () => {
       unsubs.forEach(unsub => unsub());
     };
-  }, [fetchData]);
+  }, [fetchData, firebaseUser]);
 
   // Sync entire dataset to user's Firestore project
   const syncAllToFirestore = useCallback(async () => {
@@ -649,7 +693,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Firestore quote write warning:', e);
     }
 
-    showToast('Quotation Prepared', `Quotation ${quote.id} (${quote.grandTotal.toLocaleString()} AED) created.`);
+    showToast('Quotation Prepared', `Quotation ${quote.id} (${(quote.grandTotal || 0).toLocaleString()} AED) created.`);
     refreshFirebaseStats();
     return quote;
   };
@@ -747,7 +791,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     await fetchData();
-    showToast('Contract Issued', `Contract ${newContract.contractNumber} (${newContract.grandTotal?.toLocaleString()} AED) active.`);
+    showToast('Contract Issued', `Contract ${newContract.contractNumber} (${(newContract.grandTotal || 0).toLocaleString()} AED) active.`);
     refreshFirebaseStats();
     return newContract;
   };
@@ -811,7 +855,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     await fetchData();
-    showToast('Payment Recorded', `Payment of ${pay.amount.toLocaleString()} AED allocated. Receipt: ${pay.receiptNumber}`);
+    showToast('Payment Recorded', `Payment of ${(pay.amount || 0).toLocaleString()} AED allocated. Receipt: ${pay.receiptNumber}`);
     refreshFirebaseStats();
     return pay;
   };
@@ -832,7 +876,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     await fetchData();
-    showToast('Deposit Applied', `Applied ${amount.toLocaleString()} AED against outstanding charges.`);
+    showToast('Deposit Applied', `Applied ${(amount || 0).toLocaleString()} AED against outstanding charges.`);
     return data.deposit;
   };
 
@@ -852,7 +896,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     await fetchData();
-    showToast('Deposit Refunded', `Refund of ${amount.toLocaleString()} AED processed.`);
+    showToast('Deposit Refunded', `Refund of ${(amount || 0).toLocaleString()} AED processed.`);
     return data.deposit;
   };
 
@@ -892,6 +936,174 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     await fetchData();
     showToast('Transaction Reconciled', `Reconciled ${data.transaction.reference} successfully.`);
+  };
+
+  /**
+   * Bulk version of reconcileBankTransaction: auto-confirms every
+   * unreconciled transaction that already has a high-confidence AI
+   * suggested match (>= 90), instead of requiring one click per row.
+   * Was previously called by BankReconciliationView's "Run Auto
+   * Reconciliation" button but never actually defined -- clicking it threw
+   * "runAutoReconciliation is not a function".
+   */
+  const runAutoReconciliation = async () => {
+    const candidates = bankTransactions.filter(
+      t => !t.reconciled && t.suggestedMatch && t.suggestedMatch.confidence >= 90 && t.suggestedMatch.invoiceId
+    );
+    let count = 0;
+    for (const txn of candidates) {
+      try {
+        await reconcileBankTransaction(txn.id, 'invoice', txn.suggestedMatch!.invoiceId!);
+        count += 1;
+      } catch (e) {
+        console.warn(`Auto-reconciliation skipped ${txn.id}:`, e);
+      }
+    }
+    if (count > 0) {
+      showToast('Auto-Reconciliation Complete', `Automatically reconciled ${count} high-confidence transaction(s).`);
+    } else {
+      showToast('Auto-Reconciliation Complete', 'No high-confidence unmatched transactions were found.');
+    }
+  };
+
+  /**
+   * Toll/Parking module (Salik, Darb, Parking): manual entry, editing,
+   * deletion, file import (preview-then-confirm), and the live default
+   * pricing config. All math is done server-side via calculateTollTransaction
+   * so client and import rows are always computed identically.
+   */
+  const addManualToll = async (data: any) => {
+    const res = await fetch('/api/tolls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const record = await res.json();
+    if (!res.ok) throw new Error(record.error);
+    setTollTransactions(prev => [record, ...prev]);
+
+    try {
+      await FirestoreService.set(COLLECTIONS.TOLL_TRANSACTIONS, record.id, record);
+    } catch (e) {
+      console.warn('Firestore toll transaction write warning:', e);
+    }
+
+    showToast('Transaction Logged', `${(record.type || '').toUpperCase()} entry ${record.id} saved -- ${record.totalChargedToCustomer} AED billed to customer.`);
+    return record;
+  };
+
+  const updateTollTransaction = async (id: string, data: any) => {
+    const res = await fetch(`/api/tolls/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const updated = await res.json();
+    if (!res.ok) throw new Error(updated.error);
+    setTollTransactions(prev => prev.map(t => t.id === id ? updated : t));
+
+    try {
+      await FirestoreService.update(COLLECTIONS.TOLL_TRANSACTIONS, id, updated);
+    } catch (e) {
+      console.warn('Firestore toll transaction update warning:', e);
+    }
+
+    return updated;
+  };
+
+  const deleteTollTransaction = async (id: string) => {
+    const res = await fetch(`/api/tolls/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    setTollTransactions(prev => prev.filter(t => t.id !== id));
+
+    try {
+      await FirestoreService.remove(COLLECTIONS.TOLL_TRANSACTIONS, id);
+    } catch (e) {
+      console.warn('Firestore toll transaction delete warning:', e);
+    }
+
+    showToast('Transaction Removed', 'The toll/parking entry was deleted.');
+  };
+
+  const runTollImport = async (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }, confirm: boolean) => {
+    const res = await fetch('/api/tolls/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...file, confirm })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data as { batch: TollImportBatch; transactions: TollTransaction[]; warnings: string[] };
+  };
+
+  // Parses the file and returns what WOULD be imported, without saving --
+  // the import UI must show this for the user to review before committing,
+  // since statement parsing (especially PDF) is best-effort.
+  const previewTollImport = async (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }) => {
+    return runTollImport(file, false);
+  };
+
+  const confirmTollImport = async (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }) => {
+    const data = await runTollImport(file, true);
+    setTollImportBatches(prev => [data.batch, ...prev]);
+    setTollTransactions(prev => [...data.transactions, ...prev]);
+
+    try {
+      await FirestoreService.set(COLLECTIONS.TOLL_IMPORT_BATCHES, data.batch.id, data.batch);
+      await Promise.all(data.transactions.map(t => FirestoreService.set(COLLECTIONS.TOLL_TRANSACTIONS, t.id, t)));
+    } catch (e) {
+      console.warn('Firestore toll import write warning:', e);
+    }
+
+    showToast('Statement Imported', `Imported ${data.batch.totalTransactions} transaction(s) from ${data.batch.fileName} (${data.batch.matchedCount} auto-matched to a contract).`);
+    return data;
+  };
+
+  const updateTollPricingConfig = async (data: Partial<TollPricingConfig>) => {
+    const res = await fetch('/api/toll-pricing-config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const updated = await res.json();
+    if (!res.ok) throw new Error(updated.error);
+    setTollPricingConfig(updated);
+    showToast('Pricing Updated', 'Salik/Darb/Parking default rates were updated.');
+    return updated;
+  };
+
+  /**
+   * Client-side wrappers for the AI endpoints server.ts already exposes
+   * (/api/ai/query, /api/ai/customer-summary). AIStudioView has called
+   * queryAI()/generateCustomerAISummary() since it was built, but neither
+   * was ever defined here -- every button on the AI Intelligence page threw
+   * "queryAI is not a function" / "generateCustomerAISummary is not a
+   * function". The server always responds successfully (it falls back to a
+   * canned answer if GEMINI_API_KEY isn't configured), so these just need
+   * to call it and normalize the response field names to what the view
+   * expects.
+   */
+  const queryAI = async (prompt: string, language: string = 'en'): Promise<{ text: string; confidence: number }> => {
+    const res = await fetch('/api/ai/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, language })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'AI query failed.');
+    return { text: data.answer, confidence: data.confidence };
+  };
+
+  const generateCustomerAISummary = async (customerId: string, language: string = 'en'): Promise<{ summary: string; confidence: number }> => {
+    const res = await fetch('/api/ai/customer-summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId, language })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'AI customer summary failed.');
+    return { summary: data.summary, confidence: data.confidence };
   };
 
   const createTask = async (taskData: Partial<CRMTask>) => {
@@ -972,7 +1184,8 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <CRMContext.Provider value={{
       customers, leads, opportunities, vehicles, quotations,
       reservations, contracts, charges, deposits, payments,
-      invoices, bankBatches, bankTransactions, tasks, communications,
+      invoices, bankBatches, bankTransactions, tollTransactions,
+      tollImportBatches, tollPricingConfig, tasks, communications,
       documents, auditLogs, customFields, numberingConfigs, notifications,
       loading, activeView, setActiveView,
       firebaseSyncState, syncAllToFirestore,
@@ -989,7 +1202,10 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
-      uploadBankBatch, reconcileBankTransaction,
+      uploadBankBatch, reconcileBankTransaction, runAutoReconciliation,
+      addManualToll, updateTollTransaction, deleteTollTransaction,
+      previewTollImport, confirmTollImport, updateTollPricingConfig,
+      queryAI, generateCustomerAISummary,
       createTask, updateTask, addCommunication, addDocument
     }}>
       {children}

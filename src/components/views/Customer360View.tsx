@@ -1,26 +1,35 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Users, UserPlus, Search, Filter, Phone, Mail, MapPin, 
-  Car, Shield, FileText, Landmark, Clock, CheckCircle2, 
-  AlertTriangle, Sparkles, ChevronRight, X, Edit3, Merge, 
-  Printer, ArrowUpRight, DollarSign, Calendar
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Users, UserPlus, Search, Filter, Phone, Mail, MapPin,
+  Car, Shield, FileText, Landmark, Clock, CheckCircle2,
+  AlertTriangle, Sparkles, ChevronRight, X, Edit3, Merge,
+  Printer, ArrowUpRight, DollarSign, Calendar, UploadCloud, Plus
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
+import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
-import { Customer } from '../../types';
+import { Customer, CRMDocument } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
+import { uploadFile, formatFileSize } from '../../lib/upload';
+
+const DOCUMENT_CATEGORIES: CRMDocument['category'][] = ['customer_id', 'driving_license', 'contract', 'invoice', 'receipt', 'other'];
 
 export const Customer360View: React.FC = () => {
   const { language, t } = useLanguage();
-  const { 
-    customers, contracts, invoices, deposits, 
+  const { currentUser } = useAuth();
+  const {
+    customers, contracts, invoices, deposits,
     payments, communications, documents,
     selectedCustomerId, setSelectedCustomerId,
     addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer,
-    setActiveView, setSelectedContractId
+    setActiveView, setSelectedContractId, addDocument, showToast
   } = useCRM();
+
+  const [docUploading, setDocUploading] = useState(false);
+  const [docCategory, setDocCategory] = useState<CRMDocument['category']>('customer_id');
+  const docFileInputRef = useRef<HTMLInputElement>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
@@ -42,7 +51,7 @@ export const Customer360View: React.FC = () => {
     email: '',
     phone: '',
     whatsapp: '',
-    type: 'individual' as 'individual' | 'corporate' | 'vip' | 'diplomat',
+    type: 'individual' as 'individual' | 'corporate' | 'vip',
     address: 'Dubai Marina, Dubai',
     city: 'Dubai',
     country: 'United Arab Emirates',
@@ -69,11 +78,12 @@ export const Customer360View: React.FC = () => {
 
   // Filtered customer list
   const filteredCustomers = customers.filter(c => {
+    const s = (searchTerm || '').toLowerCase();
     const matchesSearch = 
-      c.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.phone.includes(searchTerm) ||
-      c.email.toLowerCase().includes(searchTerm) ||
-      c.id.toLowerCase().includes(searchTerm);
+      (c.fullName || '').toLowerCase().includes(s) ||
+      (c.phone || '').includes(searchTerm || '') ||
+      (c.email || '').toLowerCase().includes(s) ||
+      (c.id || '').toLowerCase().includes(s);
 
     const matchesType = filterType === 'all' || c.type === filterType;
     const matchesVIP = filterVIP === null || c.isVIP === filterVIP;
@@ -146,6 +156,61 @@ export const Customer360View: React.FC = () => {
   const customerComms = activeCustomer ? communications.filter(cm => cm.relatedEntityId === activeCustomer.id) : [];
   const customerDocs = activeCustomer ? documents.filter(d => d.relatedEntityId === activeCustomer.id) : [];
 
+  const handleDocPick = () => docFileInputRef.current?.click();
+
+  const handleDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !activeCustomer) return;
+    setDocUploading(true);
+    try {
+      const { url } = await uploadFile(file, 'customer-documents', { customerId: activeCustomer.id });
+      await addDocument({
+        title: file.name,
+        category: docCategory,
+        fileName: file.name,
+        fileSize: formatFileSize(file.size),
+        fileType: file.type,
+        fileUrl: url,
+        relatedEntityType: 'customer',
+        relatedEntityId: activeCustomer.id,
+        relatedEntityName: activeCustomer.fullName,
+        version: 1,
+        uploadedBy: currentUser.name
+      });
+      showToast(
+        language === 'ar' ? 'تم رفع المستند' : 'Document Uploaded',
+        language === 'ar' ? 'تم إرفاق المستند بملف العميل بنجاح.' : 'The document was attached to the customer profile.',
+        'success'
+      );
+    } catch (err: any) {
+      showToast(
+        language === 'ar' ? 'فشل رفع المستند' : 'Upload Failed',
+        err?.message || (language === 'ar' ? 'حدث خطأ أثناء رفع المستند.' : 'Something went wrong uploading the document.'),
+        'error'
+      );
+    } finally {
+      setDocUploading(false);
+    }
+  };
+
+  const docCategoryLabel = (cat: CRMDocument['category']) => {
+    const labels: Record<string, { en: string; ar: string }> = {
+      customer_id: { en: 'Emirates ID / Passport', ar: 'هوية إماراتية / جواز سفر' },
+      driving_license: { en: 'Driving License', ar: 'رخصة القيادة' },
+      contract: { en: 'Contract', ar: 'عقد' },
+      invoice: { en: 'Invoice', ar: 'فاتورة' },
+      receipt: { en: 'Receipt', ar: 'إيصال' },
+      vehicle_reg: { en: 'Vehicle Registration', ar: 'رخصة مركبة' },
+      vehicle_insurance: { en: 'Vehicle Insurance', ar: 'تأمين مركبة' },
+      inspection_sheet: { en: 'Inspection Sheet', ar: 'كشف فحص' },
+      statement: { en: 'Statement', ar: 'كشف حساب' },
+      other: { en: 'Other', ar: 'أخرى' }
+    };
+    if (!cat) return '';
+    return labels[cat] ? (language === 'ar' ? labels[cat].ar : labels[cat].en) : (cat ? String(cat).toUpperCase() : '');
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Header bar */}
@@ -170,8 +235,8 @@ export const Customer360View: React.FC = () => {
 
       {/* Main Grid: Left Directory & Right 360 Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Customer Directory (4 cols on lg, 3 cols on xl/2xl) */}
-        <div className="lg:col-span-4 xl:col-span-3 2xl:col-span-3 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
+        {/* Left Column: Customer Directory (4 cols) */}
+        <div className="lg:col-span-4 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
           {/* Search and Filters */}
           <div className="relative">
             <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -236,8 +301,8 @@ export const Customer360View: React.FC = () => {
                     </div>
 
                     <div className="mt-2.5 pt-2 border-t border-zinc-800/50 flex items-center justify-between text-[11px] text-zinc-400">
-                      <span>LTV: <strong className="text-zinc-200">{customer.lifetimeValue.toLocaleString()} AED</strong></span>
-                      <span>{customer.totalRentals} Rentals</span>
+                      <span>LTV: <strong className="text-zinc-200">{(customer.lifetimeValue || 0).toLocaleString()} AED</strong></span>
+                      <span>{customer.totalRentals || 0} Rentals</span>
                     </div>
                   </div>
                 );
@@ -246,29 +311,29 @@ export const Customer360View: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: 360 Deep Profile */}
+        {/* Right Column: 360 Deep Profile (8 cols) */}
         {activeCustomer ? (
-          <div className="lg:col-span-8 xl:col-span-9 2xl:col-span-9 p-4 sm:p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-6">
+          <div className="lg:col-span-8 p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-6">
             {/* VIP Customer Profile Banner */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl bg-zinc-950 border border-zinc-800">
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#D4AF37] to-[#997d26] p-0.5 shadow-lg shadow-[#D4AF37]/20 flex items-center justify-center">
                   <div className="w-full h-full bg-zinc-950 rounded-[14px] flex items-center justify-center font-display text-xl font-bold text-[#f5d97f]">
-                    {activeCustomer.fullName.charAt(0)}
+                    {(activeCustomer.fullName || 'V').charAt(0)}
                   </div>
                 </div>
                 <div>
                   <div className="flex items-center gap-2.5">
-                    <h3 className="text-lg font-bold text-zinc-100 font-display">{activeCustomer.fullName}</h3>
+                    <h3 className="text-lg font-bold text-zinc-100 font-display">{activeCustomer.fullName || 'Unnamed Client'}</h3>
                     {activeCustomer.isVIP && <Badge variant="gold" size="sm">VIP GUEST</Badge>}
                     <Badge variant={activeCustomer.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                      {(activeCustomer.status || '').toUpperCase()}
+                      {(activeCustomer.status || 'ACTIVE').toUpperCase()}
                     </Badge>
                   </div>
                   <p className="text-xs text-zinc-400 mt-1 flex items-center gap-3">
                     <span>{activeCustomer.id}</span>
                     <span>•</span>
-                    <span>{activeCustomer.nationality}</span>
+                    <span>{activeCustomer.nationality || 'UAE'}</span>
                     {activeCustomer.companyName && (
                       <>
                         <span>•</span>
@@ -318,29 +383,29 @@ export const Customer360View: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
                 <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Lifetime Value</p>
-                <p className="text-base font-bold text-zinc-100 mt-1">{activeCustomer.lifetimeValue.toLocaleString()} AED</p>
+                <p className="text-base font-bold text-zinc-100 mt-1">{(activeCustomer.lifetimeValue || 0).toLocaleString()} AED</p>
               </div>
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
                 <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Total Rentals</p>
-                <p className="text-base font-bold text-zinc-100 mt-1">{activeCustomer.totalRentals}</p>
+                <p className="text-base font-bold text-zinc-100 mt-1">{activeCustomer.totalRentals || 0}</p>
               </div>
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
                 <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Deposits Held</p>
-                <p className="text-base font-bold text-[#f5d97f] mt-1">{activeCustomer.securityDepositsHeld.toLocaleString()} AED</p>
+                <p className="text-base font-bold text-[#f5d97f] mt-1">{(activeCustomer.securityDepositsHeld || 0).toLocaleString()} AED</p>
               </div>
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
                 <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Balance Due</p>
-                <p className={`text-base font-bold mt-1 ${activeCustomer.outstandingBalance > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                  {activeCustomer.outstandingBalance.toLocaleString()} AED
+                <p className={`text-base font-bold mt-1 ${(activeCustomer.outstandingBalance || 0) > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {(activeCustomer.outstandingBalance || 0).toLocaleString()} AED
                 </p>
               </div>
             </div>
 
             {/* 360 Tab Navigation */}
-            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto custom-scrollbar">
+            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'overview' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -348,7 +413,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('rentals')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'rentals' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -356,7 +421,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('statement')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'statement' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -364,7 +429,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('comms')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'comms' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -372,7 +437,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('docs')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'docs' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -396,8 +461,8 @@ export const Customer360View: React.FC = () => {
                   <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2.5">
                     <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Identification & Licensing</h4>
                     <div className="text-xs text-zinc-300 space-y-1.5">
-                      <p><strong>{(activeCustomer.idType || 'ID').toUpperCase()}:</strong> {activeCustomer.idNumber} (Exp: {activeCustomer.idExpiryDate})</p>
-                      <p><strong>Driver License:</strong> {activeCustomer.licenseNumber} ({activeCustomer.licenseCountry}, Exp: {activeCustomer.licenseExpiryDate})</p>
+                      <p><strong>{(activeCustomer.idType || 'ID').toUpperCase()}:</strong> {activeCustomer.idNumber || 'N/A'} (Exp: {activeCustomer.idExpiryDate || 'N/A'})</p>
+                      <p><strong>Driver License:</strong> {activeCustomer.licenseNumber || 'N/A'} ({activeCustomer.licenseCountry || 'UAE'}, Exp: {activeCustomer.licenseExpiryDate || 'N/A'})</p>
                       <p><strong>Acquisition Source:</strong> {(activeCustomer.source || 'Direct').toUpperCase()}</p>
                     </div>
                   </div>
@@ -407,7 +472,7 @@ export const Customer360View: React.FC = () => {
                 <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2">
                   <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">VIP Concierge Notes & Tags</h4>
                   <div className="flex flex-wrap gap-1.5">
-                    {activeCustomer.tags.map((tag, idx) => (
+                    {(activeCustomer.tags || []).map((tag, idx) => (
                       <Badge key={idx} variant="gold" size="sm">{tag}</Badge>
                     ))}
                   </div>
@@ -441,11 +506,11 @@ export const Customer360View: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-xs text-zinc-400 mt-1">
-                          {contract.contractNumber} • {new Date(contract.startDateTime).toLocaleDateString()} to {new Date(contract.endDateTime).toLocaleDateString()}
+                          {contract.contractNumber} • {contract.startDateTime ? new Date(contract.startDateTime).toLocaleDateString() : 'N/A'} to {contract.endDateTime ? new Date(contract.endDateTime).toLocaleDateString() : 'N/A'}
                         </p>
                       </div>
                       <div className="text-end">
-                        <p className="text-sm font-bold text-zinc-100">{contract.grandTotal.toLocaleString()} AED</p>
+                        <p className="text-sm font-bold text-zinc-100">{(contract.grandTotal || 0).toLocaleString()} AED</p>
                         <Badge variant={contract.status === 'active' ? 'emerald' : 'zinc'} size="sm">
                           {(contract.status || '').toUpperCase()}
                         </Badge>
@@ -489,10 +554,10 @@ export const Customer360View: React.FC = () => {
                       {customerInvoices.map(inv => (
                         <tr key={inv.id} className="text-zinc-300">
                           <td className="py-3 font-semibold text-[#f5d97f]">Invoice</td>
-                          <td className="py-3 font-mono">{inv.invoiceNumber}</td>
-                          <td className="py-3">{new Date(inv.issuedDate).toLocaleDateString()}</td>
-                          <td className="py-3 text-end font-medium">{inv.totalAmount.toLocaleString()}</td>
-                          <td className="py-3 text-end text-emerald-400 font-medium">{inv.paidAmount.toLocaleString()}</td>
+                          <td className="py-3 font-mono">{inv.id}</td>
+                          <td className="py-3">{inv.issueDate ? new Date(inv.issueDate).toLocaleDateString() : 'N/A'}</td>
+                          <td className="py-3 text-end font-medium">{(inv.totalAmount || 0).toLocaleString()}</td>
+                          <td className="py-3 text-end text-emerald-400 font-medium">{(inv.paidAmount || 0).toLocaleString()}</td>
                           <td className="py-3 text-end">
                             <Badge variant={inv.status === 'paid' ? 'emerald' : 'rose'} size="sm">
                               {(inv.status || '').toUpperCase()}
@@ -516,10 +581,10 @@ export const Customer360View: React.FC = () => {
                     <div key={comm.id} className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-semibold text-zinc-200 uppercase">{comm.channel} • {comm.direction}</span>
-                        <span className="text-zinc-500">{new Date(comm.timestamp).toLocaleString()}</span>
+                        <span className="text-zinc-500">{comm.timestamp ? new Date(comm.timestamp).toLocaleString() : 'N/A'}</span>
                       </div>
-                      <p className="text-xs text-zinc-300">{comm.summary}</p>
-                      <p className="text-[10px] text-zinc-400">Logged by {comm.actorName}</p>
+                      <p className="text-xs text-zinc-300">{comm.content}</p>
+                      <p className="text-[10px] text-zinc-400">Logged by {comm.createdByName}</p>
                     </div>
                   ))
                 )}
@@ -528,29 +593,98 @@ export const Customer360View: React.FC = () => {
 
             {/* TAB CONTENT: Documents */}
             {activeTab === 'docs' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {customerDocs.length === 0 ? (
-                  <div className="col-span-2 p-8 text-center text-xs text-zinc-500">No digital documents attached.</div>
-                ) : (
-                  customerDocs.map(doc => (
-                    <div key={doc.id} className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-[#D4AF37]">
-                          <FileText className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-semibold text-zinc-200">{doc.title}</h4>
-                          <p className="text-[10px] text-zinc-400">{(doc.type || 'DOC').toUpperCase()} • {doc.fileSizeMb} MB</p>
-                        </div>
-                      </div>
-                      <Badge variant="emerald" size="sm">{doc.verificationStatus}</Badge>
+              <div className="space-y-4">
+                {/* Upload bar -- ID/license photos and any other customer document */}
+                <div className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 flex flex-wrap items-center gap-3">
+                  <select
+                    value={docCategory}
+                    onChange={(e) => setDocCategory(e.target.value as CRMDocument['category'])}
+                    className="px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:outline-none focus:border-[#D4AF37]/50"
+                  >
+                    {DOCUMENT_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat}>{docCategoryLabel(cat)}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleDocPick}
+                    disabled={docUploading || !activeCustomer}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold text-xs shadow-md hover:brightness-110 disabled:opacity-60 transition-all"
+                  >
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span>
+                      {docUploading
+                        ? (language === 'ar' ? 'جارِ الرفع...' : 'Uploading...')
+                        : (language === 'ar' ? 'رفع مستند / صورة' : 'Upload Document / Photo')}
+                    </span>
+                  </button>
+                  <input
+                    ref={docFileInputRef}
+                    type="file"
+                    accept="image/*,.pdf"
+                    className="hidden"
+                    onChange={handleDocUpload}
+                  />
+                  <span className="text-[10px] text-zinc-500">
+                    {language === 'ar' ? 'صور الهوية والرخصة وأي مستند آخر يخص العميل' : 'ID photos, license scans, or any other customer document'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {customerDocs.length === 0 ? (
+                    <div className="col-span-2 p-8 text-center text-xs text-zinc-500">
+                      {language === 'ar' ? 'لا توجد مستندات رقمية مرفقة بعد.' : 'No digital documents attached yet.'}
                     </div>
-                  ))
-                )}
+                  ) : (
+                    customerDocs.map(doc => (
+                      <a
+                        key={doc.id}
+                        href={doc.fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 flex items-center justify-between hover:border-[#D4AF37]/40 transition-colors"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-[#D4AF37] shrink-0">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-semibold text-zinc-200 truncate">{doc.title}</h4>
+                            <p className="text-[10px] text-zinc-400">{docCategoryLabel(doc.category)} • {doc.fileSize}</p>
+                          </div>
+                        </div>
+                        <Badge variant="emerald" size="sm">{`v${doc.version}`}</Badge>
+                      </a>
+                    ))
+                  )}
+                </div>
               </div>
             )}
           </div>
-        ) : null}
+        ) : (
+          <div className="lg:col-span-8 p-12 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl flex flex-col items-center justify-center text-center space-y-4 min-h-[420px]">
+            <div className="w-16 h-16 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-center text-[#D4AF37] shadow-inner">
+              <Users className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-zinc-100 font-display">
+                {language === 'ar' ? 'لم يتم تحديد عميل' : 'No Customer Selected'}
+              </h3>
+              <p className="text-xs text-zinc-400 mt-1 max-w-sm">
+                {language === 'ar'
+                  ? 'يرجى اختيار عميل من القائمة الجانبية أو تسجيل عميل جديد لاستعراض ملف العميل الشامل 360.'
+                  : 'Please select a customer from the left list or register a new VIP client to view the 360 profile.'}
+              </p>
+            </div>
+            <button
+              onClick={() => setAddModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold text-xs shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{t('newCustomer')}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Add Customer Modal */}
@@ -656,7 +790,6 @@ export const Customer360View: React.FC = () => {
                 <option value="vip">VIP Tier 1</option>
                 <option value="individual">Individual</option>
                 <option value="corporate">Corporate</option>
-                <option value="diplomat">Diplomat</option>
               </select>
             </div>
             <div>

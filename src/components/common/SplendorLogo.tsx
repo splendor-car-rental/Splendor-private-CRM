@@ -44,7 +44,11 @@ export const SplendorLogo: React.FC<SplendorLogoProps> = ({ size = 'md', classNa
         width={dimension}
         height={dimension}
         style={{ width: dimension, height: dimension }}
-        className="rounded-full object-contain drop-shadow-[0_4px_12px_rgba(212,175,55,0.35)] select-none"
+        referrerPolicy="no-referrer"
+        onError={(e) => {
+          (e.currentTarget as HTMLImageElement).src = '/splendor-logo.jpg';
+        }}
+        className="rounded-full object-cover border border-[#D4AF37]/50 drop-shadow-[0_4px_12px_rgba(212,175,55,0.35)] select-none"
       />
     </div>
   );

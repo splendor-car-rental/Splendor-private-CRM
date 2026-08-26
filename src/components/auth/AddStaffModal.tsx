@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
 import { useLanguage } from '../../context/LanguageContext';
+import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../lib/apiFetch';
 import { UserRole } from '../../types';
+import { assignableRoles } from '../../config/permissions';
 
 interface AddStaffModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated: () => void;
 }
-
-const ROLES: UserRole[] = ['ceo', 'admin', 'operations', 'sales', 'finance', 'fleet'];
 
 /**
  * Admin/CEO-only: creates a real staff login (Firebase Authentication +
@@ -20,19 +20,23 @@ const ROLES: UserRole[] = ['ceo', 'admin', 'operations', 'sales', 'finance', 'fl
  */
 export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, onCreated }) => {
   const { t } = useLanguage();
+  const { currentUser } = useAuth();
+  // A CEO/Admin can only grant a role at their own rank or below -- never
+  // more authority than they themselves hold (also enforced server-side).
+  const ROLES: UserRole[] = assignableRoles(currentUser.role);
   const [name, setName] = useState('');
   const [nameAr, setNameAr] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [branch, setBranch] = useState('');
-  const [role, setRole] = useState<UserRole>('sales');
+  const [role, setRole] = useState<UserRole>(ROLES.includes('sales') ? 'sales' : ROLES[0]);
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
     setName(''); setNameAr(''); setEmail(''); setPhone(''); setBranch('');
-    setRole('sales'); setPassword(''); setError(null);
+    setRole(ROLES.includes('sales') ? 'sales' : ROLES[0]); setPassword(''); setError(null);
   };
 
   const handleClose = () => {
@@ -112,7 +116,7 @@ export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, o
           <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldRole')}</label>
           <select value={role} onChange={e => setRole(e.target.value as UserRole)}
             className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-sm focus:outline-none focus:border-[#D4AF37]/60">
-            {ROLES.map(r => <option key={r} value={r}>{(r || '').toUpperCase()}</option>)}
+            {ROLES.map(r => <option key={r} value={r}>{r.toUpperCase()}</option>)}
           </select>
         </div>
 

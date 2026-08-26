@@ -13,6 +13,23 @@ export const translations = {
     language: 'Language',
     currency: 'AED',
 
+    // Sidebar Navigation Labels (t('finance') etc. previously had no key here
+    // and silently fell back to the raw lowercase key string -- e.g. the nav
+    // literally read "finance"/"reconciliation"/"tasks" instead of a real
+    // label, in both languages, since the t() fallback is language-agnostic)
+    dashboard: 'Dashboard',
+    customers: 'Customers',
+    leads: 'Leads',
+    fleet: 'Fleet',
+    quotations: 'Quotations',
+    reservations: 'Reservations',
+    contracts: 'Contracts',
+    finance: 'Finance',
+    reconciliation: 'Bank Reconciliation',
+    tolls: 'Tolls & Parking',
+    tasks: 'Tasks',
+    settings: 'Settings',
+
     // Authentication
     authTitle: 'Executive Sign In',
     authSubtitle: 'Authorized personnel only. Sign in with your Splendor account.',
@@ -354,6 +371,20 @@ export const translations = {
     switchRole: 'تبديل منظور الصلاحيات',
     language: 'اللغة',
 
+    // تسميات التنقل الجانبي
+    dashboard: 'لوحة التحكم',
+    customers: 'العملاء',
+    leads: 'العملاء المحتملون',
+    fleet: 'الأسطول',
+    quotations: 'عروض الأسعار',
+    reservations: 'الحجوزات',
+    contracts: 'العقود',
+    finance: 'المالية',
+    reconciliation: 'المطابقة البنكية',
+    tolls: 'الرسوم والمواقف',
+    tasks: 'المهام',
+    settings: 'الإعدادات',
+
     // تسجيل الدخول
     authTitle: 'تسجيل الدخول التنفيذي',
     authSubtitle: 'للموظفين المصرح لهم فقط. سجّل الدخول بحساب سبلندر الخاص بك.',
@@ -568,7 +599,7 @@ export const translations = {
     accessoriesCheck: 'التحقق من إكسسوارات ومقتنيات السيارة',
     vipKeyFob: 'مفتاح VIP الفاخر مع الحافظة',
     manualAndDocs: 'كتيب المصنع وملكية المركبة الأصلية',
-    scentKit: 'باقة عطور سبليندور الحصرية',
+    scentKit: 'باقة عطور سبلندر الحصرية',
     highEndCharger: 'شاحن الهاتف فائق السرعة',
     firstAidKit: 'حقيبة الإسعافات الأولية الأصلية',
     safetyTriangle: 'مثلث الطوارئ والسلامة',
@@ -641,7 +672,7 @@ export const translations = {
     low: 'منخفضة',
 
     // AI Intelligence
-    aiStudioTitle: 'استوديو الذكاء الاصطناعي لسلسلة سبليندور',
+    aiStudioTitle: 'استوديو الذكاء الاصطناعي لسلسلة سبلندر',
     aiStudioSubtitle: 'تحليلات نموذج Gemini الذكية للاستفسارات التنفيذية، كشف التناقضات، والتوصيات.',
     askExecutiveAi: 'اطرح سؤالاً على المستشار الذكي التنفيذي...',
     askAiPlaceholder: 'مثال: "حلل إيرادات أسطول الفيراري"، "ما هي عقود كبار العملاء التي تنتهي هذا الأسبوع؟"، "هل توجد تناقضات في الكيلومترات أو الوقود؟"',

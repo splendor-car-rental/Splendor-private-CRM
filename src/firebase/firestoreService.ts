@@ -41,7 +41,9 @@ export const COLLECTIONS = {
   AUDIT_LOGS: 'audit_logs',
   CUSTOM_FIELDS: 'custom_fields',
   NUMBERING_CONFIGS: 'numbering_configs',
-  NOTIFICATIONS: 'notifications'
+  NOTIFICATIONS: 'notifications',
+  TOLL_TRANSACTIONS: 'toll_transactions',
+  TOLL_IMPORT_BATCHES: 'toll_import_batches'
 } as const;
 
 export class FirestoreService {

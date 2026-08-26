@@ -63,7 +63,7 @@ const PRESET_SUPER_CARS = [
     make: 'Mercedes-Maybach',
     model: 'GLS 600 Night Series',
     year: 2025,
-    category: 'luxury_suv' as VehicleCategory,
+    category: 'executive_suv' as VehicleCategory,
     color: 'Kalahari Gold / Onyx Black',
     plateCity: 'Dubai',
     dailyRate: 6000,
@@ -103,19 +103,18 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
     model: 'Purosangue V12',
     year: 2025,
     category: 'supercar' as VehicleCategory,
-    color: 'Rosso Corsa',
+    exteriorColor: 'Rosso Corsa',
     plateNumber: `DXB ${String.fromCharCode(65 + Math.floor(Math.random() * 26))} ${Math.floor(100 + Math.random() * 900)}`,
     plateCity: 'Dubai',
     vin: `ZFF${Math.floor(10000000000000 + Math.random() * 90000000000000)}`,
     dailyRate: 9500,
     weeklyRate: 58000,
     monthlyRate: 190000,
-    securityDeposit: 20000,
+    minDeposit: 20000,
     mileage: 1200,
     fuelType: 'petrol' as const,
     transmission: 'automatic' as const,
     horsepower: 715,
-    acceleration: 3.3,
     status: 'available' as VehicleStatus,
     thumbnail: 'https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80',
     images: ['https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80']
@@ -128,14 +127,13 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
       model: preset.model,
       year: preset.year,
       category: preset.category,
-      color: preset.color,
+      exteriorColor: preset.color,
       dailyRate: preset.dailyRate,
       weeklyRate: preset.weeklyRate,
       monthlyRate: preset.monthlyRate,
-      securityDeposit: preset.securityDeposit,
+      minDeposit: preset.securityDeposit,
       mileage: preset.mileage,
       horsepower: preset.horsepower,
-      acceleration: preset.acceleration,
       thumbnail: preset.thumbnail,
       images: [preset.thumbnail]
     }));
@@ -159,7 +157,7 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
       isOpen={isOpen}
       onClose={onClose}
       title={language === 'ar' ? 'إضافة مركبة فاخرة للأسطول' : 'Register Vehicle to Luxury Fleet'}
-      subtitle={language === 'ar' ? 'ربط فوري ومباشر مع قاعدة بيانات Firestore وتحديث المؤشرات الحية' : 'Direct synchronization to Firebase Firestore & live dashboard telemetry'}
+      subtitle={language === 'ar' ? 'ربط فوري ومباشر مع سحابة سبلندر وتحديث المؤشرات الحية' : 'Direct synchronization to Splendor Cloud & live dashboard telemetry'}
       maxWidth="4xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -189,12 +187,12 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
           </div>
         </div>
 
-        {/* Live Firebase notice */}
+        {/* Live Splendor notice */}
         <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 text-xs text-[#f5d97f]">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
             <span className="font-semibold">
-              {language === 'ar' ? 'اتصال Firestore نشط:' : 'Live Firestore Telemetry:'}
+              {language === 'ar' ? 'اتصال سبلندر نشط:' : 'Live Splendor Cloud:'}
             </span>
             <span className="text-zinc-300 font-mono text-[11px]">
               {firebaseSyncState.projectId}
@@ -261,8 +259,8 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
             >
               <option value="supercar">Supercar (سوبركار)</option>
               <option value="ultra_luxury_sedan">Ultra-Luxury Sedan (سيدان فاخرة)</option>
-              <option value="luxury_suv">Luxury Executive SUV (دفع رباعي VIP)</option>
-              <option value="convertible">Exotic Convertible (كشف رياضية)</option>
+              <option value="executive_suv">Luxury Executive SUV (دفع رباعي VIP)</option>
+              <option value="exotic_convertible">Exotic Convertible (كشف رياضية)</option>
               <option value="grand_tourer">Grand Tourer (جراند تورير)</option>
             </select>
           </div>
@@ -287,8 +285,8 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
             </label>
             <input
               type="text"
-              value={form.color}
-              onChange={e => setForm({ ...form, color: e.target.value })}
+              value={form.exteriorColor}
+              onChange={e => setForm({ ...form, exteriorColor: e.target.value })}
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
               placeholder="e.g. Rosso Corsa, Obsidian Black"
             />
@@ -341,8 +339,8 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
               </label>
               <input
                 type="number"
-                value={form.securityDeposit}
-                onChange={e => setForm({ ...form, securityDeposit: Number(e.target.value) })}
+                value={form.minDeposit}
+                onChange={e => setForm({ ...form, minDeposit: Number(e.target.value) })}
                 className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-amber-500/30 text-amber-300 font-bold text-xs focus:border-amber-400 focus:outline-none font-mono"
               />
             </div>
@@ -359,19 +357,6 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
               type="number"
               value={form.horsepower}
               onChange={e => setForm({ ...form, horsepower: Number(e.target.value) })}
-              className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-              {language === 'ar' ? 'التسارع (0-100 كم/س ثواني)' : '0-100 km/h (Sec)'}
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              value={form.acceleration}
-              onChange={e => setForm({ ...form, acceleration: Number(e.target.value) })}
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
             />
           </div>

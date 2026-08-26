@@ -64,7 +64,7 @@ export const ReservationsView: React.FC = () => {
         vehiclePlate: `${veh.plateCity} ${veh.plateNumber}`,
         dailyRate: veh.dailyRate,
         totalAmount: total,
-        depositAmount: veh.securityDeposit
+        depositAmount: veh.minDeposit
       }));
     }
   };
@@ -81,12 +81,15 @@ export const ReservationsView: React.FC = () => {
     setActiveView('contracts');
   };
 
-  const filteredReservations = reservations.filter(r =>
-    r.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.vehicleName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.vehiclePlate.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredReservations = reservations.filter(r => {
+    const s = (searchTerm || '').toLowerCase();
+    return (
+      (r.id || '').toLowerCase().includes(s) ||
+      (r.customerName || '').toLowerCase().includes(s) ||
+      (r.vehicleName || '').toLowerCase().includes(s) ||
+      (r.vehiclePlate || '').toLowerCase().includes(s)
+    );
+  });
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -130,8 +133,8 @@ export const ReservationsView: React.FC = () => {
 
       {/* Reservations Table */}
       <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-        <div className="overflow-x-auto custom-scrollbar">
-          <table className="w-full text-xs text-start min-w-[780px]">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-start">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                 <th className="p-4 text-start font-medium">Reservation ID</th>
@@ -168,8 +171,8 @@ export const ReservationsView: React.FC = () => {
                     <p className="text-[11px] text-zinc-500">{res.durationDays} Days Duration</p>
                   </td>
                   <td className="p-4 text-end">
-                    <p className="font-bold text-zinc-100">{res.totalAmount.toLocaleString()} AED</p>
-                    <p className="text-[10px] text-zinc-400">Deposit: {res.depositAmount.toLocaleString()} AED</p>
+                    <p className="font-bold text-zinc-100">{(res.totalAmount || 0).toLocaleString()} AED</p>
+                    <p className="text-[10px] text-zinc-400">Deposit: {(res.depositAmount || 0).toLocaleString()} AED</p>
                   </td>
                   <td className="p-4 text-center">
                     <Badge variant={res.status === 'confirmed' ? 'sky' : res.status === 'active' ? 'emerald' : 'zinc'} size="sm">

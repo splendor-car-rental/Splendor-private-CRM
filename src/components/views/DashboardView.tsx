@@ -11,6 +11,7 @@ import { StatsCard } from '../common/StatsCard';
 import { Badge } from '../common/Badge';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { SplendorLogo } from '../common/SplendorLogo';
+import proudOfUaeBanner from '../../assets/proud-of-uae-banner.jpg';
 
 export const DashboardView: React.FC = () => {
   const { language } = useLanguage();
@@ -72,6 +73,23 @@ export const DashboardView: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
+      {/* "Proud of UAE" banner -- brand asset supplied by the business owner.
+          Framed to match the dashboard's card language (rounded, bordered,
+          soft shadow) but the image itself is left untouched -- the UAE
+          flag's own colors are never recolored to match our gold/black
+          theme. */}
+      <div className="rounded-3xl border border-zinc-800 shadow-xl overflow-hidden bg-zinc-950">
+        <img
+          src={proudOfUaeBanner}
+          alt={language === 'ar' ? 'فخورين بالإمارات' : 'Proud of UAE'}
+          referrerPolicy="no-referrer"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).src = '/proud-of-uae-banner.jpg';
+          }}
+          className="w-full h-auto max-h-48 object-cover select-none"
+        />
+      </div>
+
       {/* Real Firebase Database Connection & Live Telemetry Bar */}
       <div className="p-4 sm:p-5 rounded-3xl bg-zinc-900/90 border border-zinc-800 shadow-2xl relative overflow-hidden backdrop-blur-md">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -84,7 +102,7 @@ export const DashboardView: React.FC = () => {
                 <span className="text-sm font-semibold text-zinc-100 flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                   <span className="w-2 h-2 rounded-full bg-emerald-400 -ms-4" />
-                  {language === 'ar' ? 'قاعدة بيانات فايربيس المباشرة' : 'Live Firebase Firestore'}
+                  {language === 'ar' ? 'سحابة بيانات سبلندر المباشرة' : 'Live Splendor Cloud Sync'}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-[11px] font-mono text-[#f5d97f]">
                   {firebaseSyncState.projectId}
@@ -116,8 +134,8 @@ export const DashboardView: React.FC = () => {
               <RefreshCw className={`w-3.5 h-3.5 text-[#D4AF37] ${firebaseSyncState.isSyncing ? 'animate-spin' : ''}`} />
               <span>
                 {firebaseSyncState.isSyncing 
-                  ? (language === 'ar' ? 'جاري المزامنة مع فايربيس...' : 'Syncing to Firebase...') 
-                  : (language === 'ar' ? 'مزامنة وتحديث فايربيس' : 'Sync to Firestore')}
+                  ? (language === 'ar' ? 'جاري المزامنة مع سبلندر...' : 'Syncing to Splendor Cloud...') 
+                  : (language === 'ar' ? 'مزامنة وتحديث سبلندر' : 'Sync to Splendor Cloud')}
               </span>
             </button>
           </div>
@@ -169,8 +187,8 @@ export const DashboardView: React.FC = () => {
             </h2>
             <p className="text-xs lg:text-sm text-zinc-400 max-w-2xl leading-relaxed">
               {language === 'ar' 
-                ? 'متابعة حية ومحدثة لحظياً عبر قاعدة بيانات فايربيس للأسطول الفاخر، عقود الإيجار، التدفق النقدي، ومطابقة حساب بنك الإمارات دبي الوطني.' 
-                : 'Real-time telemetry synchronized via live Firebase Firestore for luxury supercars, VIP guest contracts, Emirates NBD reconciliation, and revenue optimization.'}
+                ? 'متابعة حية ومحدثة لحظياً عبر سحابة سبلندر للأسطول الفاخر، عقود الإيجار، التدفق النقدي، ومطابقة حساب بنك الإمارات دبي الوطني.' 
+                : 'Real-time telemetry synchronized via live Splendor Cloud for luxury supercars, VIP guest contracts, Emirates NBD reconciliation, and revenue optimization.'}
             </p>
           </div>
         </div>
@@ -220,7 +238,7 @@ export const DashboardView: React.FC = () => {
         <StatsCard
           title={language === 'ar' ? 'العقود المؤجرة النشطة' : 'Active VIP Rentals'}
           value={activeContracts.length}
-          subValue={`${activeRentalsRevenue.toLocaleString()} AED Booked`}
+          subValue={`${(activeRentalsRevenue || 0).toLocaleString()} AED Booked`}
           accent="emerald"
           icon={<FileSignature className="w-5 h-5" />}
           trend={{ value: `${reservations.length} Reserved`, positive: true }}
@@ -229,7 +247,7 @@ export const DashboardView: React.FC = () => {
         <StatsCard
           title={language === 'ar' ? 'معاملات بنكية قيد المطابقة' : 'Bank Items to Reconcile'}
           value={unreconciledTxns.length}
-          subValue={`${unreconciledAmount.toLocaleString()} AED Pending Review`}
+          subValue={`${(unreconciledAmount || 0).toLocaleString()} AED Pending Review`}
           accent="rose"
           icon={<Landmark className="w-5 h-5" />}
           trend={{ value: 'Emirates NBD Live', positive: true }}
@@ -238,7 +256,7 @@ export const DashboardView: React.FC = () => {
         <StatsCard
           title={language === 'ar' ? 'فرص المبيعات النشطة' : 'Active VIP Pipeline'}
           value={openLeads.length}
-          subValue={`${totalPipelineValue.toLocaleString()} AED Estimated`}
+          subValue={`${(totalPipelineValue || 0).toLocaleString()} AED Estimated`}
           accent="sky"
           icon={<Users className="w-5 h-5" />}
           trend={{ value: `${customers.length} VIP Clients`, positive: true }}
@@ -317,7 +335,7 @@ export const DashboardView: React.FC = () => {
 
                     <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-2 sm:pt-0 border-zinc-900">
                       <div className="text-start sm:text-end">
-                        <p className="text-xs font-semibold text-zinc-200">{contract.grandTotal.toLocaleString()} AED</p>
+                        <p className="text-xs font-semibold text-zinc-200">{(contract.grandTotal || 0).toLocaleString()} AED</p>
                         <p className="text-[11px] text-zinc-400">
                           {language === 'ar' ? 'الاسترجاع:' : 'Return:'} {new Date(contract.endDateTime).toLocaleDateString()}
                         </p>
@@ -432,8 +450,8 @@ export const DashboardView: React.FC = () => {
             <Clock className="w-4 h-4 text-[#D4AF37] shrink-0" />
             <span>
               {language === 'ar' 
-                ? 'نظام الحسابات يطبق ضريبة 5% تلقائياً وفقاً للتشريعات الإماراتية وتحديثات فايربيس اللحظية.' 
-                : '5% UAE VAT & Salik toll calculation running live on Firebase Firestore.'}
+                ? 'نظام الحسابات يطبق ضريبة 5% تلقائياً وفقاً للتشريعات الإماراتية وتحديثات سبلندر اللحظية.' 
+                : '5% UAE VAT & Salik toll calculation running live on Splendor Cloud.'}
             </span>
           </div>
         </div>

@@ -134,10 +134,11 @@ export const ContractsOpsView: React.FC = () => {
   };
 
   const filteredContracts = contracts.filter(c => {
+    const s = (searchTerm || '').toLowerCase();
     const matchesSearch = 
-      c.contractNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.vehicleName.toLowerCase().includes(searchTerm.toLowerCase());
+      (c.contractNumber || '').toLowerCase().includes(s) ||
+      (c.customerName || '').toLowerCase().includes(s) ||
+      (c.vehicleName || '').toLowerCase().includes(s);
     const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -158,8 +159,8 @@ export const ContractsOpsView: React.FC = () => {
 
       {/* Grid: Contracts List & Detailed Operations View */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Contracts List (4 cols lg, 3 cols xl/2xl) */}
-        <div className="lg:col-span-4 xl:col-span-3 2xl:col-span-3 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
+        {/* Left Column: Contracts List (4 cols) */}
+        <div className="lg:col-span-4 p-4 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl space-y-3">
           <div className="relative">
             <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -196,7 +197,7 @@ export const ContractsOpsView: React.FC = () => {
 
                   <div className="mt-2 pt-2 border-t border-zinc-800/50 flex items-center justify-between text-[11px] text-zinc-400">
                     <span className="font-mono text-zinc-500">{contract.contractNumber}</span>
-                    <span className="font-bold text-zinc-200">{contract.grandTotal.toLocaleString()} AED</span>
+                    <span className="font-bold text-zinc-200">{(contract.grandTotal || 0).toLocaleString()} AED</span>
                   </div>
                 </div>
               );
@@ -204,9 +205,9 @@ export const ContractsOpsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Detailed Contract Operations & Inspection Card */}
+        {/* Right Column: Detailed Contract Operations & Inspection Card (8 cols) */}
         {activeContract ? (
-          <div className="lg:col-span-8 xl:col-span-9 2xl:col-span-9 p-4 sm:p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-2xl space-y-6">
+          <div className="lg:col-span-8 p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-2xl space-y-6">
             {/* Top Overview Banner */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl bg-zinc-950 border border-zinc-800">
               <div>
@@ -304,15 +305,15 @@ export const ContractsOpsView: React.FC = () => {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-zinc-400 pt-2">
                 <div>
                   <span>Daily Rate:</span>
-                  <p className="font-bold text-zinc-200">{activeContract.dailyRate.toLocaleString()} AED</p>
+                  <p className="font-bold text-zinc-200">{(activeContract.dailyRate || 0).toLocaleString()} AED</p>
                 </div>
                 <div>
                   <span>Rental Total (Inc VAT):</span>
-                  <p className="font-bold text-zinc-200">{activeContract.grandTotal.toLocaleString()} AED</p>
+                  <p className="font-bold text-zinc-200">{(activeContract.grandTotal || 0).toLocaleString()} AED</p>
                 </div>
                 <div>
                   <span>Security Deposit:</span>
-                  <p className="font-bold text-[#f5d97f]">{activeContract.depositAmount.toLocaleString()} AED</p>
+                  <p className="font-bold text-[#f5d97f]">{(activeContract.depositAmount || 0).toLocaleString()} AED</p>
                 </div>
                 <div>
                   <span>Payment Status:</span>
@@ -435,16 +436,16 @@ export const ContractsOpsView: React.FC = () => {
             <h4 className="font-bold text-[#f5d97f]">Settlement Summary:</h4>
             <div className="flex justify-between text-zinc-400">
               <span>Security Deposit Held:</span>
-              <span className="font-mono text-zinc-200">{contractToOperate?.depositAmount.toLocaleString()} AED</span>
+              <span className="font-mono text-zinc-200">{(contractToOperate?.depositAmount || 0).toLocaleString()} AED</span>
             </div>
             <div className="flex justify-between text-zinc-400">
               <span>Total Deductions (Salik + Extra KM):</span>
-              <span className="font-mono text-rose-400">-{returnForm.totalAdditionalCharges.toLocaleString()} AED</span>
+              <span className="font-mono text-rose-400">-{(returnForm.totalAdditionalCharges || 0).toLocaleString()} AED</span>
             </div>
             <div className="flex justify-between font-bold text-zinc-100 pt-2 border-t border-zinc-800">
               <span>Net Refund Due to Client:</span>
               <span className="font-mono text-emerald-400">
-                {Math.max(0, (contractToOperate?.depositAmount || 0) - returnForm.totalAdditionalCharges).toLocaleString()} AED
+                {Math.max(0, (contractToOperate?.depositAmount || 0) - (returnForm.totalAdditionalCharges || 0)).toLocaleString()} AED
               </span>
             </div>
           </div>

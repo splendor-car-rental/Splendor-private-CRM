@@ -24,7 +24,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
   accent = 'gold',
   onClick
 }) => {
-  const accentGlow = {
+  const accentBorder = {
     gold: 'hover:border-[#D4AF37]/40',
     emerald: 'hover:border-emerald-500/40',
     sky: 'hover:border-sky-500/40',
@@ -32,59 +32,61 @@ export const StatsCard: React.FC<StatsCardProps> = ({
     purple: 'hover:border-purple-500/40'
   }[accent];
 
-  const iconBg = {
-    gold: 'bg-[#D4AF37]/10 text-[#f5d97f] border border-[#D4AF37]/30',
-    emerald: 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30',
-    sky: 'bg-sky-500/10 text-sky-300 border border-sky-500/30',
-    rose: 'bg-rose-500/10 text-rose-300 border border-rose-500/30',
-    purple: 'bg-purple-500/10 text-purple-300 border border-purple-500/30'
+  const iconColor = {
+    gold: 'text-[#D4AF37]',
+    emerald: 'text-emerald-400',
+    sky: 'text-sky-400',
+    rose: 'text-rose-400',
+    purple: 'text-purple-400'
   }[accent];
 
   return (
     <div
       onClick={onClick}
-      className={`p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 backdrop-blur-md transition-all duration-200 ${
-        onClick ? 'cursor-pointer hover:bg-zinc-900/95 transform hover:-translate-y-0.5' : ''
-      } ${accentGlow}`}
+      className={`p-5 rounded-2xl bg-zinc-900/80 border border-zinc-800/90 shadow-lg shadow-black/40 backdrop-blur-md transition-all duration-200 ${
+        onClick ? 'cursor-pointer hover:bg-zinc-900 hover:-translate-y-0.5' : ''
+      } ${accentBorder}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex-1">
-          <p className="text-xs uppercase tracking-wider text-zinc-400 font-medium">{title}</p>
-          <h3 className="mt-2 text-2xl lg:text-3xl font-display font-semibold text-zinc-100 tracking-tight">
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] uppercase tracking-wider text-zinc-400 font-semibold truncate">{title}</p>
+          <h3 className="mt-2 text-2xl lg:text-3xl font-display font-bold text-zinc-100 tracking-tight font-mono">
             {value}
           </h3>
           {subValue && (
-            <p className="mt-1 text-xs text-zinc-400">{subValue}</p>
+            <p className="mt-1 text-xs text-zinc-400 truncate">{subValue}</p>
           )}
         </div>
         {icon && (
-          <div className={`p-3 rounded-xl shrink-0 ${iconBg}`}>
+          <div className={`p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800/80 shrink-0 ${iconColor}`}>
             {icon}
           </div>
         )}
       </div>
 
       {trend && (
-        <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center gap-1.5 text-xs">
-          {trend.neutral ? (
-            <Minus className="w-3.5 h-3.5 text-zinc-400" />
-          ) : trend.positive ? (
-            <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" />
-          ) : (
-            <ArrowDownRight className="w-3.5 h-3.5 text-rose-400" />
-          )}
-          <span
-            className={`font-medium ${
-              trend.neutral
-                ? 'text-zinc-400'
-                : trend.positive
-                ? 'text-emerald-400'
-                : 'text-rose-400'
-            }`}
-          >
-            {trend.value}
-          </span>
-          <span className="text-zinc-400">vs last month</span>
+        <div className="mt-3.5 pt-3 border-t border-zinc-800/70 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5">
+            {trend.neutral ? (
+              <Minus className="w-3.5 h-3.5 text-zinc-500" />
+            ) : trend.positive ? (
+              <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <ArrowDownRight className="w-3.5 h-3.5 text-rose-400" />
+            )}
+            <span
+              className={`font-semibold font-mono ${
+                trend.neutral
+                  ? 'text-zinc-400'
+                  : trend.positive
+                  ? 'text-emerald-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              {trend.value}
+            </span>
+          </div>
+          <span className="text-[11px] text-zinc-500">Live Telemetry</span>
         </div>
       )}
     </div>

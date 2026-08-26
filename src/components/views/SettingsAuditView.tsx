@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
 import {
   Settings, Shield, Users, History,
-  Check, Sparkles, Building, UserPlus2
+  Check, Sparkles, Building, UserPlus2, Pencil
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { AddStaffModal } from '../auth/AddStaffModal';
+import { EditStaffModal } from '../auth/EditStaffModal';
+import { ROLE_RANK } from '../../config/permissions';
+import { User } from '../../types';
 
 const ROLE_BADGE_VARIANT: Record<string, 'gold' | 'purple' | 'emerald' | 'sky' | 'zinc'> = {
   ceo: 'gold',
@@ -25,6 +28,7 @@ export const SettingsAuditView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit'>('general');
   const [addStaffOpen, setAddStaffOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<User | null>(null);
   const isAdmin = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
   return (
@@ -228,10 +232,12 @@ export const SettingsAuditView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {staffDirectory.map(usr => {
               const isSelf = currentUser.id === usr.id;
+              // Can only edit staff at or below your own rank (also enforced server-side).
+              const canEdit = isAdmin && ROLE_RANK[usr.role] >= ROLE_RANK[currentUser.role];
               return (
                 <div
                   key={usr.id}
-                  className={`p-4 rounded-2xl border space-y-2 ${
+                  className={`relative p-4 rounded-2xl border space-y-2 ${
                     isSelf
                       ? 'bg-[#D4AF37]/15 border-[#D4AF37]/60 shadow-lg'
                       : 'bg-zinc-950/60 border-zinc-800'
@@ -241,15 +247,38 @@ export const SettingsAuditView: React.FC = () => {
                     <Badge variant={ROLE_BADGE_VARIANT[usr.role] || 'zinc'} size="sm">
                       {(usr.role || '').toUpperCase()}
                     </Badge>
-                    {isSelf && <Check className="w-4 h-4 text-[#f5d97f]" />}
+                    <div className="flex items-center gap-1.5">
+                      {isSelf && <Check className="w-4 h-4 text-[#f5d97f]" />}
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => setEditingStaff(usr)}
+                          title={language === 'ar' ? 'تعديل' : 'Edit'}
+                          className="p-1 rounded-lg text-zinc-500 hover:text-[#f5d97f] hover:bg-zinc-900 transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <div>
-                    <h4 className="font-bold text-zinc-100 text-sm">
-                      {language === 'ar' && usr.nameAr ? usr.nameAr : usr.name}
-                    </h4>
-                    <p className="text-[11px] text-zinc-400 mt-0.5">{usr.email}</p>
-                    <p className="text-[11px] text-zinc-500 mt-0.5">{usr.branch}</p>
+                  <div className="flex items-center gap-2.5">
+                    <img
+                      src={usr.avatar || '/splendor-logo.jpg'}
+                      alt={usr.name}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).src = '/splendor-logo.jpg';
+                      }}
+                      className="w-9 h-9 rounded-xl object-cover border border-zinc-800 shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-zinc-100 text-sm truncate">
+                        {language === 'ar' && usr.nameAr ? usr.nameAr : usr.name}
+                      </h4>
+                      <p className="text-[11px] text-zinc-400 mt-0.5 truncate">{usr.email}</p>
+                      <p className="text-[11px] text-zinc-500 mt-0.5 truncate">{usr.branch}</p>
+                    </div>
                   </div>
                 </div>
               );
@@ -287,7 +316,7 @@ export const SettingsAuditView: React.FC = () => {
                     <td className="p-4 font-semibold text-zinc-200">{log.userName}</td>
                     <td className="p-4 font-mono text-[11px] uppercase text-[#f5d97f]">{log.action}</td>
                     <td className="p-4 font-mono text-zinc-400">{log.entityType} ({log.entityId})</td>
-                    <td className="p-4 text-zinc-300">{log.details}</td>
+                    <td className="p-4 text-zinc-300">{log.newValue || log.reason || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -300,6 +329,16 @@ export const SettingsAuditView: React.FC = () => {
         isOpen={addStaffOpen}
         onClose={() => setAddStaffOpen(false)}
         onCreated={() => showToast(t('addStaffButton'), t('staffCreatedSuccess'), 'success')}
+      />
+      <EditStaffModal
+        isOpen={!!editingStaff}
+        onClose={() => setEditingStaff(null)}
+        staffMember={editingStaff}
+        onUpdated={() => showToast(
+          language === 'ar' ? 'تم تحديث الموظف' : 'Staff Updated',
+          language === 'ar' ? 'تم حفظ بيانات الموظف بنجاح.' : 'The staff member\'s details were saved successfully.',
+          'success'
+        )}
       />
     </div>
   );

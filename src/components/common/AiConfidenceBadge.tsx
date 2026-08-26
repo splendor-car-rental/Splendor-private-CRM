@@ -3,19 +3,22 @@ import { Sparkles, ShieldCheck } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 
 interface AiConfidenceBadgeProps {
-  type: 'ai_suggestion' | 'confirmed_data';
+  type?: 'ai_suggestion' | 'confirmed_data';
   confidence?: number;
+  score?: number;
   label?: string;
   className?: string;
 }
 
 export const AiConfidenceBadge: React.FC<AiConfidenceBadgeProps> = ({
-  type,
-  confidence = 95,
+  type = 'ai_suggestion',
+  confidence,
+  score,
   label,
   className = ''
 }) => {
   const { language } = useLanguage();
+  const effectiveConfidence = score ?? confidence ?? 95;
 
   if (type === 'confirmed_data') {
     return (
@@ -32,10 +35,10 @@ export const AiConfidenceBadge: React.FC<AiConfidenceBadgeProps> = ({
   return (
     <span
       className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/40 ${className}`}
-      title={language === 'ar' ? `اقتراح ذكاء اصطناعي بنسبة ثقة ${confidence}% (يتطلب مراجعة بشرية)` : `AI heuristic suggestion with ${confidence}% confidence score (requires human sign-off)`}
+      title={language === 'ar' ? `اقتراح ذكاء اصطناعي بنسبة ثقة ${effectiveConfidence}% (يتطلب مراجعة بشرية)` : `AI heuristic suggestion with ${effectiveConfidence}% confidence score (requires human sign-off)`}
     >
       <Sparkles className="w-3 h-3 text-[#D4AF37] animate-pulse" />
-      <span>{label || (language === 'ar' ? `اقتراح ذكي (${confidence}%)` : `AI Suggested (${confidence}%)`)}</span>
+      <span>{label || (language === 'ar' ? `اقتراح ذكي (${effectiveConfidence}%)` : `AI Suggested (${effectiveConfidence}%)`)}</span>
     </span>
   );
 };

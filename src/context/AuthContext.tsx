@@ -5,17 +5,20 @@ import {
   signOut as firebaseSignOut,
   type User as FirebaseUser
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { User, UserRole } from '../types';
 import { AuthLoadingScreen, LoginScreen, AccessPendingScreen } from '../components/auth/AuthScreens';
 
 interface AuthContextType {
+  firebaseUser: FirebaseUser | null;
   currentUser: User;
   hasPermission: (permission: 'read' | 'create' | 'edit' | 'delete' | 'approve' | 'export') => boolean;
   logout: () => Promise<void>;
   /** Read-only directory of provisioned staff accounts (for admin/settings screens). */
   staffDirectory: User[];
+  /** Updates the signed-in user's own profile fields (e.g. their avatar photo). */
+  updateMyProfile: (data: Partial<Pick<User, 'avatar' | 'name' | 'nameAr' | 'phone'>>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -80,8 +83,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [staffDirectory, setStaffDirectory] = useState<User[]>([]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+    let profileUnsubscribe: (() => void) | null = null;
+
+    const authUnsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser);
+
+      // Tear down any previous profile subscription before starting a new one.
+      if (profileUnsubscribe) {
+        profileUnsubscribe();
+        profileUnsubscribe = null;
+      }
 
       if (!fbUser) {
         setProfile(null);
@@ -89,32 +100,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      try {
-        const profileRef = doc(db, 'users', fbUser.uid);
-        const snap = await getDoc(profileRef);
+      const profileRef = doc(db, 'users', fbUser.uid);
 
-        if (snap.exists()) {
-          setProfile({ id: fbUser.uid, ...(snap.data() as Omit<User, 'id'>) });
-        } else {
+      try {
+        const snap = await getDoc(profileRef);
+        if (!snap.exists()) {
           const seed = fbUser.email ? SEED_STAFF[fbUser.email.toLowerCase()] : undefined;
           if (seed) {
             const newProfile: Omit<User, 'id'> = { ...seed, status: 'active' };
             await setDoc(profileRef, newProfile, { merge: true });
-            setProfile({ id: fbUser.uid, ...newProfile });
-          } else {
-            // Authenticated, but no administrator has provisioned this account yet.
-            setProfile(null);
           }
+          // If no seed either, leave the doc missing -- the live subscription
+          // below will keep profile === null (Access Pending screen) until
+          // an administrator provisions the account.
         }
       } catch (error) {
-        console.warn('Failed to load/bootstrap user profile:', error);
-        setProfile(null);
-      } finally {
-        setAuthLoading(false);
+        console.warn('Failed to bootstrap user profile:', error);
       }
+
+      // Live subscription (not a one-time read) so that any change to this
+      // user's own profile document -- their own avatar upload, or an
+      // admin editing their role/details from Settings -- reflects in the
+      // app immediately, without needing to log out and back in.
+      profileUnsubscribe = onSnapshot(
+        profileRef,
+        (snap) => {
+          setProfile(snap.exists() ? { id: fbUser.uid, ...(snap.data() as Omit<User, 'id'>) } : null);
+          setAuthLoading(false);
+        },
+        (error) => {
+          console.warn('Failed to subscribe to own profile:', error);
+          setProfile(null);
+          setAuthLoading(false);
+        }
+      );
     });
 
-    return () => unsubscribe();
+    return () => {
+      authUnsubscribe();
+      if (profileUnsubscribe) profileUnsubscribe();
+    };
   }, []);
 
   // Read-only staff directory, once signed in.
@@ -147,6 +172,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await firebaseSignOut(auth);
   }, []);
 
+  const updateMyProfile = useCallback(
+    async (data: Partial<Pick<User, 'avatar' | 'name' | 'nameAr' | 'phone'>>) => {
+      if (!firebaseUser) return;
+      await updateDoc(doc(db, 'users', firebaseUser.uid), data as Record<string, any>);
+      // No local setProfile() call needed -- the onSnapshot subscription
+      // above picks up this write and updates `profile` automatically.
+    },
+    [firebaseUser]
+  );
+
   const hasPermission = useCallback(
     (permission: 'read' | 'create' | 'edit' | 'delete' | 'approve' | 'export'): boolean => {
       if (!profile) return false;
@@ -173,7 +208,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }
 
   return (
-    <AuthContext.Provider value={{ currentUser: profile, hasPermission, logout, staffDirectory }}>
+    <AuthContext.Provider value={{ firebaseUser, currentUser: profile, hasPermission, logout, staffDirectory, updateMyProfile }}>
       {children}
     </AuthContext.Provider>
   );

@@ -12,7 +12,7 @@ import { Modal } from '../common/Modal';
 
 export const TasksFollowupsView: React.FC = () => {
   const { language, t } = useLanguage();
-  const { tasks, addTask, updateTask, customers } = useCRM();
+  const { tasks, createTask, updateTask, customers } = useCRM();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
@@ -42,7 +42,7 @@ export const TasksFollowupsView: React.FC = () => {
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await addTask(form);
+    await createTask(form);
     setAddModalOpen(false);
     setForm({
       title: '',
@@ -62,10 +62,11 @@ export const TasksFollowupsView: React.FC = () => {
   };
 
   const filteredTasks = tasks.filter(t => {
+    const s = (searchTerm || '').toLowerCase();
     const matchesSearch = 
-      t.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (t.customerName && t.customerName.toLowerCase().includes(searchTerm.toLowerCase()));
+      (t.title || '').toLowerCase().includes(s) ||
+      (t.description || '').toLowerCase().includes(s) ||
+      (t.customerName && t.customerName.toLowerCase().includes(s));
     const matchesPriority = priorityFilter === 'all' || t.priority === priorityFilter;
     return matchesSearch && matchesPriority;
   });

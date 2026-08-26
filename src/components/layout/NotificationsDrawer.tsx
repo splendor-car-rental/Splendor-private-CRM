@@ -44,14 +44,14 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({ isOpen
               const icon = {
                 critical: <AlertCircle className="w-5 h-5 text-rose-400" />,
                 important: <AlertTriangle className="w-5 h-5 text-amber-400" />,
-                routine: <Info className="w-5 h-5 text-sky-400" />
-              }[notif.priority];
+                informational: <Info className="w-5 h-5 text-sky-400" />
+              }[notif.type];
 
               const borderColor = {
                 critical: 'border-rose-500/30 bg-rose-950/10',
                 important: 'border-amber-500/30 bg-amber-950/10',
-                routine: 'border-zinc-800 bg-zinc-900/40'
-              }[notif.priority];
+                informational: 'border-zinc-800 bg-zinc-900/40'
+              }[notif.type];
 
               return (
                 <div
@@ -70,10 +70,10 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({ isOpen
 
                   <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-500">
                     <span>{new Date(notif.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    {notif.targetView && (
+                    {notif.link && (
                       <button
                         onClick={() => {
-                          setActiveView(notif.targetView!);
+                          setActiveView(notif.link!);
                           onClose();
                         }}
                         className="text-[#f5d97f] hover:underline font-medium"

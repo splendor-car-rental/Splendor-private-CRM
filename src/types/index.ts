@@ -45,6 +45,7 @@ export interface Customer {
   ownerName: string;
   status: CustomerStatus;
   isVIP: boolean;
+  tier?: string;
   tags: string[];
   preferences: {
     favoriteCategory?: string;
@@ -352,7 +353,7 @@ export interface Contract {
   depositAmount: number;
   mileageAllowancePerDay: number; // default 200 km/day -- editable per contract
   extraKmRate: number; // e.g. 15 AED / km
-  depositReleaseDays?: number; // default 21 days -- editable per contract
+  depositReleaseDays: number; // default 21 days -- editable per contract
   
   status: ContractStatus;
   handover?: HandoverInspection;
@@ -506,7 +507,8 @@ export type BankTransactionStatus =
   | 'partially_matched' 
   | 'needs_review' 
   | 'approved' 
-  | 'rejected';
+  | 'rejected'
+  | 'reconciled';
 
 export interface BankTransaction {
   id: string; // BTX-0001
@@ -565,6 +567,7 @@ export interface CRMTask {
   relatedEntityType?: 'customer' | 'lead' | 'opportunity' | 'quotation' | 'reservation' | 'contract' | 'vehicle';
   relatedEntityId?: string;
   relatedEntityName?: string;
+  customerName?: string;
   assignedToId: string;
   assignedToName: string;
   dueDate: string;
@@ -684,4 +687,102 @@ export interface NotificationItem {
   link?: string;
   read: boolean;
   timestamp: string;
+}
+
+// ----------------------------------------------------
+// Tolls (Salik / Darb) & Parking
+// ----------------------------------------------------
+// Shape agreed with the business owner: one unified transaction type across
+// all three (discriminated by `type`), imported in bulk from a Salik/Darb
+// statement or entered manually, matched to the contract/customer who was
+// renting the vehicle at the time, and billed at a fixed customer rate
+// regardless of the actual (often variable) cost to the company. See
+// src/lib/tollCalculations.ts for the pricing rules themselves.
+export type TollType = 'salik' | 'darb' | 'parking';
+export type TollSource = 'manual' | 'excel_import' | 'pdf_import';
+
+export interface TollTransaction {
+  id: string; // TOL-000001
+  type: TollType;
+  date: string; // trip/parking date, ISO (yyyy-mm-dd)
+  time?: string; // trip time as shown on the statement, e.g. "02:54 PM"
+  locationName: string; // toll gate name, or parking location for 'parking'
+  direction?: string; // Salik/Darb "Direction/Zone", e.g. "To Abu Dhabi"
+  tagNumber?: string; // Salik/Darb tag number, if present
+  plateNumber?: string; // vehicle plate exactly as shown on the statement
+  transactionRef?: string; // the provider's own transaction ID, if present
+  isPeakTime?: boolean; // informational tag only -- not used in the profit calc, since the imported actual cost already reflects it
+
+  actualCompanyCost: number; // real cost to Splendor for this transaction (VAT-inclusive where applicable)
+  customerBillingRate: number; // fixed rate billed to the customer: Salik 7.5, Darb 6, Parking base + 10%
+  totalChargedToCustomer: number; // usually equals customerBillingRate; kept distinct for manual overrides/waivers
+  netProfit: number; // totalChargedToCustomer - actualCompanyCost
+
+  parkingBaseAmount?: number; // 'parking' only: the entered base amount before the 10% markup
+
+  vehicleId?: string; // resolved from plateNumber once matched to a vehicle
+  contractId?: string; // which rental this belongs to -- set at manual entry, or once an imported row is matched to a contract
+  reservationId?: string;
+  customerId?: string;
+  customerName?: string;
+
+  isPaid: boolean; // has this been collected from the customer
+  billedChargeId?: string; // set once rolled into an AdditionalCharge/invoice
+
+  discountAmount?: number; // flat AED discount off the customer billing rate (Admin/Finance/Sales only)
+  discountPercent?: number; // percent discount off the customer billing rate (Admin/Finance/Sales only)
+  rateOverridden?: boolean; // true when actualCompanyCost and/or customerBillingRate were manually entered/edited instead of using the current default rate -- kept for audit clarity
+
+  source: TollSource;
+  importBatchId?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FinancialSummary {
+  totalCost: number;
+  totalCollected: number;
+  totalNetProfit: number;
+  count: number;
+}
+
+/**
+ * The company's current default toll/parking rates. Not hardcoded forever --
+ * Salik/Darb/parking pricing can rise or fall over time, so these live as an
+ * editable record (one row, id 'default') rather than fixed constants.
+ * Editing this is restricted to CEO/Admin/Finance/Sales (see
+ * TOLL_PRICING_EDIT_ROLES in src/config/permissions.ts). Individual manual
+ * entries can still override these defaults per-transaction for the same
+ * roles -- see TollTransaction.rateOverridden.
+ */
+export interface TollPricingConfig {
+  id: 'default';
+  salikCustomerRate: number; // flat AED billed to the customer per Salik transaction (default 7.5)
+  darbCompanyCost: number; // fixed AED cost to the company per Darb transaction, excl. VAT (default 4)
+  darbCustomerRate: number; // fixed AED billed to the customer per Darb transaction, incl. VAT (default 6)
+  parkingMarkupPercent: number; // markup applied over the entered parking base amount (default 10)
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt?: string;
+}
+
+export interface TollImportBatch {
+  id: string; // TOLBATCH-0001
+  type: TollType;
+  fileName: string;
+  fileFormat: 'excel' | 'pdf' | 'csv';
+  accountNumber?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  totalTransactions: number;
+  matchedCount: number; // rows auto-linked to a contract/customer by plate + date
+  unmatchedCount: number; // rows still needing manual assignment
+  totalActualCost: number;
+  totalCustomerBilling: number;
+  totalTopUps?: number; // account reload/payment total, read from the statement's own summary section when present
+  uploadedBy: string;
+  uploadedAt: string;
+  status: 'processed' | 'failed';
+  errorMessage?: string;
 }

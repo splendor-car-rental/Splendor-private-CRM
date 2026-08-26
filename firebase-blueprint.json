@@ -127,6 +127,28 @@
       },
       "required": ["id", "amount", "status"]
     },
+    "TollTransaction": {
+      "title": "TollTransaction",
+      "description": "Salik, Darb, or parking toll transaction",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "contractId": { "type": "string" },
+        "totalChargedToCustomer": { "type": "number" }
+      },
+      "required": ["id", "type"]
+    },
+    "TollImportBatch": {
+      "title": "TollImportBatch",
+      "description": "Batch metadata for imported toll statements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fileName": { "type": "string" }
+      },
+      "required": ["id", "fileName"]
+    },
     "Task": {
       "title": "Task",
       "description": "Operational task and followup",
@@ -179,6 +201,14 @@
     "/bank_transactions/{bankTransactionId}": {
       "schema": "BankTransaction",
       "description": "Imported bank statement transactions"
+    },
+    "/toll_transactions/{tollTransactionId}": {
+      "schema": "TollTransaction",
+      "description": "Toll and parking transactions"
+    },
+    "/toll_import_batches/{tollImportBatchId}": {
+      "schema": "TollImportBatch",
+      "description": "Imported toll batch metadata"
     },
     "/tasks/{taskId}": {
       "schema": "Task",

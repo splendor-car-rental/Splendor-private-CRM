@@ -16,7 +16,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
   const [conflictWarning, setConflictWarning] = useState<string | null>(null);
 
   const availableVehicles = vehicles.filter(v => v.status === 'available' || v.status === 'reserved');
-  const activeCustomers = customers.filter(c => c.status !== 'suspended');
+  const activeCustomers = customers.filter(c => c.status !== 'blocklisted');
 
   const now = new Date();
   const threeDaysLater = new Date(Date.now() + 86400000 * 3);
@@ -43,7 +43,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
   const rentalTotal = dailyRate * diffDays;
   const vatAmount = rentalTotal * 0.05;
   const grandTotal = rentalTotal + vatAmount;
-  const depositAmount = selectedVehicle?.securityDeposit || 10000;
+  const depositAmount = selectedVehicle?.minDeposit || 10000;
 
   const handleVehicleChange = async (vehId: string) => {
     setSelectedVehicleId(vehId);
@@ -101,7 +101,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
       isOpen={isOpen}
       onClose={onClose}
       title={language === 'ar' ? 'إصدار عقد إيجار لحظي فوري' : 'Issue Instant Rental Contract'}
-      subtitle={language === 'ar' ? 'توليد العقد المعتمد وربطه مباشرة بـ Firestore وتحديث أرقام لوحة القيادة فوراً' : 'Instant binding contract creation with zero-reload Firestore sync'}
+      subtitle={language === 'ar' ? 'توليد العقد المعتمد وربطه مباشرة بسحابة سبلندر وتحديث أرقام لوحة القيادة فوراً' : 'Instant binding contract creation with zero-reload Splendor Cloud sync'}
       maxWidth="4xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -143,7 +143,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
             >
               {activeCustomers.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.fullName} ({c.type ? c.type.toUpperCase() : ''} • {c.phone})
+                  {c.fullName} ({(c.type || '').toUpperCase()} • {c.phone})
                 </option>
               ))}
             </select>
@@ -161,7 +161,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
             >
               {vehicles.map(v => (
                 <option key={v.id} value={v.id}>
-                  {v.make} {v.model} ({v.plateNumber} • {v.dailyRate} AED/day • {v.status ? v.status.toUpperCase() : ''})
+                  {v.make} {v.model} ({v.plateNumber} • {v.dailyRate} AED/day • {(v.status || '').toUpperCase()})
                 </option>
               ))}
             </select>
@@ -263,25 +263,25 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div className="p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800/80">
               <div className="text-[10px] text-zinc-400">{language === 'ar' ? 'السعر اليومي:' : 'Daily Rate:'}</div>
-              <div className="text-sm font-bold text-zinc-200 mt-0.5 font-mono">{dailyRate.toLocaleString()} AED</div>
+              <div className="text-sm font-bold text-zinc-200 mt-0.5 font-mono">{(dailyRate || 0).toLocaleString()} AED</div>
             </div>
             <div className="p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800/80">
               <div className="text-[10px] text-zinc-400">{language === 'ar' ? 'المجموع قبل الضريبة:' : 'Subtotal:'}</div>
-              <div className="text-sm font-bold text-zinc-200 mt-0.5 font-mono">{rentalTotal.toLocaleString()} AED</div>
+              <div className="text-sm font-bold text-zinc-200 mt-0.5 font-mono">{(rentalTotal || 0).toLocaleString()} AED</div>
             </div>
             <div className="p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800/80">
               <div className="text-[10px] text-zinc-400">{language === 'ar' ? 'ضريبة القيمة المضافة (5%):' : 'UAE VAT (5%):'}</div>
-              <div className="text-sm font-bold text-zinc-300 mt-0.5 font-mono">{vatAmount.toLocaleString()} AED</div>
+              <div className="text-sm font-bold text-zinc-300 mt-0.5 font-mono">{(vatAmount || 0).toLocaleString()} AED</div>
             </div>
             <div className="p-2.5 rounded-xl bg-[#D4AF37]/15 border border-[#D4AF37]/40">
               <div className="text-[10px] text-[#f5d97f] font-semibold">{language === 'ar' ? 'الإجمالي النهائي:' : 'Grand Total:'}</div>
-              <div className="text-sm font-black text-[#f5d97f] mt-0.5 font-mono">{grandTotal.toLocaleString()} AED</div>
+              <div className="text-sm font-black text-[#f5d97f] mt-0.5 font-mono">{(grandTotal || 0).toLocaleString()} AED</div>
             </div>
           </div>
 
           <div className="flex items-center justify-between text-xs text-amber-300 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
             <span>{language === 'ar' ? 'مبلغ التأمين المحتجز في العقد:' : 'Held Security Deposit Amount:'}</span>
-            <span className="font-bold font-mono">{depositAmount.toLocaleString()} AED</span>
+            <span className="font-bold font-mono">{(depositAmount || 0).toLocaleString()} AED</span>
           </div>
         </div>
 

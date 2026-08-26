@@ -70,7 +70,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
     email: '',
     phone: '',
     whatsapp: '',
-    type: 'vip' as 'individual' | 'corporate' | 'vip' | 'diplomat',
+    type: 'vip' as 'individual' | 'corporate' | 'vip',
     address: 'Downtown Dubai, UAE',
     city: 'Dubai',
     country: 'United Arab Emirates',
@@ -142,7 +142,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
       isOpen={isOpen}
       onClose={onClose}
       title={language === 'ar' ? 'تسجيل عميل VIP جديد' : 'Register New VIP Client'}
-      subtitle={language === 'ar' ? 'حفظ فوري في قاعدة بيانات Firestore مع التزامن اللحظي في لوحة القيادة' : 'Instant Firestore database sync & real-time live telemetry'}
+      subtitle={language === 'ar' ? 'حفظ فوري في سحابة سبلندر مع التزامن اللحظي في لوحة القيادة' : 'Instant Splendor Cloud database sync & real-time live telemetry'}
       maxWidth="4xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -215,7 +215,6 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
               <option value="vip">VIP Executive / Royal (شخصية بارزة)</option>
               <option value="corporate">Corporate Client (شركة / جهة اعتبارية)</option>
               <option value="individual">Individual Private Client (فرد)</option>
-              <option value="diplomat">Diplomatic Mission (هيئة دبلوماسية)</option>
             </select>
           </div>
         </div>

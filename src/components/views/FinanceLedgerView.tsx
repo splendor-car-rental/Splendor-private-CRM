@@ -68,9 +68,9 @@ export const FinanceLedgerView: React.FC = () => {
     setDepositActionModalOpen(false);
   };
 
-  const totalInvoiced = invoices.reduce((s, i) => s + i.totalAmount, 0);
-  const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
-  const totalDepositsHeld = deposits.filter(d => d.status === 'held').reduce((s, d) => s + d.balance, 0);
+  const totalInvoiced = (invoices || []).reduce((s, i) => s + (i?.totalAmount || 0), 0);
+  const totalPaid = (payments || []).reduce((s, p) => s + (p?.amount || 0), 0);
+  const totalDepositsHeld = (deposits || []).filter(d => d?.status === 'held').reduce((s, d) => s + (d?.balance || 0), 0);
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -131,10 +131,10 @@ export const FinanceLedgerView: React.FC = () => {
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto custom-scrollbar">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
         <button
           onClick={() => setActiveTab('invoices')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
             activeTab === 'invoices' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -142,7 +142,7 @@ export const FinanceLedgerView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('deposits')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
             activeTab === 'deposits' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -150,7 +150,7 @@ export const FinanceLedgerView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('payments')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 whitespace-nowrap transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
             activeTab === 'payments' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -161,8 +161,8 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Tab 1: Invoices */}
       {activeTab === 'invoices' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto custom-scrollbar">
-            <table className="w-full text-xs text-start min-w-[850px]">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-start">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">Invoice Number</th>
@@ -176,18 +176,18 @@ export const FinanceLedgerView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
-                {invoices.map(inv => (
+                {(invoices || []).map(inv => (
                   <tr key={inv.id} className="hover:bg-zinc-900/40 transition-colors">
-                    <td className="p-4 font-mono font-bold text-[#f5d97f]">{inv.invoiceNumber}</td>
-                    <td className="p-4 font-semibold text-zinc-200">{inv.customerName}</td>
-                    <td className="p-4">{new Date(inv.issuedDate).toLocaleDateString()}</td>
-                    <td className="p-4 text-end font-mono">{inv.subtotal.toLocaleString()} AED</td>
-                    <td className="p-4 text-end font-mono text-zinc-400">{inv.vatAmount.toLocaleString()} AED</td>
-                    <td className="p-4 text-end font-mono font-bold text-zinc-100">{inv.totalAmount.toLocaleString()} AED</td>
-                    <td className="p-4 text-end font-mono font-bold text-rose-400">{inv.balanceDue.toLocaleString()} AED</td>
+                    <td className="p-4 font-mono font-bold text-[#f5d97f]">{inv.id}</td>
+                    <td className="p-4 font-semibold text-zinc-200">{inv.customerName || 'N/A'}</td>
+                    <td className="p-4">{inv.issueDate ? new Date(inv.issueDate).toLocaleDateString() : 'N/A'}</td>
+                    <td className="p-4 text-end font-mono">{(inv.subtotal || 0).toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono text-zinc-400">{(inv.vatAmount || 0).toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono font-bold text-zinc-100">{(inv.totalAmount || 0).toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono font-bold text-rose-400">{(inv.balanceDue || 0).toLocaleString()} AED</td>
                     <td className="p-4 text-center">
                       <Badge variant={inv.status === 'paid' ? 'emerald' : inv.status === 'partially_paid' ? 'amber' : 'rose'} size="sm">
-                        {(inv.status || '').toUpperCase()}
+                        {(inv.status || 'DUE').toUpperCase()}
                       </Badge>
                     </td>
                   </tr>
@@ -201,8 +201,8 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Tab 2: Deposits */}
       {activeTab === 'deposits' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto custom-scrollbar">
-            <table className="w-full text-xs text-start min-w-[850px]">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-start">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">Deposit ID</th>
@@ -217,28 +217,28 @@ export const FinanceLedgerView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
-                {deposits.map(dep => (
+                {(deposits || []).map(dep => (
                   <tr key={dep.id} className="hover:bg-zinc-900/40 transition-colors">
                     <td className="p-4 font-mono font-bold text-[#f5d97f]">{dep.id}</td>
-                    <td className="p-4 font-semibold text-zinc-200">{dep.customerName}</td>
+                    <td className="p-4 font-semibold text-zinc-200">{dep.customerName || 'N/A'}</td>
                     <td className="p-4 font-mono text-zinc-400">{dep.contractId || 'N/A'}</td>
-                    <td className="p-4 text-end font-mono">{dep.amount.toLocaleString()} AED</td>
-                    <td className="p-4 text-end font-mono text-rose-400">{dep.appliedAmount.toLocaleString()} AED</td>
-                    <td className="p-4 text-end font-mono text-sky-400">{dep.refundedAmount.toLocaleString()} AED</td>
-                    <td className="p-4 text-end font-mono font-bold text-emerald-400">{dep.balance.toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono">{(dep.amount || 0).toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono text-rose-400">{(dep.appliedAmount || 0).toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono text-sky-400">{(dep.refundedAmount || 0).toLocaleString()} AED</td>
+                    <td className="p-4 text-end font-mono font-bold text-emerald-400">{(dep.balance || 0).toLocaleString()} AED</td>
                     <td className="p-4 text-center">
                       <Badge variant={dep.status === 'held' ? 'gold' : dep.status === 'refunded' ? 'emerald' : 'zinc'} size="sm">
-                        {(dep.status || '').toUpperCase()}
+                        {(dep.status || 'HELD').toUpperCase()}
                       </Badge>
                     </td>
                     <td className="p-4 text-end space-x-2">
-                      {dep.balance > 0 && (
+                      {(dep.balance || 0) > 0 && (
                         <>
                           <button
                             onClick={() => {
                               setSelectedDeposit(dep);
                               setDepositActionType('refund');
-                              setDepositAmountInput(dep.balance);
+                              setDepositAmountInput(dep.balance || 0);
                               setDepositActionModalOpen(true);
                             }}
                             className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25"
@@ -249,7 +249,7 @@ export const FinanceLedgerView: React.FC = () => {
                             onClick={() => {
                               setSelectedDeposit(dep);
                               setDepositActionType('apply');
-                              setDepositAmountInput(dep.balance);
+                              setDepositAmountInput(dep.balance || 0);
                               setDepositActionModalOpen(true);
                             }}
                             className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25"
@@ -270,8 +270,8 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Tab 3: Payments */}
       {activeTab === 'payments' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto custom-scrollbar">
-            <table className="w-full text-xs text-start min-w-[850px]">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-start">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">Receipt No.</th>
@@ -284,14 +284,14 @@ export const FinanceLedgerView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
-                {payments.map(pay => (
+                {(payments || []).map(pay => (
                   <tr key={pay.id} className="hover:bg-zinc-900/40 transition-colors">
-                    <td className="p-4 font-mono font-bold text-[#f5d97f]">{pay.receiptNumber}</td>
-                    <td className="p-4 font-semibold text-zinc-200">{pay.customerName}</td>
-                    <td className="p-4 uppercase font-medium">{pay.method.replace('_', ' ')}</td>
+                    <td className="p-4 font-mono font-bold text-[#f5d97f]">{pay.receiptNumber || pay.id}</td>
+                    <td className="p-4 font-semibold text-zinc-200">{pay.customerName || 'N/A'}</td>
+                    <td className="p-4 uppercase font-medium">{(pay.method || 'payment').replace(/_/g, ' ')}</td>
                     <td className="p-4 font-mono text-zinc-400">{pay.referenceNumber || 'N/A'}</td>
-                    <td className="p-4">{new Date(pay.receivedAt).toLocaleDateString()}</td>
-                    <td className="p-4 text-end font-mono font-bold text-emerald-400">{pay.amount.toLocaleString()} AED</td>
+                    <td className="p-4">{pay.receivedAt ? new Date(pay.receivedAt).toLocaleDateString() : 'N/A'}</td>
+                    <td className="p-4 text-end font-mono font-bold text-emerald-400">{(pay.amount || 0).toLocaleString()} AED</td>
                     <td className="p-4 text-center">
                       <Badge variant="emerald" size="sm">ALLOCATED</Badge>
                     </td>
@@ -321,8 +321,8 @@ export const FinanceLedgerView: React.FC = () => {
                 onChange={(e) => handleCustomerSelect(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               >
-                {customers.map(c => (
-                  <option key={c.id} value={c.id}>{c.fullName} (Balance: {c.outstandingBalance.toLocaleString()} AED)</option>
+                {(customers || []).map(c => (
+                  <option key={c.id} value={c.id}>{c.fullName || c.id} (Balance: {((c.outstandingBalance || 0)).toLocaleString()} AED)</option>
                 ))}
               </select>
             </div>
@@ -334,9 +334,10 @@ export const FinanceLedgerView: React.FC = () => {
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               >
                 <option value="bank_transfer">Bank Wire Transfer</option>
-                <option value="credit_card">Credit Card (Terminal)</option>
+                <option value="card">Credit Card (Terminal)</option>
                 <option value="cash">Cash (Safe Deposit)</option>
-                <option value="crypto">Cryptocurrency (USDT)</option>
+                <option value="online_link">Online Payment Link</option>
+                <option value="corporate_credit">Corporate Credit Account</option>
               </select>
             </div>
           </div>

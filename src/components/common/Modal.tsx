@@ -44,36 +44,37 @@ export const Modal: React.FC<ModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/80 backdrop-blur-md transition-opacity animate-fade-in"
+        className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity duration-200"
         onClick={onClose}
       />
 
       {/* Dialog box */}
       <div
-        className={`relative w-full ${maxWidthClass} bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/80 flex flex-col max-h-[90vh] z-10 animate-fade-in overflow-hidden`}
+        className={`relative w-full ${maxWidthClass} bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/90 flex flex-col max-h-[90vh] z-10 overflow-hidden transition-all duration-200`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-800/80 bg-zinc-900/60">
+        <div className="flex items-center justify-between px-6 py-4.5 border-b border-zinc-800/90 bg-zinc-900/60">
           <div>
-            <h3 className="text-lg font-semibold text-zinc-100 font-display tracking-wide">{title}</h3>
+            <h3 className="text-base font-semibold text-zinc-100 font-display tracking-tight">{title}</h3>
             {subtitle && <p className="text-xs text-zinc-400 mt-0.5">{subtitle}</p>}
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 transition-colors"
+            aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="px-6 py-6 overflow-y-auto flex-1 custom-scrollbar">
+        <div className="px-6 py-5 overflow-y-auto flex-1 custom-scrollbar">
           {children}
         </div>
 
         {/* Footer actions if any */}
         {actions && (
-          <div className="px-6 py-4 border-t border-zinc-800/80 bg-zinc-900/40 flex items-center justify-end gap-3">
+          <div className="px-6 py-3.5 border-t border-zinc-800/80 bg-zinc-900/40 flex items-center justify-end gap-2.5">
             {actions}
           </div>
         )}
