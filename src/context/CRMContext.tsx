@@ -14,6 +14,24 @@ import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
 import { apiFetch as fetch } from '../lib/apiFetch';
 import { useAuth } from './AuthContext';
 
+// Every mutation below sends its own request and reads the response itself
+// (rather than a shared wrapper further down the call stack), so this is
+// the one place that decides what "the API call failed" means. Before this
+// fix, most mutation functions called `res.json()` unconditionally and
+// trusted the result to be the created/updated entity -- on a 400/403/500,
+// the server's `{ error: "..." }` body was cast straight into state
+// (setCustomers([errorObject, ...]), etc.), mirrored to Firestore, and
+// followed by a success toast, while the thrown-away real error vanished.
+// Every call site below now goes through this so a failure surfaces as a
+// thrown Error with the server's real message, and nothing else happens.
+async function parseApiResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((body && typeof body === 'object' && body.error) || fallbackMessage);
+  }
+  return body as T;
+}
+
 interface ToastMessage {
   id: string;
   type: 'success' | 'error' | 'info';
@@ -557,14 +575,17 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     numberingConfigs, notifications, showToast, refreshFirebaseStats
   ]);
 
-  // Actions with synchronized Firestore writes
+  // Actions. The server is the sole durable writer for every entity below
+  // (see src/server/persistence.ts) -- these functions only call the API
+  // and mirror a SUCCESSFUL response into local state; they never write to
+  // Firestore directly any more, and never touch state on a failed response.
   const checkDuplicateCustomer = async (email: string, phone: string, licenseNumber?: string, idNumber?: string) => {
     const res = await fetch('/api/customers/check-duplicate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, phone, licenseNumber, idNumber })
     });
-    return res.json();
+    return parseApiResponse<{ hasDuplicate: boolean; matches: Customer[] }>(res, 'Failed to check for duplicate customers.');
   };
 
   const addCustomer = async (data: Partial<Customer>) => {
@@ -573,16 +594,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const newCust: Customer = await res.json();
-    setCustomers(prev => [newCust, ...prev.filter(c => c.id !== newCust.id)]);
-    
-    // Save to Firestore
+    let newCust: Customer;
     try {
-      await FirestoreService.set(COLLECTIONS.CUSTOMERS, newCust.id, newCust);
-    } catch (e) {
-      console.warn('Firestore write customer warning:', e);
+      newCust = await parseApiResponse<Customer>(res, 'Failed to create customer.');
+    } catch (err: any) {
+      showToast('Customer Creation Failed', err.message, 'error');
+      throw err;
     }
-    
+    setCustomers(prev => [newCust, ...prev.filter(c => c.id !== newCust.id)]);
     showToast('Customer Created', `${newCust.fullName} (${newCust.id}) has been registered.`);
     refreshFirebaseStats();
     return newCust;
@@ -594,16 +613,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated: Customer = await res.json();
-    setCustomers(prev => prev.map(c => c.id === id ? updated : c));
-    
-    // Update in Firestore
+    let updated: Customer;
     try {
-      await FirestoreService.update(COLLECTIONS.CUSTOMERS, id, updated);
-    } catch (e) {
-      console.warn('Firestore update customer warning:', e);
+      updated = await parseApiResponse<Customer>(res, 'Failed to update customer.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
     }
-
+    setCustomers(prev => prev.map(c => c.id === id ? updated : c));
     showToast('Profile Updated', `Customer profile updated successfully.`);
     return updated;
   };
@@ -614,14 +631,12 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetCustomerId: targetId })
     });
-    if (!res.ok) throw new Error('Merge failed');
-    
     try {
-      await FirestoreService.remove(COLLECTIONS.CUSTOMERS, sourceId);
-    } catch (e) {
-      console.warn('Firestore merge delete warning:', e);
+      await parseApiResponse(res, 'Merge failed.');
+    } catch (err: any) {
+      showToast('Merge Failed', err.message, 'error');
+      throw err;
     }
-    
     await fetchData();
     showToast('Records Merged', `Successfully consolidated records into ${targetId}.`);
   };
@@ -632,16 +647,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const newLead: Lead = await res.json();
-    setLeads(prev => [newLead, ...prev.filter(l => l.id !== newLead.id)]);
-    
-    // Write to Firestore
+    let newLead: Lead;
     try {
-      await FirestoreService.set(COLLECTIONS.LEADS, newLead.id, newLead);
-    } catch (e) {
-      console.warn('Firestore write lead warning:', e);
+      newLead = await parseApiResponse<Lead>(res, 'Failed to create lead.');
+    } catch (err: any) {
+      showToast('Lead Creation Failed', err.message, 'error');
+      throw err;
     }
-
+    setLeads(prev => [newLead, ...prev.filter(l => l.id !== newLead.id)]);
     showToast('Lead Created', `New inquiry from ${newLead.fullName} logged.`);
     refreshFirebaseStats();
     return newLead;
@@ -653,14 +666,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated: Lead = await res.json();
-    setLeads(prev => prev.map(l => l.id === id ? updated : l));
-    
+    let updated: Lead;
     try {
-      await FirestoreService.update(COLLECTIONS.LEADS, id, updated);
-    } catch (e) {
-      console.warn('Firestore update lead warning:', e);
+      updated = await parseApiResponse<Lead>(res, 'Failed to update lead.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
     }
+    setLeads(prev => prev.map(l => l.id === id ? updated : l));
     return updated;
   };
 
@@ -670,16 +683,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Conversion failed');
-    
+    let data: { customer: Customer };
     try {
-      await FirestoreService.set(COLLECTIONS.CUSTOMERS, data.customer.id, data.customer);
-      await FirestoreService.update(COLLECTIONS.LEADS, leadId, { status: 'won', customerId: data.customer.id });
-    } catch (e) {
-      console.warn('Firestore lead convert warning:', e);
+      data = await parseApiResponse<{ customer: Customer }>(res, 'Conversion failed.');
+    } catch (err: any) {
+      showToast('Conversion Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Lead Converted', `Successfully created Customer ${data.customer.id}.`);
     return data.customer;
@@ -691,15 +701,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const newVeh: Vehicle = await res.json();
-    setVehicles(prev => [newVeh, ...prev.filter(v => v.id !== newVeh.id)]);
-    
+    let newVeh: Vehicle;
     try {
-      await FirestoreService.set(COLLECTIONS.VEHICLES, newVeh.id, newVeh);
-    } catch (e) {
-      console.warn('Firestore write vehicle warning:', e);
+      newVeh = await parseApiResponse<Vehicle>(res, 'Failed to add vehicle.');
+    } catch (err: any) {
+      showToast('Vehicle Add Failed', err.message, 'error');
+      throw err;
     }
-
+    setVehicles(prev => [newVeh, ...prev.filter(v => v.id !== newVeh.id)]);
     showToast('Vehicle Added', `${newVeh.make} ${newVeh.model} registered to fleet.`);
     refreshFirebaseStats();
     return newVeh;
@@ -711,15 +720,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated: Vehicle = await res.json();
-    setVehicles(prev => prev.map(v => v.id === id ? updated : v));
-    
+    let updated: Vehicle;
     try {
-      await FirestoreService.update(COLLECTIONS.VEHICLES, id, updated);
-    } catch (e) {
-      console.warn('Firestore update vehicle warning:', e);
+      updated = await parseApiResponse<Vehicle>(res, 'Failed to update vehicle.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
     }
-
+    setVehicles(prev => prev.map(v => v.id === id ? updated : v));
     showToast('Fleet Updated', `Vehicle ${updated.make} ${updated.model} saved.`);
     return updated;
   };
@@ -730,17 +738,15 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plateNumber, plateCity, reason })
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
-      throw new Error(result.error || 'Plate assignment failed');
-    }
-    const updated: Vehicle = result.vehicle;
-    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    let result: { success: boolean; vehicle: Vehicle; error?: string };
     try {
-      await FirestoreService.update(COLLECTIONS.VEHICLES, vehicleId, updated);
-    } catch (e) {
-      console.warn('Firestore update vehicle plate warning:', e);
+      result = await parseApiResponse(res, 'Plate assignment failed.');
+    } catch (err: any) {
+      showToast('Plate Assignment Failed', err.message, 'error');
+      throw err;
     }
+    const updated = result.vehicle;
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
     showToast('Plate Assigned', `Vehicle ${updated.make} ${updated.model} now carries plate ${plateCity} ${plateNumber}.`);
     return updated;
   };
@@ -751,17 +757,15 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ publication })
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
-      throw new Error(result.error || 'Website publish failed');
-    }
-    const updated: Vehicle = result.vehicle;
-    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    let result: { success: boolean; vehicle: Vehicle; error?: string };
     try {
-      await FirestoreService.update(COLLECTIONS.VEHICLES, vehicleId, updated);
-    } catch (e) {
-      console.warn('Firestore update vehicle publish warning:', e);
+      result = await parseApiResponse(res, 'Website publish failed.');
+    } catch (err: any) {
+      showToast('Publish Failed', err.message, 'error');
+      throw err;
     }
+    const updated = result.vehicle;
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
     showToast(
       publication.enabled ? 'Showroom Published' : 'Showroom Hidden',
       `Vehicle ${updated.make} ${updated.model} website status is now ${publication.visibility || 'UPDATED'}.`
@@ -780,24 +784,22 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lifecycleStatus, reason, saleRecord })
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
-      throw new Error(result.error || 'Lifecycle update failed');
-    }
-    const updated: Vehicle = result.vehicle;
-    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    let result: { success: boolean; vehicle: Vehicle; error?: string };
     try {
-      await FirestoreService.update(COLLECTIONS.VEHICLES, vehicleId, updated);
-    } catch (e) {
-      console.warn('Firestore update vehicle lifecycle warning:', e);
+      result = await parseApiResponse(res, 'Lifecycle update failed.');
+    } catch (err: any) {
+      showToast('Lifecycle Update Failed', err.message, 'error');
+      throw err;
     }
+    const updated = result.vehicle;
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
     showToast('Lifecycle Updated', `Vehicle ${updated.make} ${updated.model} is now ${lifecycleStatus}.`);
     return updated;
   };
 
   const getReconciliationReport = async (): Promise<WebsiteReconciliationItem[]> => {
     const res = await fetch('/api/fleet/reconciliation/report');
-    const data = await res.json();
+    const data = await parseApiResponse<{ report: WebsiteReconciliationItem[] }>(res, 'Failed to load reconciliation report.');
     return data.report || [];
   };
 
@@ -816,15 +818,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const quote: Quotation = await res.json();
-    setQuotations(prev => [quote, ...prev.filter(q => q.id !== quote.id)]);
-    
+    let quote: Quotation;
     try {
-      await FirestoreService.set(COLLECTIONS.QUOTATIONS, quote.id, quote);
-    } catch (e) {
-      console.warn('Firestore quote write warning:', e);
+      quote = await parseApiResponse<Quotation>(res, 'Failed to create quotation.');
+    } catch (err: any) {
+      showToast('Quotation Failed', err.message, 'error');
+      throw err;
     }
-
+    setQuotations(prev => [quote, ...prev.filter(q => q.id !== quote.id)]);
     showToast('Quotation Prepared', `Quotation ${quote.id} (${(quote.grandTotal || 0).toLocaleString()} AED) created.`);
     refreshFirebaseStats();
     return quote;
@@ -836,19 +837,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
-    const data = await res.json();
-    if (!res.ok) {
-      showToast('Conflict Detected', data.error || 'Failed to convert quotation', 'error');
-      throw new Error(data.error);
-    }
-    
+    let data: { reservation: Reservation };
     try {
-      await FirestoreService.set(COLLECTIONS.RESERVATIONS, data.reservation.id, data.reservation);
-      await FirestoreService.update(COLLECTIONS.QUOTATIONS, quoteId, { status: 'accepted' });
-    } catch (e) {
-      console.warn('Firestore convert quote warning:', e);
+      data = await parseApiResponse<{ reservation: Reservation }>(res, 'Failed to convert quotation.');
+    } catch (err: any) {
+      showToast('Conflict Detected', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Reservation Confirmed', `Reservation ${data.reservation.id} created from quotation.`);
     return data.reservation;
@@ -860,18 +855,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const resData = await res.json();
-    if (!res.ok) {
-      showToast('Booking Conflict', resData.error || 'Vehicle not available', 'error');
-      throw new Error(resData.error);
-    }
-    
+    let resData: Reservation;
     try {
-      await FirestoreService.set(COLLECTIONS.RESERVATIONS, resData.id, resData);
-    } catch (e) {
-      console.warn('Firestore reservation write warning:', e);
+      resData = await parseApiResponse<Reservation>(res, 'Vehicle not available.');
+    } catch (err: any) {
+      showToast('Booking Conflict', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Reservation Booked', `Reservation ${resData.id} confirmed.`);
     refreshFirebaseStats();
@@ -884,17 +874,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { contract: Contract };
     try {
-      await FirestoreService.set(COLLECTIONS.CONTRACTS, data.contract.id, data.contract);
-      await FirestoreService.update(COLLECTIONS.RESERVATIONS, resId, { status: 'confirmed' });
-      await FirestoreService.update(COLLECTIONS.VEHICLES, data.contract.vehicleId, { status: 'reserved' });
-    } catch (e) {
-      console.warn('Firestore contract write warning:', e);
+      data = await parseApiResponse<{ contract: Contract }>(res, 'Failed to generate contract.');
+    } catch (err: any) {
+      showToast('Contract Generation Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Contract Generated', `Contract ${data.contract.id} generated.`);
     refreshFirebaseStats();
@@ -907,21 +893,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const newContract: Contract = await res.json();
-    setContracts(prev => [newContract, ...prev.filter(c => c.id !== newContract.id)]);
-
-    // Write to Firestore immediately
+    let newContract: Contract;
     try {
-      await FirestoreService.set(COLLECTIONS.CONTRACTS, newContract.id, newContract);
-      if (newContract.vehicleId) {
-        await FirestoreService.update(COLLECTIONS.VEHICLES, newContract.vehicleId, { 
-          status: newContract.status === 'active' ? 'rented' : 'reserved' 
-        });
-      }
-    } catch (e) {
-      console.warn('Firestore write contract warning:', e);
+      newContract = await parseApiResponse<Contract>(res, 'Failed to issue contract.');
+    } catch (err: any) {
+      showToast('Contract Failed', err.message, 'error');
+      throw err;
     }
-
+    setContracts(prev => [newContract, ...prev.filter(c => c.id !== newContract.id)]);
     await fetchData();
     showToast('Contract Issued', `Contract ${newContract.contractNumber} (${(newContract.grandTotal || 0).toLocaleString()} AED) active.`);
     refreshFirebaseStats();
@@ -934,16 +913,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ handoverData })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { contract: Contract };
     try {
-      await FirestoreService.update(COLLECTIONS.CONTRACTS, contractId, data.contract);
-      await FirestoreService.update(COLLECTIONS.VEHICLES, data.contract.vehicleId, { status: 'rented' });
-    } catch (e) {
-      console.warn('Firestore handover write warning:', e);
+      data = await parseApiResponse<{ contract: Contract }>(res, 'Handover failed.');
+    } catch (err: any) {
+      showToast('Handover Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Handover Completed', `Vehicle handed over. Contract is now Active.`);
     refreshFirebaseStats();
@@ -956,16 +932,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ returnData })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { contract: Contract };
     try {
-      await FirestoreService.update(COLLECTIONS.CONTRACTS, contractId, data.contract);
-      await FirestoreService.update(COLLECTIONS.VEHICLES, data.contract.vehicleId, { status: 'available' });
-    } catch (e) {
-      console.warn('Firestore return write warning:', e);
+      data = await parseApiResponse<{ contract: Contract }>(res, 'Return processing failed.');
+    } catch (err: any) {
+      showToast('Return Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Return Processed', `Vehicle returned & final settlement calculated.`);
     refreshFirebaseStats();
@@ -978,14 +951,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(paymentData)
     });
-    const pay = await res.json();
-    
+    let pay: Payment;
     try {
-      await FirestoreService.set(COLLECTIONS.PAYMENTS, pay.id, pay);
-    } catch (e) {
-      console.warn('Firestore payment write warning:', e);
+      pay = await parseApiResponse<Payment>(res, 'Failed to record payment.');
+    } catch (err: any) {
+      showToast('Payment Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Payment Recorded', `Payment of ${(pay.amount || 0).toLocaleString()} AED allocated. Receipt: ${pay.receiptNumber}`);
     refreshFirebaseStats();
@@ -998,15 +970,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ applyAmount: amount, reason })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { deposit: Deposit };
     try {
-      await FirestoreService.update(COLLECTIONS.DEPOSITS, depositId, data.deposit);
-    } catch (e) {
-      console.warn('Firestore apply deposit warning:', e);
+      data = await parseApiResponse<{ deposit: Deposit }>(res, 'Failed to apply deposit.');
+    } catch (err: any) {
+      showToast('Deposit Application Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Deposit Applied', `Applied ${(amount || 0).toLocaleString()} AED against outstanding charges.`);
     return data.deposit;
@@ -1018,15 +988,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refundAmount: amount })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { deposit: Deposit };
     try {
-      await FirestoreService.update(COLLECTIONS.DEPOSITS, depositId, data.deposit);
-    } catch (e) {
-      console.warn('Firestore refund deposit warning:', e);
+      data = await parseApiResponse<{ deposit: Deposit }>(res, 'Failed to refund deposit.');
+    } catch (err: any) {
+      showToast('Deposit Refund Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Deposit Refunded', `Refund of ${(amount || 0).toLocaleString()} AED processed.`);
     return data.deposit;
@@ -1038,15 +1006,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(batchData)
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { batch: BankImportBatch & { totalTransactions: number; bankName: string } };
     try {
-      await FirestoreService.set(COLLECTIONS.BANK_BATCHES, data.batch.id, data.batch);
-    } catch (e) {
-      console.warn('Firestore bank batch write warning:', e);
+      data = await parseApiResponse(res, 'Failed to import bank statement.');
+    } catch (err: any) {
+      showToast('Import Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Statement Imported', `Imported ${data.batch.totalTransactions} transactions from ${data.batch.bankName}.`);
   };
@@ -1057,15 +1023,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetRecordType, targetRecordId })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    
+    let data: { transaction: BankTransaction };
     try {
-      await FirestoreService.update(COLLECTIONS.BANK_TRANSACTIONS, txnId, data.transaction);
-    } catch (e) {
-      console.warn('Firestore txn reconcile warning:', e);
+      data = await parseApiResponse<{ transaction: BankTransaction }>(res, 'Failed to reconcile transaction.');
+    } catch (err: any) {
+      showToast('Reconciliation Failed', err.message, 'error');
+      throw err;
     }
-
     await fetchData();
     showToast('Transaction Reconciled', `Reconciled ${data.transaction.reference} successfully.`);
   };
@@ -1110,17 +1074,15 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const record = await res.json();
-    if (!res.ok) throw new Error(record.error);
-    setTollTransactions(prev => [record, ...prev]);
-
+    let record: TollTransaction;
     try {
-      await FirestoreService.set(COLLECTIONS.TOLL_TRANSACTIONS, record.id, record);
-    } catch (e) {
-      console.warn('Firestore toll transaction write warning:', e);
+      record = await parseApiResponse<TollTransaction>(res, 'Failed to log toll/parking entry.');
+    } catch (err: any) {
+      showToast('Entry Failed', err.message, 'error');
+      throw err;
     }
-
-    showToast('Transaction Logged', `${(record.type || '').toUpperCase()} entry ${record.id} saved -- ${record.totalChargedToCustomer} AED billed to customer.`);
+    setTollTransactions(prev => [record, ...prev]);
+    showToast('Transaction Logged', `${((record as any).type || '').toUpperCase()} entry ${record.id} saved -- ${(record as any).totalChargedToCustomer} AED billed to customer.`);
     return record;
   };
 
@@ -1130,31 +1092,26 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated = await res.json();
-    if (!res.ok) throw new Error(updated.error);
-    setTollTransactions(prev => prev.map(t => t.id === id ? updated : t));
-
+    let updated: TollTransaction;
     try {
-      await FirestoreService.update(COLLECTIONS.TOLL_TRANSACTIONS, id, updated);
-    } catch (e) {
-      console.warn('Firestore toll transaction update warning:', e);
+      updated = await parseApiResponse<TollTransaction>(res, 'Failed to update toll/parking entry.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
     }
-
+    setTollTransactions(prev => prev.map(t => t.id === id ? updated : t));
     return updated;
   };
 
   const deleteTollTransaction = async (id: string) => {
     const res = await fetch(`/api/tolls/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    setTollTransactions(prev => prev.filter(t => t.id !== id));
-
     try {
-      await FirestoreService.remove(COLLECTIONS.TOLL_TRANSACTIONS, id);
-    } catch (e) {
-      console.warn('Firestore toll transaction delete warning:', e);
+      await parseApiResponse(res, 'Failed to delete toll/parking entry.');
+    } catch (err: any) {
+      showToast('Delete Failed', err.message, 'error');
+      throw err;
     }
-
+    setTollTransactions(prev => prev.filter(t => t.id !== id));
     showToast('Transaction Removed', 'The toll/parking entry was deleted.');
   };
 
@@ -1164,31 +1121,32 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...file, confirm })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    return data as { batch: TollImportBatch; transactions: TollTransaction[]; warnings: string[] };
+    return parseApiResponse<{ batch: TollImportBatch; transactions: TollTransaction[]; warnings: string[] }>(res, 'Toll import failed.');
   };
 
   // Parses the file and returns what WOULD be imported, without saving --
   // the import UI must show this for the user to review before committing,
   // since statement parsing (especially PDF) is best-effort.
   const previewTollImport = async (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }) => {
-    return runTollImport(file, false);
+    try {
+      return await runTollImport(file, false);
+    } catch (err: any) {
+      showToast('Preview Failed', err.message, 'error');
+      throw err;
+    }
   };
 
   const confirmTollImport = async (file: { fileName: string; fileBase64: string; type: 'salik' | 'darb' }) => {
-    const data = await runTollImport(file, true);
+    let data: { batch: TollImportBatch; transactions: TollTransaction[]; warnings: string[] };
+    try {
+      data = await runTollImport(file, true);
+    } catch (err: any) {
+      showToast('Import Failed', err.message, 'error');
+      throw err;
+    }
     setTollImportBatches(prev => [data.batch, ...prev]);
     setTollTransactions(prev => [...data.transactions, ...prev]);
-
-    try {
-      await FirestoreService.set(COLLECTIONS.TOLL_IMPORT_BATCHES, data.batch.id, data.batch);
-      await Promise.all(data.transactions.map(t => FirestoreService.set(COLLECTIONS.TOLL_TRANSACTIONS, t.id, t)));
-    } catch (e) {
-      console.warn('Firestore toll import write warning:', e);
-    }
-
-    showToast('Statement Imported', `Imported ${data.batch.totalTransactions} transaction(s) from ${data.batch.fileName} (${data.batch.matchedCount} auto-matched to a contract).`);
+    showToast('Statement Imported', `Imported ${(data.batch as any).totalTransactions} transaction(s) from ${(data.batch as any).fileName} (${(data.batch as any).matchedCount} auto-matched to a contract).`);
     return data;
   };
 
@@ -1198,8 +1156,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated = await res.json();
-    if (!res.ok) throw new Error(updated.error);
+    let updated: TollPricingConfig;
+    try {
+      updated = await parseApiResponse<TollPricingConfig>(res, 'Failed to update toll pricing.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
+    }
     setTollPricingConfig(updated);
     showToast('Pricing Updated', 'Salik/Darb/Parking default rates were updated.');
     return updated;
@@ -1217,8 +1180,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated = await res.json();
-    if (!res.ok) throw new Error(updated.error);
+    let updated: NotificationEventConfig;
+    try {
+      updated = await parseApiResponse<NotificationEventConfig>(res, 'Failed to update notification config.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
+    }
     setNotificationEventConfigs(prev => prev.map(c => c.eventKey === eventKey ? updated : c));
     return updated;
   };
@@ -1229,8 +1197,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled })
     });
-    const updated = await res.json();
-    if (!res.ok) throw new Error(updated.error);
+    let updated: CustomerNotificationConfig;
+    try {
+      updated = await parseApiResponse<CustomerNotificationConfig>(res, 'Failed to update notification config.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
+    }
     setCustomerNotificationConfigs(prev => prev.map(c => c.eventKey === eventKey ? updated : c));
     return updated;
   };
@@ -1241,26 +1214,36 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const reminder = await res.json();
-    if (!res.ok) throw new Error(reminder.error);
+    let reminder: CustomReminder;
+    try {
+      reminder = await parseApiResponse<CustomReminder>(res, 'Failed to send reminder.');
+    } catch (err: any) {
+      showToast('Reminder Failed', err.message, 'error');
+      throw err;
+    }
     setCustomReminders(prev => [reminder, ...prev]);
     showToast(
-      reminder.status === 'not_configured' ? 'Reminder Saved (Not Sent)' : 'Reminder Sent',
-      reminder.status === 'not_configured' ? 'WhatsApp isn\'t connected yet -- the reminder was saved but not dispatched.' : `Sent to ${data.broadcastToGroup ? 'the group and ' : ''}${data.staffRecipientIds.length} staff member(s).`
+      (reminder as any).status === 'not_configured' ? 'Reminder Saved (Not Sent)' : 'Reminder Sent',
+      (reminder as any).status === 'not_configured' ? 'WhatsApp isn\'t connected yet -- the reminder was saved but not dispatched.' : `Sent to ${data.broadcastToGroup ? 'the group and ' : ''}${data.staffRecipientIds.length} staff member(s).`
     );
     return reminder;
   };
 
   const runNotificationChecksNow = async () => {
     const res = await fetch('/api/notifications/run-checks', { method: 'POST' });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error);
+    let result: { ranAt: string; alertsFired: number; details: string[] };
+    try {
+      result = await parseApiResponse(res, 'Notification check sweep failed.');
+    } catch (err: any) {
+      showToast('Checks Failed', err.message, 'error');
+      throw err;
+    }
     showToast('Checks Complete', `${result.alertsFired} alert(s) fired.`);
     return result;
   };
 
   const refreshWhatsappStatus = async () => {
-    const res = await fetch('/api/whatsapp/status').then(r => r.json()).catch(() => null);
+    const res = await fetch('/api/whatsapp/status').then(r => r.ok ? r.json() : null).catch(() => null);
     if (res) setWhatsappStatus(res);
   };
 
@@ -1270,8 +1253,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ newEndDateTime })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    let data: { contract: Contract; extraDays: number; extraAmount: number };
+    try {
+      data = await parseApiResponse(res, 'Failed to extend contract.');
+    } catch (err: any) {
+      showToast('Extension Failed', err.message, 'error');
+      throw err;
+    }
     setContracts(prev => prev.map(c => c.id === contractId ? data.contract : c));
     showToast('Contract Extended', `+${data.extraDays} day(s), +${data.extraAmount.toLocaleString()} AED.`);
     return data;
@@ -1283,8 +1271,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirmText })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    let data: { success: boolean; deletedDocs: number };
+    try {
+      data = await parseApiResponse(res, 'Failed to reset transactional data.');
+    } catch (err: any) {
+      showToast('Reset Failed', err.message, 'error');
+      throw err;
+    }
     // Every list this app renders should read empty immediately rather than
     // waiting on the next full fetchData() poll.
     setCustomers([]); setLeads([]); setOpportunities([]); setVehicles([]);
@@ -1314,8 +1307,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, language })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'AI query failed.');
+    let data: { answer: string; confidence: number };
+    try {
+      data = await parseApiResponse(res, 'AI query failed.');
+    } catch (err: any) {
+      showToast('AI Query Failed', err.message, 'error');
+      throw err;
+    }
     return { text: data.answer, confidence: data.confidence };
   };
 
@@ -1325,8 +1323,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ customerId, language })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'AI customer summary failed.');
+    let data: { summary: string; confidence: number };
+    try {
+      data = await parseApiResponse(res, 'AI customer summary failed.');
+    } catch (err: any) {
+      showToast('AI Summary Failed', err.message, 'error');
+      throw err;
+    }
     return { summary: data.summary, confidence: data.confidence };
   };
 
@@ -1336,15 +1339,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(taskData)
     });
-    const task = await res.json();
-    setTasks(prev => [task, ...prev]);
-    
+    let task: CRMTask;
     try {
-      await FirestoreService.set(COLLECTIONS.TASKS, task.id, task);
-    } catch (e) {
-      console.warn('Firestore task write warning:', e);
+      task = await parseApiResponse<CRMTask>(res, 'Failed to create task.');
+    } catch (err: any) {
+      showToast('Task Creation Failed', err.message, 'error');
+      throw err;
     }
-
+    setTasks(prev => [task, ...prev]);
     showToast('Task Created', task.title);
     return task;
   };
@@ -1355,14 +1357,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const updated = await res.json();
-    setTasks(prev => prev.map(t => t.id === id ? updated : t));
-    
+    let updated: CRMTask;
     try {
-      await FirestoreService.update(COLLECTIONS.TASKS, id, updated);
-    } catch (e) {
-      console.warn('Firestore task update warning:', e);
+      updated = await parseApiResponse<CRMTask>(res, 'Failed to update task.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
     }
+    setTasks(prev => prev.map(t => t.id === id ? updated : t));
     return updated;
   };
 
@@ -1372,15 +1374,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(commData)
     });
-    const comm = await res.json();
-    setCommunications(prev => [comm, ...prev]);
-    
+    let comm: Communication;
     try {
-      await FirestoreService.set(COLLECTIONS.COMMUNICATIONS, comm.id, comm);
-    } catch (e) {
-      console.warn('Firestore comm write warning:', e);
+      comm = await parseApiResponse<Communication>(res, 'Failed to log activity.');
+    } catch (err: any) {
+      showToast('Logging Failed', err.message, 'error');
+      throw err;
     }
-
+    setCommunications(prev => [comm, ...prev]);
     showToast('Activity Logged', `Logged ${comm.channel} activity.`);
     return comm;
   };
@@ -1391,15 +1392,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(docData)
     });
-    const doc = await res.json();
-    setDocuments(prev => [doc, ...prev]);
-    
+    let doc: CRMDocument;
     try {
-      await FirestoreService.set(COLLECTIONS.DOCUMENTS, doc.id, doc);
-    } catch (e) {
-      console.warn('Firestore doc write warning:', e);
+      doc = await parseApiResponse<CRMDocument>(res, 'Failed to upload document.');
+    } catch (err: any) {
+      showToast('Upload Failed', err.message, 'error');
+      throw err;
     }
-
+    setDocuments(prev => [doc, ...prev]);
     showToast('Document Uploaded', doc.title);
     return doc;
   };
