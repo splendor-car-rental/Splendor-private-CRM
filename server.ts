@@ -7,6 +7,7 @@ import type { Lead, Contract, Customer, Quotation, Reservation, TollType } from 
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
+import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
 import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
@@ -2355,7 +2356,17 @@ app.delete('/api/tolls/:id', requireRole('ceo', 'admin', 'finance'), (req, res) 
 // base64 (same pattern as /api/upload) plus which provider it's from.
 // Always returns a preview batch for the admin to confirm -- imported
 // financial data is never silently trusted, especially from a PDF.
-app.post('/api/tolls/import', async (req, res) => {
+//
+// Restricted to the same roles the app already trusts with toll/finance
+// operations (matches DELETE /api/tolls/:id below), and the decoded upload
+// is size-capped and magic-byte-checked BEFORE it ever reaches XLSX.read()
+// or pdf-parse -- see src/server/tollImportGuard.ts. xlsx@0.18.5 (the only
+// version ever published to npm) has known, currently unpatched Prototype
+// Pollution / ReDoS advisories with no fix on the registry; this does not
+// remove that library-level risk, it only narrows who can reach the parser
+// and what can reach it before the parser runs. Tracked separately for a
+// controlled library migration.
+app.post('/api/tolls/import', requireRole('ceo', 'admin', 'finance'), async (req, res) => {
   try {
     const { type, fileName, fileBase64, uploadedBy, confirm } = req.body || {};
     if (!type || !['salik', 'darb'].includes(type)) {
@@ -2366,7 +2377,25 @@ app.post('/api/tolls/import', async (req, res) => {
     }
 
     const buffer = Buffer.from(String(fileBase64).split(',').pop() || '', 'base64');
-    const isPdf = /\.pdf$/i.test(fileName || '') || buffer.slice(0, 4).toString('utf8') === '%PDF';
+
+    if (buffer.length === 0) {
+      return res.status(400).json({ error: 'Uploaded file is empty.' });
+    }
+    if (buffer.length > TOLL_IMPORT_MAX_FILE_BYTES) {
+      return res.status(400).json({
+        error: `File is too large (${Math.round(TOLL_IMPORT_MAX_FILE_BYTES / (1024 * 1024))}MB max).`
+      });
+    }
+
+    // Classified by the file's own bytes, never by fileName -- see the
+    // function's doc comment for why the client-supplied name isn't trusted.
+    const kind = detectTollImportFileKind(buffer);
+    if (!kind) {
+      return res.status(400).json({
+        error: 'Unsupported or unrecognized file format. Please upload a Salik/Darb Excel (.xlsx/.xls) or PDF export.'
+      });
+    }
+    const isPdf = kind === 'pdf';
 
     let parsed: { rows: ParsedTollRow[]; meta: any; warnings: string[] };
     let fileFormat: 'excel' | 'pdf' | 'csv' = 'excel';
