@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
@@ -27,7 +28,18 @@ const PORT = 3000;
 // file size by ~33%, so this needs headroom above the 10MB max file size
 // enforced in that handler, or large-but-valid uploads would be rejected
 // here by the body parser before ever reaching that check.
-app.use(express.json({ limit: '15mb' }));
+//
+// `verify` stashes the exact raw bytes Express received on req.rawBody --
+// needed ONLY by the WhatsApp webhook (POST /api/whatsapp/webhook) to
+// recompute the X-Hub-Signature-256 HMAC over the untouched body; a
+// signature computed over JSON.stringify(req.body) would silently fail
+// the moment key order or whitespace differs from what Meta actually sent.
+app.use(express.json({
+  limit: '15mb',
+  verify: (req: express.Request, _res, buf) => {
+    (req as any).rawBody = buf;
+  }
+}));
 
 // Baseline hardening headers on every API response (Vercel's own
 // vercel.json "headers" block covers the statically-served frontend, which
@@ -100,7 +112,23 @@ app.use('/api', (req, res, next) => {
   // /notifications/run-checks has its own auth logic (Vercel Cron secret OR
   // a signed-in Admin/CEO) since Vercel's scheduled invocations can't carry
   // a Firebase ID token -- see the route handler below.
-  if (req.path === '/health' || req.path.startsWith('/public/') || req.path === '/tests/run-all' || req.path === '/notifications/run-checks') {
+  //
+  // /whatsapp/webhook is called directly by Meta's servers, which never
+  // carry a Firebase ID token -- it CANNOT go through requireAuth (before
+  // this exemption it silently 401'd on every real Meta request, meaning
+  // the webhook was completely non-functional in production despite
+  // looking correctly implemented). Its trust boundary is entirely
+  // different and enforced in the route handlers themselves: the GET
+  // handshake checks hub.verify_token, and the POST delivery handler
+  // verifies the X-Hub-Signature-256 HMAC below -- see that handler's
+  // comment for why an exemption here is safe.
+  if (
+    req.path === '/health' ||
+    req.path.startsWith('/public/') ||
+    req.path === '/tests/run-all' ||
+    req.path === '/notifications/run-checks' ||
+    req.path === '/whatsapp/webhook'
+  ) {
     return next();
   }
   return requireAuth(req, res, next);
@@ -3047,18 +3075,20 @@ app.get('/api/whatsapp/message-log', (req, res) => {
 });
 
 // WhatsApp Cloud API webhook -- Meta calls these two endpoints directly (no
-// session cookie or bearer token of ours is ever attached), so they must
-// stay outside requireAuth/requireRole entirely. Security here is
-// WHATSAPP_WEBHOOK_VERIFY_TOKEN on the one-time GET handshake, not our own
-// login system -- exactly like WHATSAPP_ACCESS_TOKEN/WHATSAPP_PHONE_NUMBER_ID
-// in src/server/whatsapp.ts, this is configured purely through an
-// environment variable and needs no code change once it's set.
-//
-// GET: Meta's one-time subscription verification. It sends hub.mode,
-// hub.verify_token and hub.challenge as query params; we must echo back
-// hub.challenge as plain text with HTTP 200 only if hub.verify_token matches
-// our own secret, or refuse with 403 otherwise -- this is the entire trust
-// boundary for the webhook, so it isn't optional.
+// session cookie or bearer token of ours is ever attached), so both are
+// exempted from requireAuth in the /api auth gate above rather than being
+// protected by our own login system (before that exemption, Meta's real
+// requests silently 401'd here -- the webhook was completely unreachable
+// in production despite looking correctly implemented). Trust is
+// established differently for each:
+//  - GET (one-time subscription handshake): hub.verify_token must match
+//    WHATSAPP_WEBHOOK_VERIFY_TOKEN.
+//  - POST (every message/delivery-status event): the X-Hub-Signature-256
+//    header must be a valid HMAC-SHA256 of the exact raw request body,
+//    keyed with WHATSAPP_APP_SECRET -- Meta signs every webhook delivery
+//    this way. Without this check, exempting the route from requireAuth
+//    would make it genuinely public: anyone could POST a fabricated
+//    payload and have it durably recorded as a real customer message.
 app.get('/api/whatsapp/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -3072,37 +3102,121 @@ app.get('/api/whatsapp/webhook', (req, res) => {
   }
 });
 
+/**
+ * Verifies Meta's X-Hub-Signature-256 header against the untouched raw
+ * request body (captured by express.json()'s `verify` option above) using
+ * a constant-time compare -- a naive `===` string compare would leak
+ * timing information an attacker could use to forge a valid signature
+ * byte-by-byte. Returns false (never throws) if WHATSAPP_APP_SECRET isn't
+ * configured, the header is missing/malformed, or the signature doesn't
+ * match.
+ */
+function verifyWhatsAppWebhookSignature(req: express.Request): boolean {
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+  const rawBody: Buffer | undefined = (req as any).rawBody;
+  const signatureHeader = req.headers['x-hub-signature-256'];
+  if (!appSecret || !rawBody || typeof signatureHeader !== 'string' || !signatureHeader.startsWith('sha256=')) {
+    return false;
+  }
+
+  const expectedHex = crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+  const providedHex = signatureHeader.slice('sha256='.length);
+
+  let expectedBuf: Buffer, providedBuf: Buffer;
+  try {
+    expectedBuf = Buffer.from(expectedHex, 'hex');
+    providedBuf = Buffer.from(providedHex, 'hex');
+  } catch {
+    return false;
+  }
+  if (expectedBuf.length !== providedBuf.length) return false;
+  return crypto.timingSafeEqual(expectedBuf, providedBuf);
+}
+
+/**
+ * Durably records one inbound webhook event (a message or a status update)
+ * keyed by an id derived from Meta's own message/status id, so a retried
+ * delivery of the SAME event (Meta retries on anything but a fast 200) is
+ * a safe no-op instead of a duplicate record. Returns 'stored' on a fresh
+ * write, 'duplicate' if this exact event was already recorded (including
+ * the race where two near-simultaneous deliveries both pass the
+ * pre-check -- Firestore's .create() rejects the loser with ALREADY_EXISTS
+ * rather than silently overwriting).
+ */
+async function recordWhatsAppInboundEvent(eventId: string, data: Record<string, unknown>): Promise<'stored' | 'duplicate' | 'skipped'> {
+  if (admin.apps.length === 0) return 'skipped';
+  const ref = admin.firestore().collection('whatsapp_inbound_events').doc(eventId);
+  const existing = await ref.get();
+  if (existing.exists) return 'duplicate';
+  try {
+    await createDurable('whatsapp_inbound_events', { id: eventId, ...data });
+    return 'stored';
+  } catch (err) {
+    const cause: any = err instanceof PersistenceError ? (err as any).cause : null;
+    if (cause && (cause.code === 6 || /ALREADY_EXISTS/i.test(String(cause.message || '')))) {
+      return 'duplicate';
+    }
+    throw err;
+  }
+}
+
 // POST: every incoming customer message and every outbound delivery-status
 // update (sent/delivered/read/failed) for our number arrives here. Meta
-// requires a fast HTTP 200 on every delivery -- it retries with backoff, and
-// eventually disables the webhook, if we don't -- so this always
-// acknowledges immediately and only logs for now. Turning incoming messages
-// into a real in-app inbox/reply flow (a new WhatsAppMessageLogEntry shape
-// with direction/from, a UI thread view, etc.) is a separate, larger
-// feature to build once basic sending is confirmed working end-to-end.
-app.post('/api/whatsapp/webhook', (req, res) => {
-  try {
-    const entry = req.body?.entry?.[0];
-    const change = entry?.changes?.[0]?.value;
-    const messages = change?.messages;
-    const statuses = change?.statuses;
+// requires a fast HTTP 200 on every delivery -- it retries with backoff,
+// and eventually disables the webhook, if we don't -- but a fast ack must
+// never come at the cost of losing the event: each one is durably
+// persisted (not just console.log'd) BEFORE this responds. If persistence
+// itself fails, asyncHandler lets that propagate to the global error
+// middleware (a 500), which is the correct outcome here -- Meta will retry
+// the same event, and recordWhatsAppInboundEvent's idempotency key makes
+// that retry safe once the write actually succeeds. Turning incoming
+// messages into a real in-app inbox/reply flow (a UI thread view, etc.) is
+// a separate, larger feature to build once this durable log is in place.
+app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
+  if (!verifyWhatsAppWebhookSignature(req)) {
+    console.warn('[whatsapp webhook] rejected a delivery with a missing or invalid X-Hub-Signature-256.');
+    return res.sendStatus(403);
+  }
 
-    if (Array.isArray(messages)) {
-      for (const m of messages) {
-        console.log(`[whatsapp webhook] incoming message from ${m.from}: ${m.text?.body ?? `[${m.type}]`}`);
-      }
+  const entry = req.body?.entry?.[0];
+  const change = entry?.changes?.[0]?.value;
+  const messages = change?.messages;
+  const statuses = change?.statuses;
+  const now = new Date().toISOString();
+
+  if (Array.isArray(messages)) {
+    for (const m of messages) {
+      console.log(`[whatsapp webhook] incoming message from ${m.from}: ${m.text?.body ?? `[${m.type}]`}`);
+      await recordWhatsAppInboundEvent(`msg_${m.id}`, {
+        direction: 'inbound',
+        messageId: m.id,
+        phone: m.from,
+        type: m.type || 'unknown',
+        body: m.text?.body || null,
+        status: 'received',
+        receivedAt: now,
+        metadata: m
+      });
     }
-    if (Array.isArray(statuses)) {
-      for (const s of statuses) {
-        console.log(`[whatsapp webhook] status update: message ${s.id} -> ${s.status}`);
-      }
+  }
+  if (Array.isArray(statuses)) {
+    for (const s of statuses) {
+      console.log(`[whatsapp webhook] status update: message ${s.id} -> ${s.status}`);
+      await recordWhatsAppInboundEvent(`status_${s.id}_${s.status}`, {
+        direction: 'status',
+        messageId: s.id,
+        phone: s.recipient_id || null,
+        type: 'status',
+        status: s.status,
+        errorMessage: s.errors?.[0]?.title || null,
+        receivedAt: now,
+        metadata: s
+      });
     }
-  } catch (error) {
-    console.error('[whatsapp webhook] failed to process payload:', error);
   }
 
   res.sendStatus(200);
-});
+}));
 
 app.get('/api/custom-reminders', (req, res) => {
   res.json(globalStore.customReminders);
