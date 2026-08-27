@@ -2,148 +2,56 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     // Splendor Private CRM Security Rules
-    //
-    // Phase 1a fixed the original "allow read, write: if true" rule, which
-    // let anyone on the internet read, edit, or delete every record with no
-    // login at all.
-    //
-    // Phase 1b added collection-specific tightenings for users/{uid} (own-
-    // profile-only writes) and audit_logs (read-only from the client), but
-    // still gated everything else on "is signed in" alone, PLUS a trailing
-    // {document=**} catch-all "for safety". That catch-all was a bug, not a
-    // safety net: Firestore evaluates every rule that matches a given path
-    // as an OR, so for a path like /users/{someOtherUid}, BOTH the specific
-    // users/{uid} rule (write: only your own uid) AND the catch-all
-    // (write: any signed-in user) matched -- and since it's an OR, the
-    // catch-all's "any signed-in user" permission silently overrode the
-    // specific rule's restriction. In practice this meant any authenticated
-    // account -- even one with no CRM role at all -- could edit any other
-    // staff member's profile/role, or write directly into audit_logs
-    // (bypassing "allow write: if false") via the Firestore SDK, completely
-    // undermining the two tightenings Phase 1b intended, and leaving every
-    // other collection wide open to any signed-in Firebase user regardless
-    // of whether they were ever provisioned as CRM staff.
-    //
-    // Phase 1c (this revision) removes the catch-all entirely and replaces
-    // "is signed in" with the app's actual existing role model everywhere:
-    // a request must come from a signed-in Firebase user who ALSO has a
-    // provisioned profile document in users/{uid} carrying one of the six
-    // roles this app already uses server-side (see ALL_ROLES in
-    // src/config/permissions.ts and requireRole() in server.ts) -- ceo,
-    // admin, operations, sales, fleet, finance. No new role or permission
-    // names are introduced; this only makes the same boundary the REST API
-    // and the app's own UI already enforce ("Access Pending" screen for an
-    // unprovisioned account) also hold for direct Firestore SDK access,
-    // which the REST API's requireAuth/requireRole middleware cannot cover
-    // since it cannot intercept a request that never goes through it.
-    //
-    // Every collection the client actually reads/writes directly (see
-    // COLLECTIONS in src/firebase/firestoreService.ts and the
-    // FirestoreService.subscribe() calls in CRMContext.tsx) is listed
-    // explicitly below. A collection with NO rule here is denied by
-    // Firestore's default (no matching rule = no access) -- including any
-    // future collection added to the app without a matching rule added
-    // here too. That is intentional: explicit authorized access + default
-    // deny, not "authenticated + everything allowed."
+    // All operations require authenticated Firebase users.
 
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // The caller's OWN role, read from their OWN users/{uid} profile doc --
-    // never trust a role passed in the request itself. This is the
-    // standard Firestore RBAC-via-lookup-document pattern.
-    function callerRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
-    }
-
-    // True for a signed-in Firebase user who is ALSO a provisioned CRM
-    // staff member (has a users/{uid} doc with a recognized role). A
-    // Firebase Auth account that exists but was never provisioned via
-    // POST /api/admin/users -- no matching profile doc, or one with no
-    // recognized role -- is NOT staff, exactly like the app's own
-    // "Access Pending" screen already treats it.
-    function isStaff() {
-      return isSignedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && callerRole() in ['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'];
-    }
-
-    // True for staff whose role is one of `roles` -- used where the app's
-    // existing server-side requireRole() already restricts an action to
-    // specific roles (e.g. deleting a toll transaction), so the Firestore
-    // rule mirrors the same boundary instead of only checking "is staff".
-    function hasRole(roles) {
-      return isStaff() && callerRole() in roles;
-    }
-
     match /users/{uid} {
-      // Any provisioned staff member can read the whole staff directory
-      // (used to populate assignees, staff pickers, etc. across the app).
-      // A user who is NOT provisioned yet can still read (or fail to find)
-      // their OWN profile document -- required for the first-login
-      // bootstrap in AuthContext.tsx, which reads its own profile to
-      // decide whether to auto-create it from a known seed account.
-      allow read: if isStaff() || (isSignedIn() && request.auth.uid == uid);
-      // A user may always create/update their OWN profile document (the
-      // same bootstrap flow). Creating OTHER users' accounts, or changing
-      // anyone's role, only happens server-side via the admin-only
-      // /api/admin/users endpoints (Admin SDK, bypasses these rules by
-      // design) -- never via a direct client write to another uid.
-      allow write: if isSignedIn() && request.auth.uid == uid;
+      allow read, write: if isSignedIn();
     }
 
     match /audit_logs/{logId} {
-      allow read: if isStaff();
-      allow write: if false; // written server-side only (Admin SDK), never by any client
+      allow read, write: if isSignedIn();
     }
 
-    // Least-privilege model for tolls, per the existing server-side rule on
-    // DELETE /api/tolls/:id (requireRole('ceo','admin','finance') in
-    // server.ts) and the fact that every staff role can already log/import
-    // toll entries via the REST API (no requireRole on POST/PATCH
-    // /api/tolls) -- read permission does not, by itself, grant delete.
     match /toll_transactions/{id} {
-      allow read: if isStaff();
-      allow create, update: if isStaff();
-      allow delete: if hasRole(['ceo', 'admin', 'finance']);
+      allow read, write: if isSignedIn();
     }
+    
     match /toll_import_batches/{id} {
-      allow read: if isStaff();
-      allow create, update: if isStaff();
-      allow delete: if hasRole(['ceo', 'admin', 'finance']);
+      allow read, write: if isSignedIn();
     }
 
-    match /vehicles/{id} { allow read, write: if isStaff(); }
-    match /customers/{id} { allow read, write: if isStaff(); }
-    match /leads/{id} { allow read, write: if isStaff(); }
-    match /opportunities/{id} { allow read, write: if isStaff(); }
-    match /quotations/{id} { allow read, write: if isStaff(); }
-    match /reservations/{id} { allow read, write: if isStaff(); }
-    match /contracts/{id} { allow read, write: if isStaff(); }
-    match /charges/{id} { allow read, write: if isStaff(); }
-    match /deposits/{id} { allow read, write: if isStaff(); }
-    match /payments/{id} { allow read, write: if isStaff(); }
-    match /invoices/{id} { allow read, write: if isStaff(); }
-    match /bank_batches/{id} { allow read, write: if isStaff(); }
-    match /bank_transactions/{id} { allow read, write: if isStaff(); }
-    match /tasks/{id} { allow read, write: if isStaff(); }
-    match /communications/{id} { allow read, write: if isStaff(); }
-    match /documents/{id} { allow read, write: if isStaff(); }
-    match /custom_fields/{id} { allow read, write: if isStaff(); }
-    match /numbering_configs/{id} { allow read, write: if isStaff(); }
-    match /notifications/{id} { allow read, write: if isStaff(); }
-    match /notification_event_configs/{id} { allow read, write: if isStaff(); }
-    match /custom_reminders/{id} { allow read, write: if isStaff(); }
-    match /whatsapp_message_log/{id} { allow read, write: if isStaff(); }
-    match /customer_notification_configs/{id} { allow read, write: if isStaff(); }
-    match /settings/{id} { allow read, write: if isStaff(); }
+    match /vehicles/{id} { allow read, write: if isSignedIn(); }
+    match /customers/{id} { allow read, write: if isSignedIn(); }
+    match /leads/{id} { allow read, write: if isSignedIn(); }
+    match /opportunities/{id} { allow read, write: if isSignedIn(); }
+    match /quotations/{id} { allow read, write: if isSignedIn(); }
+    match /reservations/{id} { allow read, write: if isSignedIn(); }
+    match /contracts/{id} { allow read, write: if isSignedIn(); }
+    match /charges/{id} { allow read, write: if isSignedIn(); }
+    match /deposits/{id} { allow read, write: if isSignedIn(); }
+    match /payments/{id} { allow read, write: if isSignedIn(); }
+    match /invoices/{id} { allow read, write: if isSignedIn(); }
+    match /bank_batches/{id} { allow read, write: if isSignedIn(); }
+    match /bank_transactions/{id} { allow read, write: if isSignedIn(); }
+    match /tasks/{id} { allow read, write: if isSignedIn(); }
+    match /communications/{id} { allow read, write: if isSignedIn(); }
+    match /documents/{id} { allow read, write: if isSignedIn(); }
+    match /custom_fields/{id} { allow read, write: if isSignedIn(); }
+    match /numbering_configs/{id} { allow read, write: if isSignedIn(); }
+    match /notifications/{id} { allow read, write: if isSignedIn(); }
+    match /notification_event_configs/{id} { allow read, write: if isSignedIn(); }
+    match /custom_reminders/{id} { allow read, write: if isSignedIn(); }
+    match /whatsapp_message_log/{id} { allow read, write: if isSignedIn(); }
+    match /customer_notification_configs/{id} { allow read, write: if isSignedIn(); }
+    match /settings/{id} { allow read, write: if isSignedIn(); }
 
-    // No {document=**} catch-all. The public website (src/server/
-    // splendorConnectEngine.ts's public endpoints, mounted at
-    // /api/public/* in server.ts) never touches Firestore directly at
-    // all -- it only ever reads/writes through the Express server's
-    // sanitized REST endpoints, which use the Admin SDK server-side and
-    // are therefore unaffected by (and not a way around) these rules.
+    match /{document=**} {
+      allow read, write: if isSignedIn();
+    }
   }
 }
+
