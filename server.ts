@@ -12,6 +12,12 @@ import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
 import { NOTIFICATION_EVENTS } from './src/config/notificationEvents';
+import { issueNextNumber, resetNumbering } from './src/server/idGenerator';
+import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence';
+import { asyncHandler } from './src/server/asyncHandler';
+import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
+import { createContractDurable, ContractValidationError } from './src/server/contractOps';
+import type { AuditLog } from './src/types';
 
 const app = express();
 const PORT = 3000;
@@ -136,6 +142,25 @@ function publicRateLimiter(maxRequestsPerMinute: number = 60) {
 async function getRequesterRole(uid: string): Promise<string | null> {
   const snap = await admin.firestore().collection('users').doc(uid).get();
   return snap.exists ? ((snap.data() as any)?.role ?? null) : null;
+}
+
+/**
+ * Durably records an audit entry: issues an atomic id (issueNextNumber,
+ * replacing the old `AUD-${auditLogs.length+1}` in-memory scheme, which
+ * could collide across cold starts the same way every other in-memory id
+ * could), persists it to Firestore's audit_logs collection, and only then
+ * mirrors it into the in-memory globalStore.auditLogs cache. Every audit
+ * write in this file must go through this function -- never
+ * globalStore.logAudit() directly, which only touches the cache and was
+ * never itself durable except on the two routes that separately remembered
+ * to call admin.firestore() afterward.
+ */
+async function recordAudit(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<AuditLog> {
+  const id = await issueNextNumber('AuditLog');
+  const entry: AuditLog = { ...log, id, timestamp: new Date().toISOString() } as AuditLog;
+  await createDurable('audit_logs', entry as unknown as { id: string });
+  globalStore.auditLogs.unshift(entry);
+  return entry;
 }
 
 /**
@@ -562,23 +587,41 @@ app.post('/api/customers/check-duplicate', (req, res) => {
   });
 });
 
-app.post('/api/customers', async (req, res) => {
-  const data = req.body;
-  const newId = globalStore.getNextNumber('Customer');
+// Fields the server alone ever changes -- never accepted from a client
+// PUT even if present in the body. A brand-new customer has no rental
+// history yet (all four start at 0, never a client-supplied value); an
+// existing customer's totals only move through the specific business
+// operations that actually earn them (contract creation, payment
+// recording, merge) -- see PersistenceError note below for why this can't
+// just be "trust the client, the server will overwrite it later": between
+// this write and that later one, a stale/attacker-supplied total would
+// already be durably saved and visible to every other user.
+const CUSTOMER_SERVER_OWNED_FIELDS = ['lifetimeValue', 'totalRentals', 'outstandingBalance', 'securityDepositsHeld'] as const;
+
+app.post('/api/customers', asyncHandler(async (req, res) => {
+  const data = req.body || {};
+  const newId = await issueNextNumber('Customer');
   const newCustomer = {
     ...data,
     id: newId,
-    lifetimeValue: data.lifetimeValue || 0,
-    totalRentals: data.totalRentals || 0,
-    outstandingBalance: data.outstandingBalance || 0,
-    securityDepositsHeld: data.securityDepositsHeld || 0,
+    lifetimeValue: 0,
+    totalRentals: 0,
+    outstandingBalance: 0,
+    securityDepositsHeld: 0,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString()
   };
+
+  // Server is the sole writer now: persist to Firestore FIRST, and only
+  // update the in-memory cache (and respond 201) once that succeeds. If
+  // the Firestore write throws, asyncHandler forwards it to the global
+  // error middleware -- the client gets an explicit failure, never a false
+  // "Customer Created" response for a record that doesn't durably exist.
+  await createDurable('customers', newCustomer);
   globalStore.customers.unshift(newCustomer);
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: data.actorId || 'USR-001',
     userName: data.actorName || 'Admin',
     userRole: 'admin',
@@ -599,22 +642,27 @@ app.post('/api/customers', async (req, res) => {
   }
 
   res.status(201).json(newCustomer);
-});
+}));
 
-app.put('/api/customers/:id', async (req, res) => {
+app.put('/api/customers/:id', asyncHandler(async (req, res) => {
   const index = globalStore.customers.findIndex(c => c.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Customer not found' });
-
   const prev = globalStore.customers[index];
+
+  const body: Record<string, any> = { ...(req.body || {}) };
+  for (const field of CUSTOMER_SERVER_OWNED_FIELDS) delete body[field];
+
   const updated = {
     ...prev,
-    ...req.body,
+    ...body,
     updatedAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString()
   };
+
+  await updateDurable('customers', updated.id, updated);
   globalStore.customers[index] = updated;
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: req.body.actorId || 'USR-001',
     userName: req.body.actorName || 'Admin',
     userRole: 'admin',
@@ -638,9 +686,17 @@ app.put('/api/customers/:id', async (req, res) => {
   }
 
   res.json(updated);
-});
+}));
 
-app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), (req, res) => {
+// Was previously the only route in the whole file with an explicit
+// requireRole gate but ZERO admin.firestore() calls anywhere in its
+// handler: the re-linking only ever happened in globalStore, so a merge
+// vanished the moment the serving instance recycled. Now every re-linked
+// record, both customer documents, and the audit entry commit as one
+// atomic Firestore batch (chunked at 500 writes, matching the existing
+// precedent in the admin reset endpoint below) -- a merge either fully
+// lands or fully doesn't, and it survives a restart.
+app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), asyncHandler(async (req, res) => {
   const { targetCustomerId } = req.body;
   const sourceCust = globalStore.customers.find(c => c.id === req.params.id);
   const targetCust = globalStore.customers.find(c => c.id === targetCustomerId);
@@ -648,24 +704,50 @@ app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), 
   if (!sourceCust || !targetCust) {
     return res.status(404).json({ error: 'Source or target customer not found' });
   }
+  if (sourceCust.id === targetCust.id) {
+    return res.status(400).json({ error: 'Source and target customer must be different.' });
+  }
+  // Idempotency guard: a source customer already marked merged/inactive
+  // means this exact merge already ran (a double-click, a retried
+  // request) -- re-running it would double-add sourceCust's totals into
+  // targetCust. Reject instead of silently re-merging.
+  if (sourceCust.status === 'inactive' && sourceCust.notes?.startsWith('[MERGED INTO')) {
+    return res.status(409).json({ error: 'This customer has already been merged.' });
+  }
 
-  // Re-link records
-  globalStore.contracts.forEach(c => { if (c.customerId === sourceCust.id) { c.customerId = targetCust.id; c.customerName = targetCust.fullName; } });
-  globalStore.reservations.forEach(r => { if (r.customerId === sourceCust.id) { r.customerId = targetCust.id; r.customerName = targetCust.fullName; } });
-  globalStore.quotations.forEach(q => { if (q.customerId === sourceCust.id) { q.customerId = targetCust.id; q.customerName = targetCust.fullName; } });
-  globalStore.invoices.forEach(i => { if (i.customerId === sourceCust.id) { i.customerId = targetCust.id; i.customerName = targetCust.fullName; } });
-  globalStore.deposits.forEach(d => { if (d.customerId === sourceCust.id) { d.customerId = targetCust.id; d.customerName = targetCust.fullName; } });
+  const ops: BatchOp[] = [];
+  const relink = (records: Array<{ id: string; customerId: string; customerName: string }>, collection: string) => {
+    for (const r of records) {
+      if (r.customerId !== sourceCust.id) continue;
+      r.customerId = targetCust.id;
+      r.customerName = targetCust.fullName;
+      ops.push({ type: 'update', collection, id: r.id, data: { customerId: r.customerId, customerName: r.customerName } });
+    }
+  };
+  relink(globalStore.contracts as any, 'contracts');
+  relink(globalStore.reservations as any, 'reservations');
+  relink(globalStore.quotations as any, 'quotations');
+  relink(globalStore.invoices as any, 'invoices');
+  relink(globalStore.deposits as any, 'deposits');
 
+  const now = new Date().toISOString();
   targetCust.lifetimeValue += sourceCust.lifetimeValue;
   targetCust.totalRentals += sourceCust.totalRentals;
   targetCust.outstandingBalance += sourceCust.outstandingBalance;
   targetCust.securityDepositsHeld += sourceCust.securityDepositsHeld;
+  targetCust.updatedAt = now;
 
-  // Mark source as merged / inactive
   sourceCust.status = 'inactive';
   sourceCust.notes = `[MERGED INTO ${targetCust.id}] ${sourceCust.notes}`;
+  sourceCust.updatedAt = now;
 
-  globalStore.logAudit({
+  ops.push({ type: 'update', collection: 'customers', id: targetCust.id, data: targetCust as unknown as Record<string, unknown> });
+  ops.push({ type: 'update', collection: 'customers', id: sourceCust.id, data: sourceCust as unknown as Record<string, unknown> });
+
+  const auditId = await issueNextNumber('AuditLog');
+  const auditEntry: AuditLog = {
+    id: auditId,
+    timestamp: now,
     userId: req.body.actorId || 'USR-001',
     userName: req.body.actorName || 'Admin',
     userRole: 'admin',
@@ -674,10 +756,16 @@ app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), 
     action: 'merge',
     newValue: `Merged records from ${sourceCust.id} (${sourceCust.fullName}) into ${targetCust.id} (${targetCust.fullName})`,
     reason: 'Duplicate customer merge operation'
-  });
+  } as AuditLog;
+  ops.push({ type: 'create', collection: 'audit_logs', id: auditId, data: auditEntry as unknown as Record<string, unknown> });
+
+  for (let i = 0; i < ops.length; i += 500) {
+    await runDurableBatch(ops.slice(i, i + 500));
+  }
+  globalStore.auditLogs.unshift(auditEntry);
 
   res.json({ success: true, targetCustomer: targetCust });
-});
+}));
 
 // ----------------------------------------------------
 // 3. LEADS & SALES PIPELINE
@@ -1363,32 +1451,54 @@ app.get('/api/reservations', (req, res) => {
   res.json(globalStore.reservations);
 });
 
-app.post('/api/reservations', (req, res) => {
-  const data = req.body;
-  // Double-booking check
-  const avail = globalStore.checkVehicleAvailability(data.vehicleId, data.pickupDateTime, data.returnDateTime);
-  if (!avail.available) {
-    return res.status(400).json({ error: 'Vehicle has a scheduling conflict and cannot be reserved for these dates.', conflicts: avail.conflictingRecords });
+// The old "double-booking check" here read purely from in-memory
+// globalStore -- safe against interleaving within one warm serverless
+// instance (no `await` between the check and the write), but not across
+// two different concurrent instances, each with its own copy of
+// globalStore. reserveVehicleSlot() makes the actual conflict check AND
+// the reservation write happen inside one Firestore transaction, so two
+// concurrent requests for the same vehicle/overlapping dates can no longer
+// both succeed, regardless of which instance handles which request.
+app.post('/api/reservations', asyncHandler(async (req, res) => {
+  const data = req.body || {};
+  if (!data.vehicleId || !data.pickupDateTime || !data.returnDateTime) {
+    return res.status(400).json({ error: 'vehicleId, pickupDateTime, and returnDateTime are required.' });
   }
 
-  const newId = globalStore.getNextNumber('Reservation');
-  const resObj = {
-    ...data,
-    id: newId,
-    status: data.status || 'confirmed',
-    depositStatus: data.depositStatus || 'pending',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+  const newId = await issueNextNumber('Reservation');
+  const now = new Date().toISOString();
+
+  let resObj: any;
+  try {
+    resObj = await reserveVehicleSlot(
+      { vehicleId: data.vehicleId, startIso: data.pickupDateTime, endIso: data.returnDateTime },
+      'reservations',
+      () => ({
+        ...data,
+        id: newId,
+        status: data.status || 'confirmed',
+        depositStatus: data.depositStatus || 'pending',
+        createdAt: now,
+        updatedAt: now
+      })
+    );
+  } catch (err) {
+    if (err instanceof AvailabilityConflictError) {
+      return res.status(400).json({ error: 'Vehicle has a scheduling conflict and cannot be reserved for these dates.', conflicts: err.conflicts });
+    }
+    throw err;
+  }
+
   globalStore.reservations.unshift(resObj);
 
   const vehicle = globalStore.vehicles.find(v => v.id === data.vehicleId);
   if (vehicle) {
     vehicle.status = 'reserved';
+    await updateDurable('vehicles', vehicle.id, { status: 'reserved' });
   }
 
   res.status(201).json(resObj);
-});
+}));
 
 app.post('/api/reservations/:id/create-contract', (req, res) => {
   const reserv = globalStore.reservations.find(r => r.id === req.params.id);
@@ -1448,91 +1558,81 @@ app.get('/api/contracts', (req, res) => {
   res.json(globalStore.contracts);
 });
 
-app.post('/api/contracts', async (req, res) => {
-  const data = req.body;
-  const vehicle = globalStore.vehicles.find(v => v.id === data.vehicleId);
-  const customer = globalStore.customers.find(c => c.id === data.customerId);
-
-  const contractId = globalStore.getNextNumber('Contract');
-  const days = data.days || 3;
-  const dailyRate = data.dailyRate || (vehicle ? vehicle.dailyRate : 2500);
-  const rentalTotal = data.rentalTotal || (dailyRate * days);
-  const vatAmount = data.vatAmount || (rentalTotal * 0.05);
-  const grandTotal = data.grandTotal || (rentalTotal + vatAmount);
-  const depositAmount = data.depositAmount || ((vehicle as any)?.securityDeposit || 5000);
-
-  const contract = {
-    id: contractId,
-    contractNumber: contractId,
-    customerId: data.customerId || (customer ? customer.id : ''),
-    customerName: data.customerName || (customer ? customer.fullName : 'VIP Client'),
-    customerPhone: data.customerPhone || (customer ? customer.phone : '+971 50 000 0000'),
-    customerAddress: customer ? customer.address : 'Dubai, UAE',
-    vehicleId: data.vehicleId || (vehicle ? vehicle.id : ''),
-    vehicleName: data.vehicleName || (vehicle ? `${vehicle.make} ${vehicle.model}` : 'Vehicle'),
-    vehiclePlate: data.vehiclePlate || (vehicle ? `${vehicle.plateCity} ${vehicle.plateNumber}` : ''),
-    vehicleVin: vehicle ? vehicle.vin : '',
-    startDateTime: data.startDateTime || new Date().toISOString(),
-    endDateTime: data.endDateTime || new Date(Date.now() + 86400000 * 3).toISOString(),
-    pickupLocation: data.pickupLocation || 'Dubai Flagship Showroom',
-    returnLocation: data.returnLocation || 'Dubai Flagship Showroom',
-    dailyRate,
-    rentalTotal,
-    vatAmount,
-    grandTotal,
-    depositAmount,
-    mileageAllowancePerDay: data.mileageAllowancePerDay || 200,
-    extraKmRate: data.extraKmRate || 15,
-    depositReleaseDays: data.depositReleaseDays || 21,
-    status: data.status || 'active',
-    paymentStatus: data.paymentStatus || 'unpaid',
-    depositStatus: data.depositStatus || 'held',
-    termsAccepted: true,
-    notes: data.notes || 'Instant VIP rental agreement',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-
-  globalStore.contracts.unshift(contract as any);
-
-  if (vehicle) {
-    vehicle.status = data.status === 'active' ? 'rented' : 'reserved';
-    vehicle.currentCustomerId = contract.customerId;
-    vehicle.currentContractId = contract.id;
+// Previously trusted client-supplied dailyRate/rentalTotal/vatAmount/
+// grandTotal verbatim whenever present, had no requireRole, and performed
+// no availability check at all -- see the audit's Blocker #4. Pricing,
+// availability, and the multi-document write (contract + vehicle status +
+// customer totals + audit entry) are now handled atomically by
+// createContractDurable() (src/server/contractOps.ts). An Idempotency-Key
+// header/body field makes a double-click or network retry return the
+// original contract instead of creating a second one.
+app.post('/api/contracts', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const data = req.body || {};
+  if (!data.vehicleId || !data.customerId) {
+    return res.status(400).json({ error: 'vehicleId and customerId are required.' });
   }
 
-  if (customer) {
-    customer.totalRentals = (customer.totalRentals || 0) + 1;
-    customer.lifetimeValue = (customer.lifetimeValue || 0) + grandTotal;
-  }
+  const uid = (req as any).authUser?.uid;
+  const actorRole = uid ? await getRequesterRole(uid) : null;
+  const idempotencyKey = (req.header('Idempotency-Key') || data.idempotencyKey || null) as string | null;
 
-  globalStore.logAudit({
-    userId: data.actorId || 'USR-001',
-    userName: data.actorName || 'Ahmed Morsy',
-    userRole: 'ceo',
-    entityType: 'Contract',
-    entityId: contractId,
-    action: 'create',
-    newValue: `Issued instant contract ${contractId} for ${contract.customerName} (${grandTotal.toLocaleString()} AED)`,
-    reason: 'Executive instant contract creation'
-  });
-
-  // Awaited (not fire-and-forget) -- Vercel's serverless runtime can freeze
-  // the function right after the response is sent, so a background promise
-  // started after res.json() is not guaranteed to finish. This only adds
-  // real latency once recipients are actually configured; until then
-  // dispatchNotificationEvent() returns immediately (no recipients = no-op).
+  let outcome;
   try {
-    await dispatchNotificationEvent('contract_created',
-      `New contract ${contractId} created for ${contract.customerName} -- ${grandTotal.toLocaleString()} AED.`,
-      `تم إنشاء عقد جديد ${contractId} للعميل ${contract.customerName} بقيمة ${grandTotal.toLocaleString()} درهم.`
-    );
+    outcome = await createContractDurable({
+      vehicleId: data.vehicleId,
+      customerId: data.customerId,
+      startDateTime: data.startDateTime,
+      endDateTime: data.endDateTime,
+      pickupLocation: data.pickupLocation,
+      returnLocation: data.returnLocation,
+      mileageAllowancePerDay: data.mileageAllowancePerDay,
+      extraKmRate: data.extraKmRate,
+      depositReleaseDays: data.depositReleaseDays,
+      status: data.status,
+      notes: data.notes,
+      actorId: data.actorId || uid,
+      actorName: data.actorName,
+      actorRole: actorRole || undefined,
+      idempotencyKey
+    });
   } catch (err) {
-    console.error('WhatsApp dispatch failed (contract_created):', err);
+    if (err instanceof AvailabilityConflictError) {
+      return res.status(400).json({ error: 'Vehicle has a scheduling conflict and cannot be reserved for these dates.', conflicts: err.conflicts });
+    }
+    if (err instanceof ContractValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const { contract, auditEntry, vehicleUpdate, customerUpdate, replayed } = outcome;
+
+  if (!replayed) {
+    globalStore.contracts.unshift(contract as any);
+    globalStore.auditLogs.unshift(auditEntry);
+    const vehicle = globalStore.vehicles.find(v => v.id === contract.vehicleId);
+    if (vehicle) Object.assign(vehicle, vehicleUpdate);
+    const customer = globalStore.customers.find(c => c.id === contract.customerId);
+    if (customer) Object.assign(customer, customerUpdate);
+
+    // Awaited (not fire-and-forget) -- Vercel's serverless runtime can
+    // freeze the function right after the response is sent, so a
+    // background promise started after res.json() is not guaranteed to
+    // finish. This only adds real latency once recipients are actually
+    // configured; until then dispatchNotificationEvent() returns
+    // immediately (no recipients = no-op).
+    try {
+      await dispatchNotificationEvent('contract_created',
+        `New contract ${contract.id} created for ${contract.customerName} -- ${contract.grandTotal.toLocaleString()} AED.`,
+        `تم إنشاء عقد جديد ${contract.id} للعميل ${contract.customerName} بقيمة ${contract.grandTotal.toLocaleString()} درهم.`
+      );
+    } catch (err) {
+      console.error('WhatsApp dispatch failed (contract_created):', err);
+    }
   }
 
   res.status(201).json(contract);
-});
+}));
 
 app.get('/api/contracts/:id', (req, res) => {
   const contract = globalStore.contracts.find(c => c.id === req.params.id);
@@ -3914,6 +4014,49 @@ app.post('/api/tests/run-all', (req, res) => {
 // it only fixes what the store looks like right after a restart. Routing
 // every read/write through Firestore directly (removing the in-memory copy
 // entirely) is the more complete fix and a larger, separate change.
+// ----------------------------------------------------
+// GLOBAL ASYNC ERROR SAFETY NET
+// ----------------------------------------------------
+// Express 4.x (this app's version) does not auto-catch a rejected promise
+// thrown by an async route handler -- that only became automatic in
+// Express 5. Every async route above is now wrapped in asyncHandler(),
+// which forwards any rejection here via next(err) instead of letting it
+// become an unhandled rejection (previously: the request just hung with no
+// response, and could destabilize the whole warm serverless instance for
+// other in-flight requests).
+//
+// This must be the LAST app.use() Express sees for it to catch errors from
+// every route registered before it -- true for the production/Vercel path
+// (nothing else is registered after this point when process.env.VERCEL is
+// set), which is what this deployment actually runs.
+app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(err);
+  const status = err instanceof PersistenceError ? 502 : 500;
+  // Never leak a stack trace, file path, or internal error message to the
+  // client -- log the real detail server-side only.
+  console.error(`[unhandled error] ${req.method} ${req.originalUrl}:`, err);
+  res.status(status).json({
+    error: status === 502
+      ? 'A durability failure occurred while saving this operation. Nothing was partially saved. Please try again.'
+      : 'An unexpected error occurred. Please try again.'
+  });
+});
+
+// A route handler throwing synchronously (not inside a Promise at all) or
+// a stray unawaited rejection elsewhere in the process both bypass
+// asyncHandler entirely. These are the last line of defense: log with full
+// detail server-side, and deliberately do NOT call process.exit() -- on
+// Vercel the platform manages the function lifecycle, and exiting here
+// would turn one bad request into a hard crash for every other concurrent
+// request on the same warm instance, which is exactly the failure mode
+// this phase exists to remove.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
 const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   users: 'users',
   customers: 'customers',
