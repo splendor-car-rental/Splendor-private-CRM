@@ -2810,13 +2810,18 @@ app.delete('/api/tolls/:id', requireRole('ceo', 'admin', 'finance'), asyncHandle
 //
 // Restricted to the same roles the app already trusts with toll/finance
 // operations (matches DELETE /api/tolls/:id below), and the decoded upload
-// is size-capped and magic-byte-checked BEFORE it ever reaches XLSX.read()
-// or pdf-parse -- see src/server/tollImportGuard.ts. xlsx@0.18.5 (the only
-// version ever published to npm) has known, currently unpatched Prototype
-// Pollution / ReDoS advisories with no fix on the registry; this does not
-// remove that library-level risk, it only narrows who can reach the parser
-// and what can reach it before the parser runs. Tracked separately for a
-// controlled library migration.
+// is size-capped and magic-byte-checked BEFORE it ever reaches the Excel
+// parser or pdf-parse -- see src/server/tollImportGuard.ts. The Excel
+// parsing itself (parseSalikExcel/parseGenericTollExcel in
+// tollFileParsers.ts) no longer uses `xlsx` (SheetJS) at all -- that
+// library's last npm-published version (0.18.5) carries unpatched
+// Prototype Pollution / ReDoS advisories with no fix ever published to the
+// registry. It was replaced with read-excel-file, a library with a
+// materially different, much narrower codebase and no equivalent
+// advisory, after a parser regression suite (tests/tollFileParsers.test.ts)
+// proved identical output across both libraries for every case this
+// endpoint depends on. `xlsx` remains only as a devDependency, used
+// exclusively to build test fixtures.
 app.post('/api/tolls/import', requireRole('ceo', 'admin', 'finance'), async (req, res) => {
   try {
     const { type, fileName, fileBase64, uploadedBy, confirm } = req.body || {};
@@ -2863,12 +2868,12 @@ app.post('/api/tolls/import', requireRole('ceo', 'admin', 'finance'), async (req
       const pdfData = await pdfParse(buffer);
       parsed = type === 'salik' ? parseSalikPdfText(pdfData.text) : parseSalikPdfText(pdfData.text); // Darb PDF: no real sample yet -- same tolerant line-based parser as a starting point, flagged for manual review either way.
     } else if (type === 'salik') {
-      parsed = parseSalikExcel(buffer);
+      parsed = await parseSalikExcel(buffer);
     } else {
       // Darb: no real sample provided yet -- generic keyword-detection
       // fallback until a real Darb export can be used to build a precise
       // parser the same way parseSalikExcel was.
-      parsed = parseGenericTollExcel(buffer);
+      parsed = await parseGenericTollExcel(buffer);
     }
 
     const pricing = globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING;

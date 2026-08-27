@@ -9,10 +9,16 @@
  *     enforced BEFORE parsing
  *   - the existing preview-before-confirm flow, unchanged
  *
- * This does NOT test xlsx@0.18.5 itself for the Prototype Pollution/ReDoS
- * advisories it carries -- that library is intentionally unchanged by this
- * pass (see the comment above the route in server.ts). These tests only
- * prove the mitigations layered in front of it behave correctly.
+ * As of the Phase 11 xlsx migration, the underlying Excel parser is no
+ * longer xlsx (SheetJS) -- see tests/tollFileParsers.test.ts for the
+ * parser-level regression suite proving read-excel-file (its replacement)
+ * behaves identically for every case this endpoint depends on. These
+ * tests only prove the mitigations layered in front of the parser
+ * (role/auth, size cap, magic-byte type check, preview-before-confirm)
+ * behave correctly; `buildValidSalikXlsxBase64()` below still uses `xlsx`
+ * (kept as a devDependency) purely to construct a realistic .xlsx test
+ * fixture -- writing trusted bytes is a safe use of that library, unlike
+ * parsing untrusted ones.
  *
  * ISOLATION: firebase-admin is fully mocked below (no real Firebase project
  * is contacted), and every test that touches globalStore only asserts on

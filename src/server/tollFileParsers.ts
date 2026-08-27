@@ -18,11 +18,18 @@
 // auto-parse, especially for a PDF, where text-extraction order can vary
 // between PDF libraries.
 
-// @ts-ignore -- optional dependency, added to package.json; not present in
-// every environment this repo's TypeScript is checked in (e.g. `tsc --noEmit`
-// without `npm install` run), so it's isolated behind a dynamic import in
-// the endpoint. Typed loosely on purpose.
-import * as XLSX from 'xlsx';
+// Reads untrusted staff-uploaded Excel files with read-excel-file rather
+// than `xlsx` (SheetJS) -- xlsx@0.18.5 (the last version published to npm;
+// SheetJS never published a fix there, only via their own CDN) carries a
+// Prototype Pollution advisory and a ReDoS advisory, both triggerable by a
+// crafted input file, which is exactly the kind of file this code parses.
+// read-excel-file has a materially different, much narrower codebase and
+// dependency tree (see package.json) and carries no equivalent advisory.
+// `xlsx` is kept ONLY as a devDependency, used solely to construct trusted
+// test fixtures in tests/tollFileParsers.test.ts -- it is never imported
+// by any code that runs in production or touches a real uploaded file.
+import { readSheet } from 'read-excel-file/node';
+import type { Row } from 'read-excel-file/node';
 
 export interface ParsedTollRow {
   date: string; // ISO yyyy-mm-dd
@@ -69,14 +76,42 @@ function normalizeDate(raw: string): string {
 }
 
 /**
+ * Normalizes one read-excel-file cell value to the same kind of plain
+ * string every downstream line in this file already expects (header
+ * matching via .includes()/.toLowerCase(), normalizeDate(), parseFloat()).
+ * This is the ONE place that has to account for the difference between
+ * xlsx's `raw:false` mode (which renders a cell using its Excel number
+ * format, e.g. a date cell becomes a locale date STRING) and
+ * read-excel-file (which returns a typed JS Date/number/boolean/string
+ * directly) -- every other line in this file is unchanged by the library
+ * migration.
+ */
+function cellToString(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) {
+    // ISO yyyy-mm-dd: not what a real Salik export's TEXT date cells look
+    // like ("26 Aug 2026" / "31-Aug-2025"), but normalizeDate()'s fallback
+    // branch (`new Date(cleaned)`) parses an ISO date string correctly, so
+    // a genuine Excel-date-typed cell still normalizes to the right day --
+    // see the "reads a genuine Excel date-formatted cell" regression test.
+    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+  }
+  return String(value);
+}
+
+/** Reads the first sheet of an uploaded workbook as a plain string grid -- the one thing every parser below needs, isolated here so the rest of each parser's logic (header detection, column matching, row parsing) never has to know which library produced it. */
+async function readGridFromBuffer(buffer: Buffer): Promise<string[][]> {
+  const rows: Row[] = await readSheet(buffer);
+  return rows.map(row => row.map(cellToString));
+}
+
+/**
  * Parses the Salik "Trips Report" Excel export. Column positions are
  * confirmed against a real export, but resolved by header name (not fixed
  * index) so a minor layout shuffle by Salik doesn't silently break it.
  */
-export function parseSalikExcel(buffer: Buffer): ParsedTollFile {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const grid: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+export async function parseSalikExcel(buffer: Buffer): Promise<ParsedTollFile> {
+  const grid = await readGridFromBuffer(buffer);
 
   let accountNumber: string | undefined;
   let periodStart: string | undefined;
@@ -230,10 +265,8 @@ export function parseSalikPdfText(text: string): ParsedTollFile {
  * Plate/Location/Tag by keyword. Always flags what it couldn't find rather
  * than guessing silently.
  */
-export function parseGenericTollExcel(buffer: Buffer): ParsedTollFile {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const grid: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+export async function parseGenericTollExcel(buffer: Buffer): Promise<ParsedTollFile> {
+  const grid = await readGridFromBuffer(buffer);
 
   let headerRowIndex = -1;
   for (let i = 0; i < Math.min(grid.length, 30); i++) {
