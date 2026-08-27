@@ -35,6 +35,105 @@ vi.mock('firebase-admin', () => {
   const appsArr: any[] = [];
   const verifyIdToken = vi.fn();
   const usersDb = new Map<string, { role: string; name: string }>();
+  // In-memory Firestore: collection name -> doc id -> data. Backs doc
+  // get/set/create/delete AND runTransaction/batch consistently, so
+  // issueNextNumber() (a real Firestore transaction against
+  // numbering_configs) and runDurableBatch() (used by the confirmed toll
+  // import) behave like a real, if simplistic, Firestore rather than
+  // throwing "not a function" the way the previous mock did once
+  // server.ts started using transactions/batches for durability.
+  const store = new Map<string, Map<string, any>>();
+  const collectionOf = (name: string) => {
+    if (!store.has(name)) store.set(name, new Map());
+    return store.get(name)!;
+  };
+
+  const makeDocRef = (collectionName: string, id: string) => ({
+    id,
+    __collection: collectionName,
+    get: async () => {
+      if (collectionName === 'users') {
+        const u = usersDb.get(id);
+        return { exists: !!u, data: () => u, id };
+      }
+      const data = collectionOf(collectionName).get(id);
+      return { exists: data !== undefined, data: () => data, id };
+    },
+    set: async (data: any, opts?: { merge?: boolean }) => {
+      const col = collectionOf(collectionName);
+      const existing = col.get(id);
+      col.set(id, opts?.merge && existing ? { ...existing, ...data } : data);
+    },
+    create: async (data: any) => {
+      const col = collectionOf(collectionName);
+      if (col.has(id)) {
+        const err: any = new Error('ALREADY_EXISTS');
+        err.code = 6;
+        throw err;
+      }
+      col.set(id, data);
+    },
+    delete: async () => {
+      collectionOf(collectionName).delete(id);
+    }
+  });
+
+  const makeCollectionRef = (name: string): any => ({
+    doc: (id: string) => makeDocRef(name, id),
+    // Collection-level get(), used by hydrateStoreFromFirestore() at module
+    // load -- returns whatever's in the in-memory store (empty at startup,
+    // so hydration is a harmless no-op unless a test seeded it).
+    get: async () => {
+      const col = collectionOf(name);
+      const docs = Array.from(col.entries()).map(([id, data]) => ({ id, data: () => data }));
+      return { docs, size: docs.length };
+    },
+    // Simplistic: this test file's toll-import routes never filter by
+    // .where(), they only read/write via doc()/runTransaction/batch, so a
+    // real query implementation isn't needed here (covered against a real
+    // Firestore emulator in tests/durablePersistence.test.ts instead).
+    where: () => makeCollectionRef(name)
+  });
+
+  const firestoreObj: any = {
+    collection: (name: string) => makeCollectionRef(name),
+    batch: () => {
+      const ops: Array<() => void> = [];
+      const applySet = (ref: any, data: any, opts?: { merge?: boolean }) => {
+        const col = collectionOf(ref.__collection);
+        const existing = col.get(ref.id);
+        col.set(ref.id, opts?.merge && existing ? { ...existing, ...data } : data);
+      };
+      return {
+        set: (ref: any, data: any, opts?: any) => ops.push(() => applySet(ref, data, opts)),
+        create: (ref: any, data: any) => ops.push(() => collectionOf(ref.__collection).set(ref.id, data)),
+        delete: (ref: any) => ops.push(() => collectionOf(ref.__collection).delete(ref.id)),
+        commit: async () => { ops.forEach((op) => op()); }
+      };
+    },
+    runTransaction: async (fn: any) => {
+      const applySet = (ref: any, data: any, opts?: { merge?: boolean }) => {
+        const col = collectionOf(ref.__collection);
+        const existing = col.get(ref.id);
+        col.set(ref.id, opts?.merge && existing ? { ...existing, ...data } : data);
+      };
+      const tx = {
+        get: async (refOrQuery: any) => refOrQuery.get(),
+        set: (ref: any, data: any, opts?: any) => applySet(ref, data, opts),
+        create: (ref: any, data: any) => {
+          const col = collectionOf(ref.__collection);
+          if (col.has(ref.id)) {
+            const err: any = new Error('ALREADY_EXISTS');
+            err.code = 6;
+            throw err;
+          }
+          col.set(ref.id, data);
+        },
+        delete: (ref: any) => collectionOf(ref.__collection).delete(ref.id)
+      };
+      return fn(tx, firestoreObj);
+    }
+  };
 
   const admin: any = {
     apps: appsArr,
@@ -43,27 +142,9 @@ vi.mock('firebase-admin', () => {
       appsArr.push({});
     },
     auth: () => ({ verifyIdToken }),
-    firestore: () => ({
-      collection: (name: string) => ({
-        doc: (id: string) => ({
-          get: async () => {
-            if (name === 'users') {
-              const u = usersDb.get(id);
-              return { exists: !!u, data: () => u };
-            }
-            return { exists: false, data: () => undefined };
-          },
-          set: async () => {}
-        }),
-        // Collection-level get(), used by hydrateStoreFromFirestore() at
-        // module load -- returns an empty snapshot for every collection so
-        // startup hydration is a harmless no-op in this test process.
-        get: async () => ({ docs: [] })
-      }),
-      batch: () => ({ set: () => {}, delete: () => {}, commit: async () => {} })
-    }),
+    firestore: () => firestoreObj,
     storage: () => ({ bucket: () => ({ file: () => ({}) }) }),
-    __test: { verifyIdToken, usersDb, appsArr }
+    __test: { verifyIdToken, usersDb, appsArr, store }
   };
 
   return { default: admin };

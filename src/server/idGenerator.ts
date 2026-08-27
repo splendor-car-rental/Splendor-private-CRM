@@ -48,7 +48,8 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   document: { prefix: 'DOC-', digits: 6 },
   tollimportbatch: { prefix: 'TOLBATCH-', digits: 4 },
   plateassignment: { prefix: 'PLT-', digits: 6 },
-  auditlog: { prefix: 'AUD-', digits: 6 }
+  auditlog: { prefix: 'AUD-', digits: 6 },
+  bankbatch: { prefix: '', digits: 2 }
 };
 
 export class IdGenerationError extends Error {

@@ -1372,10 +1372,10 @@ app.get('/api/quotations', (req, res) => {
   res.json(globalStore.quotations);
 });
 
-app.post('/api/quotations', (req, res) => {
-  const newId = globalStore.getNextNumber('Quotation');
+app.post('/api/quotations', asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Quotation');
   const data = req.body;
-  
+
   // Calculate pricing
   const dailyRate = Number(data.dailyRate) || 0;
   const duration = Number(data.durationDays) || 1;
@@ -1397,9 +1397,10 @@ app.post('/api/quotations', (req, res) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  await createDurable('quotations', quote);
   globalStore.quotations.unshift(quote);
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: data.ownerId || 'USR-003',
     userName: data.ownerName || 'Elena Rostova',
     userRole: 'sales',
@@ -1410,59 +1411,85 @@ app.post('/api/quotations', (req, res) => {
   });
 
   res.status(201).json(quote);
-});
+}));
 
-app.post('/api/quotations/:id/convert-reservation', (req, res) => {
+// Uses the same transactional availability gate as POST /api/reservations
+// (reserveVehicleSlot) so a quotation acceptance can't double-book a
+// vehicle across concurrent requests either, plus atomically flips the
+// quotation to 'accepted' inside the same Firestore transaction.
+app.post('/api/quotations/:id/convert-reservation', asyncHandler(async (req, res) => {
   const quote = globalStore.quotations.find(q => q.id === req.params.id);
   if (!quote) return res.status(404).json({ error: 'Quotation not found' });
-
-  // Check vehicle availability
-  if (quote.vehicleId) {
-    const avail = globalStore.checkVehicleAvailability(quote.vehicleId, quote.startDate, quote.endDate);
-    if (!avail.available) {
-      return res.status(400).json({ error: 'Vehicle is not available for requested dates', conflicts: avail.conflictingRecords });
-    }
-  }
+  if (quote.status === 'accepted') return res.status(409).json({ error: 'This quotation has already been converted.' });
 
   const vehicle = globalStore.vehicles.find(v => v.id === quote.vehicleId);
+  const resId = await issueNextNumber('Reservation');
+  const now = new Date().toISOString();
 
-  const resId = globalStore.getNextNumber('Reservation');
-  const reservation = {
-    id: resId,
-    customerId: quote.customerId,
-    customerName: quote.customerName,
-    customerPhone: quote.customerPhone,
-    vehicleId: quote.vehicleId || '',
-    vehicleName: quote.vehicleName,
-    vehiclePlate: vehicle ? `${vehicle.plateCity} ${vehicle.plateNumber}` : 'TBD',
-    pickupDateTime: quote.startDate,
-    returnDateTime: quote.endDate,
-    durationDays: quote.durationDays,
-    pickupLocation: 'Dubai Flagship Showroom',
-    returnLocation: 'Dubai Flagship Showroom',
-    dailyRate: quote.dailyRate,
-    totalAmount: quote.grandTotal,
-    depositAmount: quote.securityDeposit,
-    depositStatus: 'pending' as const,
-    status: 'confirmed' as const,
-    ownerId: quote.ownerId,
-    ownerName: quote.ownerName,
-    quotationId: quote.id,
-    notes: `Converted from quotation ${quote.id}. ${quote.notes}`,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-
-  globalStore.reservations.unshift(reservation);
-  quote.status = 'accepted';
-  quote.reservationId = resId;
-
-  if (vehicle) {
-    vehicle.status = 'reserved';
-    vehicle.nextReservationDate = quote.startDate;
+  let reservation: any;
+  if (quote.vehicleId) {
+    try {
+      reservation = await reserveVehicleSlot(
+        { vehicleId: quote.vehicleId, startIso: quote.startDate, endIso: quote.endDate },
+        'reservations',
+        () => ({
+          id: resId,
+          customerId: quote.customerId,
+          customerName: quote.customerName,
+          customerPhone: quote.customerPhone,
+          vehicleId: quote.vehicleId || '',
+          vehicleName: quote.vehicleName,
+          vehiclePlate: vehicle ? `${vehicle.plateCity} ${vehicle.plateNumber}` : 'TBD',
+          pickupDateTime: quote.startDate,
+          returnDateTime: quote.endDate,
+          durationDays: quote.durationDays,
+          pickupLocation: 'Dubai Flagship Showroom',
+          returnLocation: 'Dubai Flagship Showroom',
+          dailyRate: quote.dailyRate,
+          totalAmount: quote.grandTotal,
+          depositAmount: quote.securityDeposit,
+          depositStatus: 'pending' as const,
+          status: 'confirmed' as const,
+          ownerId: quote.ownerId,
+          ownerName: quote.ownerName,
+          quotationId: quote.id,
+          notes: `Converted from quotation ${quote.id}. ${quote.notes}`,
+          createdAt: now,
+          updatedAt: now
+        })
+      );
+    } catch (err) {
+      if (err instanceof AvailabilityConflictError) {
+        return res.status(400).json({ error: 'Vehicle is not available for requested dates', conflicts: err.conflicts });
+      }
+      throw err;
+    }
+    await updateDurable('vehicles', quote.vehicleId, { status: 'reserved', nextReservationDate: quote.startDate, updatedAt: now });
+    if (vehicle) {
+      vehicle.status = 'reserved';
+      vehicle.nextReservationDate = quote.startDate;
+    }
+  } else {
+    reservation = {
+      id: resId, customerId: quote.customerId, customerName: quote.customerName, customerPhone: quote.customerPhone,
+      vehicleId: '', vehicleName: quote.vehicleName, vehiclePlate: 'TBD',
+      pickupDateTime: quote.startDate, returnDateTime: quote.endDate, durationDays: quote.durationDays,
+      pickupLocation: 'Dubai Flagship Showroom', returnLocation: 'Dubai Flagship Showroom',
+      dailyRate: quote.dailyRate, totalAmount: quote.grandTotal, depositAmount: quote.securityDeposit,
+      depositStatus: 'pending' as const, status: 'confirmed' as const, ownerId: quote.ownerId, ownerName: quote.ownerName,
+      quotationId: quote.id, notes: `Converted from quotation ${quote.id}. ${quote.notes}`, createdAt: now, updatedAt: now
+    };
+    await createDurable('reservations', reservation);
   }
 
-  globalStore.logAudit({
+  const updatedQuote = { ...quote, status: 'accepted', reservationId: resId, updatedAt: now };
+  await updateDurable('quotations', quote.id, updatedQuote);
+
+  globalStore.reservations.unshift(reservation);
+  const quoteIndex = globalStore.quotations.findIndex(q => q.id === quote.id);
+  if (quoteIndex !== -1) globalStore.quotations[quoteIndex] = updatedQuote as any;
+
+  await recordAudit({
     userId: req.body.actorId || quote.ownerId,
     userName: req.body.actorName || quote.ownerName,
     userRole: 'sales',
@@ -1474,8 +1501,8 @@ app.post('/api/quotations/:id/convert-reservation', (req, res) => {
     reason: 'Quotation accepted by client'
   });
 
-  res.json({ success: true, reservation, quotation: quote });
-});
+  res.json({ success: true, reservation, quotation: updatedQuote });
+}));
 
 // ----------------------------------------------------
 // 6. RESERVATIONS
@@ -1533,56 +1560,88 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
   res.status(201).json(resObj);
 }));
 
-app.post('/api/reservations/:id/create-contract', (req, res) => {
-  const reserv = globalStore.reservations.find(r => r.id === req.params.id);
-  if (!reserv) return res.status(404).json({ error: 'Reservation not found' });
+// Was flagged in the audit for having no idempotency guard at all: two
+// rapid clicks created two separate Contract records from the same
+// reservation, with reserv.contractId just ending up pointing at whichever
+// call finished last -- the other became an orphaned, still-billed ghost.
+// Now atomic: the transaction reads the reservation, rejects if
+// reserv.contractId is already set, and creates the contract + updates the
+// reservation together.
+app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const contractId = await issueNextNumber('Contract');
+  const now = new Date().toISOString();
+  const reservationRef = admin.firestore().collection('reservations').doc(req.params.id);
 
-  const customer = globalStore.customers.find(c => c.id === reserv.customerId);
-  const vehicle = globalStore.vehicles.find(v => v.id === reserv.vehicleId);
+  let outcome: { contract: any; reservation: any };
+  try {
+    outcome = await runDurableTransaction(async (tx, db) => {
+      const resSnap = await tx.get(reservationRef);
+      if (!resSnap.exists) throw new PersistenceError('Reservation not found');
+      const reserv = resSnap.data() as any;
+      if (reserv.contractId) throw new PersistenceError('A contract has already been created from this reservation.');
 
-  const contractId = globalStore.getNextNumber('Contract');
-  const vatAmount = reserv.totalAmount * (5 / 105); // already inclusive or 5%
-  const rentalTotal = reserv.totalAmount - vatAmount;
+      const customerRef = db.collection('customers').doc(reserv.customerId);
+      const vehicleRef = db.collection('vehicles').doc(reserv.vehicleId);
+      const [customerSnap, vehicleSnap] = await Promise.all([tx.get(customerRef), tx.get(vehicleRef)]);
+      const customer = customerSnap.exists ? (customerSnap.data() as any) : null;
+      const vehicle = vehicleSnap.exists ? (vehicleSnap.data() as any) : null;
 
-  const contract = {
-    id: contractId,
-    contractNumber: contractId,
-    reservationId: reserv.id,
-    customerId: reserv.customerId,
-    customerName: reserv.customerName,
-    customerPhone: reserv.customerPhone,
-    customerAddress: customer ? customer.address : 'Dubai, UAE',
-    vehicleId: reserv.vehicleId,
-    vehicleName: reserv.vehicleName,
-    vehiclePlate: reserv.vehiclePlate,
-    vehicleVin: vehicle ? vehicle.vin : 'VIN-UNASSIGNED',
-    startDateTime: reserv.pickupDateTime,
-    endDateTime: reserv.returnDateTime,
-    pickupLocation: reserv.pickupLocation,
-    returnLocation: reserv.returnLocation,
-    dailyRate: reserv.dailyRate,
-    rentalTotal,
-    vatAmount,
-    grandTotal: reserv.totalAmount,
-    depositAmount: reserv.depositAmount,
-    mileageAllowancePerDay: 250,
-    extraKmRate: 15,
-    depositReleaseDays: 21,
-    status: 'draft' as const,
-    paymentStatus: 'unpaid' as const,
-    depositStatus: 'pending' as const,
-    termsAccepted: true,
-    notes: reserv.notes,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+      const vatAmount = reserv.totalAmount * (5 / 105); // already inclusive of 5%
+      const rentalTotal = reserv.totalAmount - vatAmount;
 
+      const contract = {
+        id: contractId,
+        contractNumber: contractId,
+        reservationId: reserv.id,
+        customerId: reserv.customerId,
+        customerName: reserv.customerName,
+        customerPhone: reserv.customerPhone,
+        customerAddress: customer ? customer.address : 'Dubai, UAE',
+        vehicleId: reserv.vehicleId,
+        vehicleName: reserv.vehicleName,
+        vehiclePlate: reserv.vehiclePlate,
+        vehicleVin: vehicle ? vehicle.vin : 'VIN-UNASSIGNED',
+        startDateTime: reserv.pickupDateTime,
+        endDateTime: reserv.returnDateTime,
+        pickupLocation: reserv.pickupLocation,
+        returnLocation: reserv.returnLocation,
+        dailyRate: reserv.dailyRate,
+        rentalTotal,
+        vatAmount,
+        grandTotal: reserv.totalAmount,
+        depositAmount: reserv.depositAmount,
+        mileageAllowancePerDay: 250,
+        extraKmRate: 15,
+        depositReleaseDays: 21,
+        status: 'draft' as const,
+        paymentStatus: 'unpaid' as const,
+        depositStatus: 'pending' as const,
+        termsAccepted: true,
+        notes: reserv.notes,
+        createdAt: now,
+        updatedAt: now
+      };
+
+      const updatedReservation = { ...reserv, contractId, status: 'active', updatedAt: now };
+      tx.create(db.collection('contracts').doc(contractId), contract);
+      tx.set(reservationRef, updatedReservation, { merge: true });
+
+      return { contract, reservation: updatedReservation };
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Reservation not found' || err.message.startsWith('A contract has already'))) {
+      return res.status(err.message === 'Reservation not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const { contract, reservation } = outcome;
   globalStore.contracts.unshift(contract);
-  reserv.contractId = contractId;
-  reserv.status = 'active';
+  const index = globalStore.reservations.findIndex(r => r.id === req.params.id);
+  if (index !== -1) globalStore.reservations[index] = reservation;
 
-  res.json({ success: true, contract, reservation: reserv });
-});
+  res.json({ success: true, contract, reservation });
+}));
 
 // ----------------------------------------------------
 // 7. CONTRACTS & RENTAL OPERATIONS (HANDOVER & RETURN)
@@ -2249,9 +2308,10 @@ app.get('/api/bank-transactions', (req, res) => {
   res.json(globalStore.bankTransactions);
 });
 
-app.post('/api/bank-batches', async (req, res) => {
+app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
   const { fileName, bankName, accountNumber, transactions, uploadedBy } = req.body;
-  const batchId = `BATCH-${new Date().toISOString().slice(0, 7)}-${String(globalStore.bankImportBatches.length + 1).padStart(2, '0')}`;
+  const batchSeq = await issueNextNumber('BankBatch');
+  const batchId = `BATCH-${new Date().toISOString().slice(0, 7)}-${batchSeq.replace(/\D/g, '').slice(-2).padStart(2, '0')}`;
   
   const parsedTxns: any[] = [];
   (transactions || []).forEach((t: any, idx: number) => {
@@ -2313,6 +2373,12 @@ app.post('/api/bank-batches', async (req, res) => {
     status: 'ready_for_review' as const
   };
 
+  const ops: BatchOp[] = [{ type: 'create', collection: 'bank_batches', id: batch.id, data: batch }];
+  for (const t of parsedTxns) ops.push({ type: 'create', collection: 'bank_transactions', id: t.id, data: t });
+  for (let i = 0; i < ops.length; i += 500) {
+    await runDurableBatch(ops.slice(i, i + 500));
+  }
+
   globalStore.bankImportBatches.unshift(batch);
   globalStore.bankTransactions.unshift(...parsedTxns);
 
@@ -2326,7 +2392,7 @@ app.post('/api/bank-batches', async (req, res) => {
   }
 
   res.status(201).json({ batch, transactions: parsedTxns });
-});
+}));
 
 // Guards against double-reconcile (the audit's finding: reconciling twice
 // would double-credit the matched invoice) by checking txn.reconciled
@@ -2558,7 +2624,7 @@ app.post('/api/tolls', async (req, res) => {
     const pricing = globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING;
     const calculated = calculateTollTransaction({ ...body, createdBy: createdBy || 'USR-001' }, pricing);
 
-    const newId = globalStore.getNextNumber('TollTransaction' as any) || `TOL-${String(globalStore.tollTransactions.length + 1).padStart(6, '0')}`;
+    const newId = await issueNextNumber('TollTransaction');
     const now = new Date().toISOString();
     const record = {
       id: newId,
@@ -2572,9 +2638,10 @@ app.post('/api/tolls', async (req, res) => {
       updatedAt: now
     };
 
+    await createDurable('toll_transactions', record);
     globalStore.tollTransactions.unshift(record);
 
-    globalStore.logAudit({
+    await recordAudit({
       userId: createdBy || 'USR-001',
       userName: body.createdByName || createdBy || 'Staff',
       userRole: body.actorRole || 'fleet',
@@ -2662,8 +2729,9 @@ app.patch('/api/tolls/:id', async (req, res) => {
     }
 
     record.updatedAt = new Date().toISOString();
+    await updateDurable('toll_transactions', record.id, record as unknown as Record<string, unknown>);
 
-    globalStore.logAudit({
+    await recordAudit({
       userId: actorId || 'USR-001',
       userName: actorName || 'Staff',
       userRole: 'finance',
@@ -2685,12 +2753,13 @@ app.patch('/api/tolls/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/tolls/:id', requireRole('ceo', 'admin', 'finance'), (req, res) => {
+app.delete('/api/tolls/:id', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
   const index = globalStore.tollTransactions.findIndex(t => t.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Toll transaction not found.' });
   const [removed] = globalStore.tollTransactions.splice(index, 1);
+  await deleteDurable('toll_transactions', removed.id);
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: (req.body && req.body.actorId) || 'USR-001',
     userName: (req.body && req.body.actorName) || 'Admin',
     userRole: 'admin',
@@ -2702,7 +2771,7 @@ app.delete('/api/tolls/:id', requireRole('ceo', 'admin', 'finance'), (req, res) 
   });
 
   res.json({ success: true });
-});
+}));
 
 // File import (Excel/PDF) for Salik or Darb. Client sends the file as
 // base64 (same pattern as /api/upload) plus which provider it's from.
@@ -2778,12 +2847,12 @@ app.post('/api/tolls/import', requireRole('ceo', 'admin', 'finance'), async (req
     // Only actually consume sequence numbers once the import is confirmed --
     // a preview call must not burn real TOL-/TOLBATCH- numbers for rows that
     // may never get saved (the client re-parses the same file on confirm).
-    const batchId = isConfirmed
-      ? `TOLBATCH-${String(globalStore.tollImportBatches.length + 1).padStart(4, '0')}`
-      : `PREVIEW-${Date.now()}`;
+    const batchId = isConfirmed ? await issueNextNumber('TollImportBatch') : `PREVIEW-${Date.now()}`;
 
     let matchedCount = 0;
-    const newRecords = parsed.rows.map((row, idx) => {
+    const newRecords: any[] = [];
+    for (let idx = 0; idx < parsed.rows.length; idx++) {
+      const row = parsed.rows[idx];
       const match = matchPlateToContract(row.plateNumber, row.date);
       if (match.contractId) matchedCount++;
 
@@ -2805,14 +2874,14 @@ app.post('/api/tolls/import', requireRole('ceo', 'admin', 'finance'), async (req
         createdBy: uploadedBy || 'USR-001'
       }, pricing);
 
-      return {
-        id: isConfirmed ? globalStore.getNextNumber('TollTransaction') : `PREVIEW-${idx + 1}`,
+      newRecords.push({
+        id: isConfirmed ? await issueNextNumber('TollTransaction') : `PREVIEW-${idx + 1}`,
         ...calculated,
         importBatchId: batchId,
         createdAt: now,
         updatedAt: now
-      };
-    });
+      });
+    }
 
     const batch = {
       id: batchId,
@@ -2839,10 +2908,20 @@ app.post('/api/tolls/import', requireRole('ceo', 'admin', 'finance'), async (req
       return res.json({ preview: true, batch, transactions: newRecords, warnings: parsed.warnings });
     }
 
+    // Confirmed imports previously wrote ONLY to globalStore -- a whole
+    // Salik/Darb statement (potentially hundreds of transactions) could be
+    // "successfully imported" per the API response and then vanish on the
+    // next cold start. Now committed as one atomic Firestore batch.
+    const importOps: BatchOp[] = [{ type: 'create', collection: 'toll_import_batches', id: batch.id, data: batch }];
+    for (const r of newRecords) importOps.push({ type: 'create', collection: 'toll_transactions', id: r.id, data: r });
+    for (let i = 0; i < importOps.length; i += 500) {
+      await runDurableBatch(importOps.slice(i, i + 500));
+    }
+
     globalStore.tollImportBatches.unshift(batch);
     globalStore.tollTransactions.unshift(...newRecords);
 
-    globalStore.logAudit({
+    await recordAudit({
       userId: uploadedBy || 'USR-001',
       userName: uploadedBy || 'Staff',
       userRole: 'finance',
