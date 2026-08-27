@@ -6,7 +6,9 @@ import {
   Contract, Reservation, Customer, Lead, AuditLog
 } from '../types';
 import { globalStore } from './dataStore';
-import { updateDurable, PersistenceError } from './persistence';
+import { updateDurable, createDurable, PersistenceError } from './persistence';
+import { issueNextNumber } from './idGenerator';
+import { reserveVehicleSlot, AvailabilityConflictError } from './availability';
 
 /**
  * In-memory idempotency cache for deduplicating rapid duplicate submissions
@@ -226,7 +228,10 @@ export class SplendorConnectEngine {
       createdAt: now
     });
 
-    const auditLog = globalStore.logAudit({
+    const auditId = await issueNextNumber('AuditLog');
+    const auditLog: AuditLog = {
+      id: auditId,
+      timestamp: new Date().toISOString(),
       userId: params.assignedBy,
       userName: params.assignedByName,
       userRole: 'fleet',
@@ -236,7 +241,8 @@ export class SplendorConnectEngine {
       previousValue: `Plate: ${prevPlateCity} ${prevPlateNumber}`,
       newValue: `Plate: ${params.newPlateCity} ${params.newPlateNumber}`,
       reason: params.reason
-    });
+    };
+    globalStore.auditLogs.unshift(auditLog);
 
     // Persist this vehicle & audit log to Firestore -- awaited, so the
     // caller's response only goes out once both writes are confirmed.
@@ -335,34 +341,25 @@ export class SplendorConnectEngine {
   }
 
   /**
-   * Process Public Website Inbound Lead with validation, idempotency, and persistence
+   * Validates a public lead submission and returns the trimmed fields, or
+   * an error. Shared by both the durable and sync-only code paths below so
+   * the validation rules can't drift between them.
    */
-  public static handlePublicLead(data: PublicWebsiteLeadRequest): { success: boolean; leadId: string; error?: string } {
-    // Basic validation
+  private static validateLeadRequest(data: PublicWebsiteLeadRequest): { fullName: string; email: string; phone: string } | { error: string } {
     const fullName = (data.fullName || '').trim();
     const email = (data.email || '').trim();
     const phone = (data.phone || '').trim();
+    if (!fullName || fullName.length < 2) return { error: 'Please provide a valid full name.' };
+    if (!email && !phone) return { error: 'A valid email address or phone number is required.' };
+    return { fullName, email, phone };
+  }
 
-    if (!fullName || fullName.length < 2) {
-      return { success: false, leadId: '', error: 'Please provide a valid full name.' };
-    }
-    if (!email && !phone) {
-      return { success: false, leadId: '', error: 'A valid email address or phone number is required.' };
-    }
-
-    // Idempotency check
-    const idempotencyKey = `lead:${email.toLowerCase()}:${phone}:${data.preferredVehicle || ''}:${data.pickupDateTime || ''}`;
-    const cached = checkIdempotency(idempotencyKey);
-    if (cached) {
-      return cached;
-    }
-
-    const leadId = globalStore.getNextNumber('Lead');
-    const newLead: Lead = {
+  private static buildLeadRecord(data: PublicWebsiteLeadRequest, leadId: string, fields: { fullName: string; email: string; phone: string }): Lead {
+    return {
       id: leadId,
-      fullName,
-      email,
-      phone,
+      fullName: fields.fullName,
+      email: fields.email,
+      phone: fields.phone,
       source: 'website',
       status: 'new',
       ownerId: 'USR-001',
@@ -377,7 +374,78 @@ Message: ${data.message || 'No additional message'}`,
       updatedAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString()
     };
+  }
 
+  /**
+   * Process Public Website Inbound Lead with validation, idempotency, and
+   * DURABLE persistence: the Lead ID is issued atomically from Firestore
+   * (issueNextNumber), and the lead + audit log are written to Firestore
+   * BEFORE this resolves -- a Firestore failure throws (PersistenceError /
+   * IdGenerationError) instead of the request silently succeeding with data
+   * that only ever existed in this instance's memory. This is the path used
+   * by the real POST /api/public/leads endpoint.
+   */
+  public static async handlePublicLead(data: PublicWebsiteLeadRequest): Promise<{ success: boolean; leadId: string; error?: string }> {
+    const validated = SplendorConnectEngine.validateLeadRequest(data);
+    if ('error' in validated) {
+      return { success: false, leadId: '', error: validated.error };
+    }
+    const { fullName, email, phone } = validated;
+
+    const idempotencyKey = `lead:${email.toLowerCase()}:${phone}:${data.preferredVehicle || ''}:${data.pickupDateTime || ''}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
+    const leadId = await issueNextNumber('Lead');
+    const newLead = SplendorConnectEngine.buildLeadRecord(data, leadId, { fullName, email, phone });
+    await createDurable('leads', newLead);
+    globalStore.leads.unshift(newLead);
+
+    const auditId = await issueNextNumber('AuditLog');
+    const auditLog: AuditLog = {
+      id: auditId,
+      timestamp: new Date().toISOString(),
+      userId: 'SPLENDOR-CONNECT',
+      userName: 'Website Gateway',
+      userRole: 'admin',
+      entityType: 'Lead',
+      entityId: leadId,
+      action: 'create',
+      newValue: `Website lead received from ${fullName} for vehicle ${data.preferredVehicle || 'N/A'}`
+    };
+    await createDurable('audit_logs', auditLog);
+    globalStore.auditLogs.unshift(auditLog);
+
+    const response = { success: true, leadId };
+    storeIdempotency(idempotencyKey, response);
+    return response;
+  }
+
+  /**
+   * SYNCHRONOUS, in-memory-only counterpart of handlePublicLead(), used
+   * exclusively by the isolated test-suite harness (POST /api/tests/run-all,
+   * TC-12) which runs inside DataStore.withIsolatedState() -- a callback
+   * that MUST stay synchronous and MUST NOT touch real Firestore (see that
+   * method's doc comment in dataStore.ts). Do not call this from any real
+   * request path; it does not durably persist anything.
+   */
+  public static handlePublicLeadSync(data: PublicWebsiteLeadRequest): { success: boolean; leadId: string; error?: string } {
+    const validated = SplendorConnectEngine.validateLeadRequest(data);
+    if ('error' in validated) {
+      return { success: false, leadId: '', error: validated.error };
+    }
+    const { fullName, email, phone } = validated;
+
+    const idempotencyKey = `lead:${email.toLowerCase()}:${phone}:${data.preferredVehicle || ''}:${data.pickupDateTime || ''}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
+    const leadId = globalStore.getNextNumber('Lead');
+    const newLead = SplendorConnectEngine.buildLeadRecord(data, leadId, { fullName, email, phone });
     globalStore.leads.unshift(newLead);
 
     const auditLog = globalStore.logAudit({
@@ -390,57 +458,36 @@ Message: ${data.message || 'No additional message'}`,
       newValue: `Website lead received from ${fullName} for vehicle ${data.preferredVehicle || 'N/A'}`
     });
 
-    // Persist to Firestore
-    syncToFirestore('leads', leadId, newLead);
-    syncToFirestore('audit_logs', auditLog.id, auditLog);
-
     const response = { success: true, leadId };
     storeIdempotency(idempotencyKey, response);
     return response;
   }
 
   /**
-   * Process Public Reservation Request from Website
-   * STRICT HARDENING: Zero fallback to invalid vehicles, server pricing derivation, idempotency, availability check
+   * Shared validation + vehicle resolution for a public reservation request.
+   * Pure and synchronous (reads only the in-memory vehicle catalog, which is
+   * fine to be eventually-consistent for this preliminary eligibility check
+   * -- the actual booking-conflict decision happens later, transactionally,
+   * against Firestore). Used by both the durable and sync-only code paths.
    */
-  public static handlePublicReservation(data: PublicWebsiteReservationRequest): {
-    success: boolean;
-    reservationId?: string;
-    error?: string;
-  } {
-    // 1. Strict input validation
+  private static resolvePublicReservationRequest(data: PublicWebsiteReservationRequest):
+    | { fullName: string; email: string; phone: string; pickupTime: number; returnTime: number; targetVehicle: Vehicle }
+    | { error: string } {
     const fullName = (data.fullName || '').trim();
     const email = (data.email || '').trim();
     const phone = (data.phone || '').trim();
     const vehicleKey = (data.publicVehicleId || '').trim();
 
-    if (!vehicleKey) {
-      return {
-        success: false,
-        error: 'A valid luxury vehicle must be specified for this reservation request.'
-      };
-    }
-    if (!fullName || fullName.length < 2) {
-      return { success: false, error: 'Please provide a valid full name.' };
-    }
-    if (!email || !phone) {
-      return { success: false, error: 'Both a valid email address and phone number are required for VIP booking verification.' };
-    }
-    if (!data.pickupDateTime || !data.returnDateTime) {
-      return { success: false, error: 'Pickup date and return date are required.' };
-    }
+    if (!vehicleKey) return { error: 'A valid luxury vehicle must be specified for this reservation request.' };
+    if (!fullName || fullName.length < 2) return { error: 'Please provide a valid full name.' };
+    if (!email || !phone) return { error: 'Both a valid email address and phone number are required for VIP booking verification.' };
+    if (!data.pickupDateTime || !data.returnDateTime) return { error: 'Pickup date and return date are required.' };
 
     const pickupTime = new Date(data.pickupDateTime).getTime();
     const returnTime = new Date(data.returnDateTime).getTime();
+    if (isNaN(pickupTime) || isNaN(returnTime)) return { error: 'Invalid pickup or return date format.' };
+    if (returnTime <= pickupTime) return { error: 'Return date must be scheduled after the pickup date.' };
 
-    if (isNaN(pickupTime) || isNaN(returnTime)) {
-      return { success: false, error: 'Invalid pickup or return date format.' };
-    }
-    if (returnTime <= pickupTime) {
-      return { success: false, error: 'Return date must be scheduled after the pickup date.' };
-    }
-
-    // 2. Strict Vehicle Resolution (NO FALLBACK to vehicles[0])
     const target = vehicleKey.toLowerCase();
     const targetVehicle = globalStore.vehicles.find(v =>
       v.id.toLowerCase() === target ||
@@ -449,13 +496,9 @@ Message: ${data.message || 'No additional message'}`,
       (v.website && v.website.slug && v.website.slug.toLowerCase() === target)
     );
 
-    // Reject unknown, unlisted, sold, or archived vehicles immediately
     if (!targetVehicle) {
       console.warn(`[SplendorConnectEngine] Reservation rejected: Invalid or unknown vehicle identifier "${vehicleKey}" requested by ${email}`);
-      return {
-        success: false,
-        error: 'The requested vehicle is currently unavailable or could not be found in our active showroom fleet.'
-      };
+      return { error: 'The requested vehicle is currently unavailable or could not be found in our active showroom fleet.' };
     }
 
     if (
@@ -466,93 +509,65 @@ Message: ${data.message || 'No additional message'}`,
       targetVehicle.lifecycleStatus === 'INACTIVE'
     ) {
       console.warn(`[SplendorConnectEngine] Reservation rejected: Vehicle ${targetVehicle.id} is in status ${targetVehicle.lifecycleStatus}`);
-      return {
-        success: false,
-        error: 'The requested vehicle is currently out of service or unavailable for new bookings.'
-      };
+      return { error: 'The requested vehicle is currently out of service or unavailable for new bookings.' };
     }
 
     const pub = targetVehicle.website;
     if (!pub || !pub.enabled || pub.visibility === 'INTERNAL_ONLY' || pub.visibility === 'PRIVATE') {
       console.warn(`[SplendorConnectEngine] Reservation rejected: Vehicle ${targetVehicle.id} is not publicly listed for online booking`);
-      return {
-        success: false,
-        error: 'The requested vehicle is reserved for private CRM requests and not available for online booking.'
-      };
+      return { error: 'The requested vehicle is reserved for private CRM requests and not available for online booking.' };
     }
 
-    // 3. Idempotency Check (Prevent duplicate reservations from double clicks / network retries)
-    const idempotencyKey = `res:${email.toLowerCase()}:${targetVehicle.id}:${data.pickupDateTime}:${data.returnDateTime}`;
-    const cached = checkIdempotency(idempotencyKey);
-    if (cached) {
-      return cached;
-    }
+    return { fullName, email, phone, pickupTime, returnTime, targetVehicle };
+  }
 
-    // 4. Server-Authoritative Availability Check (Prevent double booking)
-    const avail = globalStore.checkVehicleAvailability(targetVehicle.id, data.pickupDateTime, data.returnDateTime);
-    if (!avail.available) {
-      return {
-        success: false,
-        error: 'The requested vehicle is already reserved for the selected dates. Please choose alternate dates or select another model from our showroom.'
-      };
-    }
+  private static buildReservationCustomer(data: PublicWebsiteReservationRequest, custId: string, fullName: string, email: string, phone: string, targetVehicle: Vehicle): Customer {
+    return {
+      id: custId,
+      type: 'individual',
+      fullName,
+      email,
+      phone,
+      whatsapp: data.whatsapp || phone,
+      address: data.pickupLocation || 'Dubai, UAE',
+      city: 'Dubai',
+      country: 'United Arab Emirates',
+      nationality: 'VIP Visitor',
+      idType: 'passport',
+      idNumber: 'PENDING_VERIFICATION',
+      idExpiryDate: '2028-12-31',
+      licenseNumber: 'PENDING_VERIFICATION',
+      licenseCountry: 'UAE',
+      licenseExpiryDate: '2028-12-31',
+      source: 'website',
+      status: 'active',
+      ownerId: 'USR-001',
+      ownerName: 'Tariq Al-Mansoor',
+      isVIP: true,
+      tags: ['Website VIP Online Booking'],
+      preferences: { favoriteCategory: targetVehicle.category },
+      notes: 'Created via Splendor VIP Website Online Reservation Gateway',
+      lifetimeValue: 0,
+      totalRentals: 0,
+      outstandingBalance: 0,
+      securityDepositsHeld: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString()
+    };
+  }
 
-    // 5. Customer Deduplication: Find existing customer by email or phone
-    let customer = globalStore.customers.find(
-      c => (c.email && c.email.toLowerCase() === email.toLowerCase()) || (phone && c.phone === phone)
-    );
-
-    if (!customer) {
-      const custId = globalStore.getNextNumber('Customer');
-      customer = {
-        id: custId,
-        type: 'individual',
-        fullName,
-        email,
-        phone,
-        whatsapp: data.whatsapp || phone,
-        address: data.pickupLocation || 'Dubai, UAE',
-        city: 'Dubai',
-        country: 'United Arab Emirates',
-        nationality: 'VIP Visitor',
-        idType: 'passport',
-        idNumber: 'PENDING_VERIFICATION',
-        idExpiryDate: '2028-12-31',
-        licenseNumber: 'PENDING_VERIFICATION',
-        licenseCountry: 'UAE',
-        licenseExpiryDate: '2028-12-31',
-        source: 'website',
-        status: 'active',
-        ownerId: 'USR-001',
-        ownerName: 'Tariq Al-Mansoor',
-        isVIP: true,
-        tags: ['Website VIP Online Booking'],
-        preferences: {
-          favoriteCategory: targetVehicle.category
-        },
-        notes: 'Created via Splendor VIP Website Online Reservation Gateway',
-        lifetimeValue: 0,
-        totalRentals: 0,
-        outstandingBalance: 0,
-        securityDepositsHeld: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastActivityAt: new Date().toISOString()
-      };
-      globalStore.customers.unshift(customer);
-      syncToFirestore('customers', customer.id, customer);
-    }
-
-    // 6. Server-Authoritative Pricing Calculation (Client cannot override rates)
-    const durationMs = returnTime - pickupTime;
-    const days = Math.max(1, Math.ceil(durationMs / (1000 * 60 * 60 * 24)));
-    const dailyRate = targetVehicle.website?.dailyRate || targetVehicle.dailyRate || 5000;
-    const totalAmount = days * dailyRate;
-    const depositAmount = targetVehicle.website?.deposit || targetVehicle.minDeposit || 10000;
-
-    // 7. Create Reservation Record in CRM with 'pending' review lifecycle status
-    const resId = globalStore.getNextNumber('Reservation');
-    const newReservation: Reservation = {
+  private static buildReservationRecord(
+    data: PublicWebsiteReservationRequest,
+    resId: string,
+    customer: Customer,
+    targetVehicle: Vehicle,
+    days: number,
+    dailyRate: number,
+    totalAmount: number,
+    depositAmount: number
+  ): Reservation {
+    return {
       id: resId,
       customerId: customer.id,
       customerName: customer.fullName,
@@ -579,10 +594,152 @@ Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.ret
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
+  }
 
+  /**
+   * Process Public Reservation Request from Website.
+   * STRICT HARDENING: Zero fallback to invalid vehicles, server pricing
+   * derivation, idempotency, and a genuinely durable, cross-instance-safe
+   * availability check.
+   *
+   * The actual booking decision is delegated to reserveVehicleSlot(), which
+   * checks for conflicts AND creates the reservation document inside one
+   * Firestore transaction -- structurally impossible to double-book even
+   * when two requests for the same vehicle land on two different Vercel
+   * instances at the same time (see availability.ts). This is the path used
+   * by the real POST /api/public/reservations endpoint.
+   */
+  public static async handlePublicReservation(data: PublicWebsiteReservationRequest): Promise<{
+    success: boolean;
+    reservationId?: string;
+    error?: string;
+  }> {
+    const resolved = SplendorConnectEngine.resolvePublicReservationRequest(data);
+    if ('error' in resolved) {
+      return { success: false, error: resolved.error };
+    }
+    const { fullName, email, phone, pickupTime, returnTime, targetVehicle } = resolved;
+
+    const idempotencyKey = `res:${email.toLowerCase()}:${targetVehicle.id}:${data.pickupDateTime}:${data.returnDateTime}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Customer Deduplication: Find existing customer by email or phone
+    let customer = globalStore.customers.find(
+      c => (c.email && c.email.toLowerCase() === email.toLowerCase()) || (phone && c.phone === phone)
+    );
+
+    if (!customer) {
+      const custId = await issueNextNumber('Customer');
+      customer = SplendorConnectEngine.buildReservationCustomer(data, custId, fullName, email, phone, targetVehicle);
+      await createDurable('customers', customer);
+      globalStore.customers.unshift(customer);
+    }
+
+    // Server-Authoritative Pricing Calculation (Client cannot override rates)
+    const durationMs = returnTime - pickupTime;
+    const days = Math.max(1, Math.ceil(durationMs / (1000 * 60 * 60 * 24)));
+    const dailyRate = targetVehicle.website?.dailyRate || targetVehicle.dailyRate || 5000;
+    const totalAmount = days * dailyRate;
+    const depositAmount = targetVehicle.website?.deposit || targetVehicle.minDeposit || 10000;
+
+    const resId = await issueNextNumber('Reservation');
+    let newReservation: Reservation;
+    try {
+      newReservation = await reserveVehicleSlot(
+        { vehicleId: targetVehicle.id, startIso: data.pickupDateTime, endIso: data.returnDateTime },
+        'reservations',
+        () => SplendorConnectEngine.buildReservationRecord(data, resId, customer!, targetVehicle, days, dailyRate, totalAmount, depositAmount)
+      );
+    } catch (err) {
+      if (err instanceof AvailabilityConflictError) {
+        return {
+          success: false,
+          error: 'The requested vehicle is already reserved for the selected dates. Please choose alternate dates or select another model from our showroom.'
+        };
+      }
+      throw err;
+    }
     globalStore.reservations.unshift(newReservation);
 
-    // Audit log
+    const auditId = await issueNextNumber('AuditLog');
+    const auditLog: AuditLog = {
+      id: auditId,
+      timestamp: new Date().toISOString(),
+      userId: 'SPLENDOR-CONNECT',
+      userName: 'Website Reservation Gateway',
+      userRole: 'sales',
+      entityType: 'Reservation',
+      entityId: resId,
+      action: 'create',
+      newValue: `Website reservation request for ${customer.fullName} - ${targetVehicle.make} ${targetVehicle.model} (${days} days, ${totalAmount} AED) [Pending Review]`
+    };
+    await createDurable('audit_logs', auditLog);
+    globalStore.auditLogs.unshift(auditLog);
+
+    const response = { success: true, reservationId: resId };
+    storeIdempotency(idempotencyKey, response);
+    return response;
+  }
+
+  /**
+   * SYNCHRONOUS, in-memory-only counterpart of handlePublicReservation(),
+   * used exclusively by the isolated test-suite harness (POST
+   * /api/tests/run-all, TC-13) which runs inside
+   * DataStore.withIsolatedState() -- a callback that MUST stay synchronous
+   * and MUST NOT touch real Firestore (see that method's doc comment in
+   * dataStore.ts). Do not call this from any real request path; it does not
+   * durably persist anything, and its availability check is only the
+   * in-memory, eventually-consistent one (fine here since the isolated
+   * store is single-writer by construction).
+   */
+  public static handlePublicReservationSync(data: PublicWebsiteReservationRequest): {
+    success: boolean;
+    reservationId?: string;
+    error?: string;
+  } {
+    const resolved = SplendorConnectEngine.resolvePublicReservationRequest(data);
+    if ('error' in resolved) {
+      return { success: false, error: resolved.error };
+    }
+    const { fullName, email, phone, pickupTime, returnTime, targetVehicle } = resolved;
+
+    const idempotencyKey = `res:${email.toLowerCase()}:${targetVehicle.id}:${data.pickupDateTime}:${data.returnDateTime}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
+    const avail = globalStore.checkVehicleAvailability(targetVehicle.id, data.pickupDateTime, data.returnDateTime);
+    if (!avail.available) {
+      return {
+        success: false,
+        error: 'The requested vehicle is already reserved for the selected dates. Please choose alternate dates or select another model from our showroom.'
+      };
+    }
+
+    let customer = globalStore.customers.find(
+      c => (c.email && c.email.toLowerCase() === email.toLowerCase()) || (phone && c.phone === phone)
+    );
+
+    if (!customer) {
+      const custId = globalStore.getNextNumber('Customer');
+      customer = SplendorConnectEngine.buildReservationCustomer(data, custId, fullName, email, phone, targetVehicle);
+      globalStore.customers.unshift(customer);
+    }
+
+    const durationMs = returnTime - pickupTime;
+    const days = Math.max(1, Math.ceil(durationMs / (1000 * 60 * 60 * 24)));
+    const dailyRate = targetVehicle.website?.dailyRate || targetVehicle.dailyRate || 5000;
+    const totalAmount = days * dailyRate;
+    const depositAmount = targetVehicle.website?.deposit || targetVehicle.minDeposit || 10000;
+
+    const resId = globalStore.getNextNumber('Reservation');
+    const newReservation = SplendorConnectEngine.buildReservationRecord(data, resId, customer, targetVehicle, days, dailyRate, totalAmount, depositAmount);
+    globalStore.reservations.unshift(newReservation);
+
     const auditLog = globalStore.logAudit({
       userId: 'SPLENDOR-CONNECT',
       userName: 'Website Reservation Gateway',
@@ -592,10 +749,7 @@ Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.ret
       action: 'create',
       newValue: `Website reservation request for ${customer.fullName} - ${targetVehicle.make} ${targetVehicle.model} (${days} days, ${totalAmount} AED) [Pending Review]`
     });
-
-    // Persist to Firestore
-    syncToFirestore('reservations', resId, newReservation);
-    syncToFirestore('audit_logs', auditLog.id, auditLog);
+    void auditLog;
 
     const response = { success: true, reservationId: resId };
     storeIdempotency(idempotencyKey, response);

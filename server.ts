@@ -278,7 +278,7 @@ app.post('/api/admin/users', async (req, res) => {
     // in-memory audit log the rest of the app writes to (globalStore.logAudit)
     // so this shows up in Settings > Security Audit Trail like every other
     // action, rather than a separate Firestore-only trail nothing reads.
-    globalStore.logAudit({
+    await recordAudit({
       userId: requesterUid,
       userName: (requesterDoc.data() as any)?.name || requesterUid,
       userRole: requesterRole,
@@ -355,7 +355,7 @@ app.patch('/api/admin/users/:id', requireRole('ceo', 'admin'), async (req, res) 
 
     await targetRef.set(updates, { merge: true });
 
-    globalStore.logAudit({
+    await recordAudit({
       userId: requesterUid,
       userName: requesterUid,
       userRole: requesterRole,
@@ -459,7 +459,7 @@ app.post('/api/admin/reset-transactional-data', requireRole('ceo', 'admin'), asy
 
     // Log the reset itself as the first audit entry in the now-clean log,
     // so there's a record of who did this and when.
-    globalStore.logAudit({
+    await recordAudit({
       userId: requesterUid,
       userName: requesterName,
       userRole: requesterRole || 'admin',
@@ -1235,13 +1235,13 @@ app.post('/api/public/fleet/check-availability', (req, res) => {
   });
 });
 
-app.post('/api/public/leads', (req, res) => {
+app.post('/api/public/leads', asyncHandler(async (req, res) => {
   const { fullName, email, phone, preferredVehicle, pickupDateTime, returnDateTime, message } = req.body;
   if (!fullName || (!email && !phone)) {
     return res.status(400).json({ success: false, error: 'Name and contact info (email or phone) are required' });
   }
 
-  const result = SplendorConnectEngine.handlePublicLead({
+  const result = await SplendorConnectEngine.handlePublicLead({
     fullName,
     email: email || '',
     phone: phone || '',
@@ -1256,9 +1256,9 @@ app.post('/api/public/leads', (req, res) => {
   }
 
   res.status(201).json({ success: true, leadId: result.leadId });
-});
+}));
 
-app.post('/api/public/reservations', (req, res) => {
+app.post('/api/public/reservations', asyncHandler(async (req, res) => {
   const {
     publicVehicleId, fullName, email, phone, whatsapp,
     pickupDateTime, returnDateTime, pickupLocation, returnLocation, specialRequests
@@ -1271,7 +1271,7 @@ app.post('/api/public/reservations', (req, res) => {
     });
   }
 
-  const result = SplendorConnectEngine.handlePublicReservation({
+  const result = await SplendorConnectEngine.handlePublicReservation({
     publicVehicleId,
     fullName,
     email,
@@ -1293,7 +1293,7 @@ app.post('/api/public/reservations', (req, res) => {
     reservationId: result.reservationId,
     message: 'Your reservation request has been received and prioritized by the SPLENDOR VIP Concierge.'
   });
-});
+}));
 
 app.post('/api/fleet', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Vehicle');
@@ -2544,7 +2544,7 @@ app.get('/api/toll-pricing-config', (req, res) => {
   res.json(globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING);
 });
 
-app.patch('/api/toll-pricing-config', async (req, res) => {
+app.patch('/api/toll-pricing-config', asyncHandler(async (req, res) => {
   const allowed = await requesterCanEditTollPricing(req);
   if (!allowed) {
     return res.status(403).json({ error: 'Only Admin, Finance, Sales, or CEO can change Salik/Darb/Parking pricing.' });
@@ -2571,12 +2571,10 @@ app.patch('/api/toll-pricing-config', async (req, res) => {
   };
 
   if (admin.apps.length > 0) {
-    admin.firestore().collection('settings').doc('toll_pricing_config').set(globalStore.tollPricingConfig, { merge: true }).catch(err =>
-      console.error('Failed to persist toll pricing config to Firestore:', err)
-    );
+    await updateDurable('settings', 'toll_pricing_config', globalStore.tollPricingConfig as unknown as Record<string, unknown>);
   }
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-001',
     userName: actorName || 'Admin',
     userRole: 'admin',
@@ -2589,7 +2587,7 @@ app.patch('/api/toll-pricing-config', async (req, res) => {
   });
 
   res.json(globalStore.tollPricingConfig);
-});
+}));
 
 app.get('/api/tolls', (req, res) => {
   res.json(globalStore.tollTransactions);
@@ -2994,7 +2992,7 @@ app.get('/api/notification-configs', (req, res) => {
   res.json(globalStore.notificationEventConfigs);
 });
 
-app.patch('/api/notification-configs/:eventKey', requireRole('ceo', 'admin'), async (req, res) => {
+app.patch('/api/notification-configs/:eventKey', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const config = globalStore.notificationEventConfigs.find(c => c.eventKey === req.params.eventKey);
   if (!config) return res.status(404).json({ error: 'Unknown notification event.' });
 
@@ -3006,20 +3004,19 @@ app.patch('/api/notification-configs/:eventKey', requireRole('ceo', 'admin'), as
   config.updatedByName = actorName;
   config.updatedAt = new Date().toISOString();
 
-  if (admin.apps.length > 0) {
-    admin.firestore().collection('notification_event_configs').doc(config.eventKey).set(config, { merge: true }).catch(err =>
-      console.error('Failed to persist notification config to Firestore:', err)
-    );
-  }
+  // Previously fire-and-forget with only a .catch(console.error) -- a
+  // failure here was invisible to the caller, who'd see 200 with a config
+  // that was never actually saved.
+  await updateDurable('notification_event_configs', config.eventKey, config as unknown as Record<string, unknown>);
 
   res.json(config);
-});
+}));
 
 app.get('/api/customer-notification-configs', (req, res) => {
   res.json(globalStore.customerNotificationConfigs);
 });
 
-app.patch('/api/customer-notification-configs/:eventKey', requireRole('ceo', 'admin'), (req, res) => {
+app.patch('/api/customer-notification-configs/:eventKey', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const config = globalStore.customerNotificationConfigs.find(c => c.eventKey === req.params.eventKey);
   if (!config) return res.status(404).json({ error: 'Unknown customer notification event.' });
 
@@ -3029,14 +3026,10 @@ app.patch('/api/customer-notification-configs/:eventKey', requireRole('ceo', 'ad
   config.updatedByName = actorName;
   config.updatedAt = new Date().toISOString();
 
-  if (admin.apps.length > 0) {
-    admin.firestore().collection('customer_notification_configs').doc(config.eventKey).set(config, { merge: true }).catch(err =>
-      console.error('Failed to persist customer notification config to Firestore:', err)
-    );
-  }
+  await updateDurable('customer_notification_configs', config.eventKey, config as unknown as Record<string, unknown>);
 
   res.json(config);
-});
+}));
 
 app.get('/api/whatsapp/status', (req, res) => {
   res.json({
@@ -3115,13 +3108,13 @@ app.get('/api/custom-reminders', (req, res) => {
 // routes it to the general WhatsApp group and/or specific staff, bypassing
 // the per-event toggle system entirely (this is a deliberate one-off send,
 // not a recurring automated event).
-app.post('/api/custom-reminders', requireRole('ceo', 'admin'), async (req, res) => {
+app.post('/api/custom-reminders', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const { title, message, broadcastToGroup, staffRecipientIds, actorId, actorName } = req.body || {};
   if (!title || !message) {
     return res.status(400).json({ error: 'A title and message are required.' });
   }
 
-  const id = `REM-${String(globalStore.customReminders.length + 1).padStart(6, '0')}`;
+  const id = await issueNextNumber('CustomReminder');
   const status = await dispatchCustomReminder(id, title, message, !!broadcastToGroup, Array.isArray(staffRecipientIds) ? staffRecipientIds : []);
 
   const reminder = {
@@ -3135,9 +3128,10 @@ app.post('/api/custom-reminders', requireRole('ceo', 'admin'), async (req, res) 
     createdAt: new Date().toISOString(),
     status
   };
+  await createDurable('custom_reminders', reminder);
   globalStore.customReminders.unshift(reminder);
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-001',
     userName: actorName || 'Admin',
     userRole: 'admin',
@@ -3149,7 +3143,7 @@ app.post('/api/custom-reminders', requireRole('ceo', 'admin'), async (req, res) 
   });
 
   res.status(201).json(reminder);
-});
+}));
 
 // Automated background monitoring sweep. Reachable two ways:
 //  1. Vercel Cron (see vercel.json) -- a scheduled GET request. Vercel has
@@ -3201,8 +3195,8 @@ app.get('/api/tasks', (req, res) => {
   res.json(globalStore.tasks);
 });
 
-app.post('/api/tasks', (req, res) => {
-  const newId = globalStore.getNextNumber('Task');
+app.post('/api/tasks', asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Task');
   const task = {
     ...req.body,
     id: newId,
@@ -3210,44 +3204,43 @@ app.post('/api/tasks', (req, res) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  await createDurable('tasks', task);
   globalStore.tasks.unshift(task);
   res.status(201).json(task);
-});
+}));
 
-app.put('/api/tasks/:id', (req, res) => {
+app.put('/api/tasks/:id', asyncHandler(async (req, res) => {
   const index = globalStore.tasks.findIndex(t => t.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Task not found' });
-  globalStore.tasks[index] = { ...globalStore.tasks[index], ...req.body, updatedAt: new Date().toISOString() };
-  res.json(globalStore.tasks[index]);
-});
+  const updated = { ...globalStore.tasks[index], ...req.body, updatedAt: new Date().toISOString() };
+  await updateDurable('tasks', updated.id, updated);
+  globalStore.tasks[index] = updated;
+  res.json(updated);
+}));
 
 app.get('/api/communications', (req, res) => {
   res.json(globalStore.communications);
 });
 
-app.post('/api/communications', (req, res) => {
-  const comm = {
-    ...req.body,
-    id: `COMM-${String(globalStore.communications.length + 1).padStart(3, '0')}`,
-    timestamp: new Date().toISOString()
-  };
+app.post('/api/communications', asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Communication');
+  const comm = { ...req.body, id: newId, timestamp: new Date().toISOString() };
+  await createDurable('communications', comm);
   globalStore.communications.unshift(comm);
   res.status(201).json(comm);
-});
+}));
 
 app.get('/api/documents', (req, res) => {
   res.json(globalStore.documents);
 });
 
-app.post('/api/documents', (req, res) => {
-  const doc = {
-    ...req.body,
-    id: `DOC-${String(globalStore.documents.length + 1).padStart(6, '0')}`,
-    uploadedAt: new Date().toISOString()
-  };
+app.post('/api/documents', asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Document');
+  const doc = { ...req.body, id: newId, uploadedAt: new Date().toISOString() };
+  await createDurable('documents', doc);
   globalStore.documents.unshift(doc);
   res.status(201).json(doc);
-});
+}));
 
 app.get('/api/document-templates', (req, res) => {
   res.json(globalStore.documentTemplates);
@@ -3261,29 +3254,36 @@ app.get('/api/settings/custom-fields', (req, res) => {
   res.json(globalStore.customFields);
 });
 
-app.post('/api/settings/custom-fields', requireRole('ceo', 'admin'), (req, res) => {
-  const field = {
-    ...req.body,
-    id: `CF-${String(globalStore.customFields.length + 1).padStart(2, '0')}`
-  };
+app.post('/api/settings/custom-fields', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('CustomField');
+  const field = { ...req.body, id: newId };
+  await createDurable('custom_fields', field);
   globalStore.customFields.push(field);
   res.status(201).json(field);
-});
+}));
 
 app.get('/api/settings/numbering', (req, res) => {
   res.json(globalStore.numberingConfigs);
 });
 
-app.put('/api/settings/numbering', requireRole('ceo', 'admin'), (req, res) => {
-  const { entity, prefix, digits } = req.body;
-  const config = globalStore.numberingConfigs.find(c => c.entity.toLowerCase() === entity.toLowerCase());
-  if (config) {
-    config.prefix = prefix;
-    config.digits = digits;
-    config.sample = `${prefix}${String(config.nextNumber).padStart(digits, '0')}`;
-  }
+// Previously silently no-op'd (200 with the unchanged array) if `entity`
+// didn't match any known config, per the audit's finding -- now a proper
+// 404. Persists the prefix/digits change to the same numbering_configs
+// document issueNextNumber() reads, so a format change actually survives
+// a cold start instead of only living in globalStore until the next
+// restart quietly reverted it.
+app.put('/api/settings/numbering', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const { entity, prefix, digits } = req.body || {};
+  const config = globalStore.numberingConfigs.find(c => c.entity.toLowerCase() === (entity || '').toLowerCase());
+  if (!config) return res.status(404).json({ error: `Unknown numbering entity "${entity}".` });
+
+  config.prefix = prefix;
+  config.digits = digits;
+  config.sample = `${prefix}${String(config.nextNumber).padStart(digits, '0')}`;
+  await updateDurable('numbering_configs', config.entity.toLowerCase(), { prefix, digits, sample: config.sample, entity: config.entity });
+
   res.json(globalStore.numberingConfigs);
-});
+}));
 
 // ----------------------------------------------------
 // 11. AI INTELLIGENCE ASSISTANCE (GEMINI SERVER-SIDE)
@@ -4173,7 +4173,7 @@ app.post('/api/tests/run-all', (req, res) => {
     if (!attr.matchedVehicle) throw new Error(`Failed to attribute historical toll to vehicle ${sampleVehicle?.id || 'VEH-0001'}`);
 
     // 3. Check Website Inbound Lead Creation
-    const leadRes = SplendorConnectEngine.handlePublicLead({
+    const leadRes = SplendorConnectEngine.handlePublicLeadSync({
       fullName: 'VIP Web Guest',
       email: 'guest@vip-london.com',
       phone: '+44 7700 900077',
@@ -4214,7 +4214,7 @@ app.post('/api/tests/run-all', (req, res) => {
     );
 
     // 1. Assert invalid vehicle key returns strict error and NEVER falls back to vehicles[0]
-    const invalidRes = SplendorConnectEngine.handlePublicReservation({
+    const invalidRes = SplendorConnectEngine.handlePublicReservationSync({
       publicVehicleId: 'NON_EXISTENT_GHOST_VEHICLE_999',
       fullName: 'Security Auditor',
       email: `audit-${Date.now()}@splendor-rental.ae`,
@@ -4233,7 +4233,7 @@ app.post('/api/tests/run-all', (req, res) => {
     if (!activeVehicle) throw new Error('No active published vehicle available for hardening test');
 
     const testTime = Date.now();
-    const validRes = SplendorConnectEngine.handlePublicReservation({
+    const validRes = SplendorConnectEngine.handlePublicReservationSync({
       publicVehicleId: activeVehicle.publicVehicleId || activeVehicle.id,
       fullName: 'VIP Hardening Guest',
       email: `vip.guest.${testTime}@test-hardening.ae`,
@@ -4257,7 +4257,7 @@ app.post('/api/tests/run-all', (req, res) => {
     }
 
     // 3. Assert double booking prevention for overlapping dates
-    const doubleBookRes = SplendorConnectEngine.handlePublicReservation({
+    const doubleBookRes = SplendorConnectEngine.handlePublicReservationSync({
       publicVehicleId: activeVehicle.publicVehicleId || activeVehicle.id,
       fullName: 'Concurrent Booker',
       email: 'concurrent@test-hardening.ae',
