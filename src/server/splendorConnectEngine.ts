@@ -6,6 +6,7 @@ import {
   Contract, Reservation, Customer, Lead, AuditLog
 } from '../types';
 import { globalStore } from './dataStore';
+import { updateDurable, PersistenceError } from './persistence';
 
 /**
  * In-memory idempotency cache for deduplicating rapid duplicate submissions
@@ -38,15 +39,16 @@ function storeIdempotency(key: string, result: any): void {
 }
 
 /**
- * Safe asynchronous Firestore persistence helper
+ * Firestore persistence helper. Used to swallow failures (only
+ * console.error, never surfaced) and was called without `await` from
+ * assignPlateToVehicle -- meaning the HTTP response could be sent, and
+ * Vercel could freeze the function, before this write even landed. Every
+ * call site now awaits this, and a failure propagates as a PersistenceError
+ * (via updateDurable) instead of disappearing into a log line.
  */
-async function syncToFirestore(collectionName: string, docId: string, data: any) {
+async function syncToFirestore(collectionName: string, docId: string, data: any): Promise<void> {
   if (admin.apps.length === 0) return;
-  try {
-    await admin.firestore().collection(collectionName).doc(docId).set(data, { merge: true });
-  } catch (err) {
-    console.error(`[SplendorConnectEngine/Firestore] Failed to persist to ${collectionName}/${docId}:`, err);
-  }
+  await updateDurable(collectionName, docId, data);
 }
 
 /**
@@ -123,7 +125,7 @@ export class SplendorConnectEngine {
   /**
    * Transfer or Assign a Plate with full historical continuity and timeline event
    */
-  public static assignPlateToVehicle(params: {
+  public static async assignPlateToVehicle(params: {
     vehicleId: string;
     newPlateNumber: string;
     newPlateCity: string;
@@ -131,7 +133,7 @@ export class SplendorConnectEngine {
     assignedBy: string;
     assignedByName: string;
     effectiveDate?: string;
-  }): { success: boolean; vehicle?: Vehicle; error?: string } {
+  }): Promise<{ success: boolean; vehicle?: Vehicle; error?: string }> {
     const vehicle = globalStore.vehicles.find(v => v.id === params.vehicleId);
     if (!vehicle) {
       return { success: false, error: 'Vehicle record not found' };
@@ -172,8 +174,9 @@ export class SplendorConnectEngine {
         createdAt: now
       });
 
-      // Persist other vehicle to Firestore
-      syncToFirestore('vehicles', otherVehicleWithPlate.id, otherVehicleWithPlate);
+      // Persist other vehicle to Firestore (awaited -- see syncToFirestore's
+      // doc comment for why this used to be able to silently not happen).
+      await syncToFirestore('vehicles', otherVehicleWithPlate.id, otherVehicleWithPlate);
     }
 
     // Close previous assignment on this vehicle
@@ -235,9 +238,10 @@ export class SplendorConnectEngine {
       reason: params.reason
     });
 
-    // Persist this vehicle & audit log to Firestore
-    syncToFirestore('vehicles', vehicle.id, vehicle);
-    syncToFirestore('audit_logs', auditLog.id, auditLog);
+    // Persist this vehicle & audit log to Firestore -- awaited, so the
+    // caller's response only goes out once both writes are confirmed.
+    await syncToFirestore('vehicles', vehicle.id, vehicle);
+    await syncToFirestore('audit_logs', auditLog.id, auditLog);
 
     return { success: true, vehicle };
   }

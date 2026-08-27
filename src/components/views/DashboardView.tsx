@@ -13,6 +13,7 @@ import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { SplendorLogo } from '../common/SplendorLogo';
 import proudOfUaeBanner from '../../assets/proud-of-uae-banner.jpg';
 import { formatDate } from '../../lib/dateFormat';
+import { apiFetch } from '../../lib/apiFetch';
 
 export const DashboardView: React.FC = () => {
   const { language } = useLanguage();
@@ -20,7 +21,7 @@ export const DashboardView: React.FC = () => {
     customers, vehicles, contracts, reservations, 
     bankTransactions, leads, invoices, payments,
     setActiveView, setSelectedCustomerId, setSelectedContractId,
-    firebaseSyncState, syncAllToFirestore
+    firebaseSyncState, syncAllToFirestore, showToast
   } = useCRM();
 
   const [aiBriefLoading, setAiBriefLoading] = useState(false);
@@ -50,7 +51,7 @@ export const DashboardView: React.FC = () => {
   const fetchAiExecutiveBrief = async () => {
     setAiBriefLoading(true);
     try {
-      const res = await fetch('/api/ai/query', {
+      const res = await apiFetch('/api/ai/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -63,10 +64,15 @@ export const DashboardView: React.FC = () => {
           language
         })
       });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Request failed (${res.status})`);
+      }
       const data = await res.json();
       setAiBrief(data.answer);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      showToast('AI Brief Failed', e?.message || 'Could not generate the executive brief. Please try again.', 'error');
     } finally {
       setAiBriefLoading(false);
     }

@@ -17,6 +17,7 @@ import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurabl
 import { asyncHandler } from './src/server/asyncHandler';
 import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
+import { runIdempotent } from './src/server/idempotency';
 import type { AuditLog } from './src/types';
 
 const app = express();
@@ -774,19 +775,21 @@ app.get('/api/leads', (req, res) => {
   res.json(globalStore.leads);
 });
 
-app.post('/api/leads', (req, res) => {
-  const newId = globalStore.getNextNumber('Lead');
+app.post('/api/leads', asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Lead');
+  const now = new Date().toISOString();
   const newLead = {
     ...req.body,
     id: newId,
     status: req.body.status || 'new',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    lastActivityAt: new Date().toISOString()
+    createdAt: now,
+    updatedAt: now,
+    lastActivityAt: now
   };
+  await createDurable('leads', newLead);
   globalStore.leads.unshift(newLead);
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: req.body.ownerId || 'USR-003',
     userName: req.body.ownerName || 'Sales Executive',
     userRole: 'sales',
@@ -797,9 +800,9 @@ app.post('/api/leads', (req, res) => {
   });
 
   res.status(201).json(newLead);
-});
+}));
 
-app.put('/api/leads/:id', (req, res) => {
+app.put('/api/leads/:id', asyncHandler(async (req, res) => {
   const index = globalStore.leads.findIndex(l => l.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Lead not found' });
 
@@ -810,96 +813,125 @@ app.put('/api/leads/:id', (req, res) => {
     updatedAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString()
   };
+  await updateDurable('leads', updated.id, updated);
   globalStore.leads[index] = updated;
 
   res.json(updated);
-});
+}));
 
-app.post('/api/leads/:id/convert-customer', (req, res) => {
-  const lead = globalStore.leads.find(l => l.id === req.params.id);
-  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+// Creates the new customer AND updates the source lead atomically -- a
+// double-click previously could create two customers from one lead (no
+// idempotency guard, and the lead-status write happened outside any
+// transaction). Guarded by lead.status !== 'won' the same way contract
+// handover/return guard against re-running.
+app.post('/api/leads/:id/convert-customer', asyncHandler(async (req, res) => {
+  const now = new Date().toISOString();
+  const newCustId = await issueNextNumber('Customer');
+  const leadRef = admin.firestore().collection('leads').doc(req.params.id);
 
-  // Create new customer
-  const newCustId = globalStore.getNextNumber('Customer');
-  const newCustomer = {
-    id: newCustId,
-    type: 'individual' as const,
-    fullName: lead.fullName,
-    companyName: lead.companyName,
-    email: lead.email,
-    phone: lead.phone,
-    whatsapp: lead.phone,
-    address: 'Dubai, UAE',
-    city: 'Dubai',
-    country: 'United Arab Emirates',
-    nationality: 'Unknown',
-    idType: 'passport' as const,
-    idNumber: 'PENDING-DOC',
-    idExpiryDate: '2028-12-31',
-    licenseNumber: 'PENDING-LIC',
-    licenseCountry: 'UAE',
-    licenseExpiryDate: '2028-12-31',
-    source: lead.source,
-    ownerId: lead.ownerId,
-    ownerName: lead.ownerName,
-    status: 'active' as const,
-    isVIP: false,
-    tags: ['Converted Lead'],
-    preferences: {
-      favoriteCategory: lead.preferredCategory
-    },
-    notes: `Converted from lead ${lead.id}. ${lead.notes}`,
-    lifetimeValue: 0,
-    totalRentals: 0,
-    outstandingBalance: 0,
-    securityDepositsHeld: 0,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    lastActivityAt: new Date().toISOString()
-  };
+  let outcome: { newCustomer: any; updatedLead: any };
+  try {
+    outcome = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(leadRef);
+      if (!snap.exists) throw new PersistenceError('Lead not found');
+      const lead = snap.data() as any;
+      if (lead.status === 'won' && lead.customerId) {
+        throw new PersistenceError('This lead has already been converted.');
+      }
+
+      const newCustomer = {
+        id: newCustId,
+        type: 'individual' as const,
+        fullName: lead.fullName,
+        companyName: lead.companyName,
+        email: lead.email,
+        phone: lead.phone,
+        whatsapp: lead.phone,
+        address: 'Dubai, UAE',
+        city: 'Dubai',
+        country: 'United Arab Emirates',
+        nationality: 'Unknown',
+        idType: 'passport' as const,
+        idNumber: 'PENDING-DOC',
+        idExpiryDate: '2028-12-31',
+        licenseNumber: 'PENDING-LIC',
+        licenseCountry: 'UAE',
+        licenseExpiryDate: '2028-12-31',
+        source: lead.source,
+        ownerId: lead.ownerId,
+        ownerName: lead.ownerName,
+        status: 'active' as const,
+        isVIP: false,
+        tags: ['Converted Lead'],
+        preferences: { favoriteCategory: lead.preferredCategory },
+        notes: `Converted from lead ${lead.id}. ${lead.notes}`,
+        lifetimeValue: 0,
+        totalRentals: 0,
+        outstandingBalance: 0,
+        securityDepositsHeld: 0,
+        createdAt: now,
+        updatedAt: now,
+        lastActivityAt: now
+      };
+      tx.create(db.collection('customers').doc(newCustId), newCustomer);
+
+      const updatedLead = { ...lead, status: 'won', customerId: newCustId, updatedAt: now };
+      tx.set(leadRef, updatedLead, { merge: true });
+
+      return { newCustomer, updatedLead };
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Lead not found' || err.message.startsWith('This lead'))) {
+      return res.status(err.message === 'Lead not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const { newCustomer, updatedLead } = outcome;
   globalStore.customers.unshift(newCustomer);
+  const leadIndex = globalStore.leads.findIndex(l => l.id === req.params.id);
+  if (leadIndex !== -1) globalStore.leads[leadIndex] = updatedLead;
 
-  lead.status = 'won';
-  lead.customerId = newCustId;
-  lead.updatedAt = new Date().toISOString();
-
-  globalStore.logAudit({
+  await recordAudit({
     userId: req.body.actorId || 'USR-003',
     userName: req.body.actorName || 'Elena Rostova',
     userRole: 'sales',
     entityType: 'Lead',
-    entityId: lead.id,
+    entityId: updatedLead.id,
     action: 'status_change',
-    previousValue: 'Status: ' + lead.status,
+    previousValue: 'Status: new',
     newValue: `Converted to Customer ${newCustId} (${newCustomer.fullName})`,
     reason: 'Lead qualified and converted'
   });
 
-  res.json({ success: true, customer: newCustomer, lead });
-});
+  res.json({ success: true, customer: newCustomer, lead: updatedLead });
+}));
 
 app.get('/api/opportunities', (req, res) => {
   res.json(globalStore.opportunities);
 });
 
-app.post('/api/opportunities', (req, res) => {
-  const newId = `OPP-${String(globalStore.opportunities.length + 1).padStart(6, '0')}`;
+app.post('/api/opportunities', asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Opportunity');
   const opp = {
     ...req.body,
     id: newId,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  await createDurable('opportunities', opp);
   globalStore.opportunities.unshift(opp);
   res.status(201).json(opp);
-});
+}));
 
-app.put('/api/opportunities/:id', (req, res) => {
+app.put('/api/opportunities/:id', asyncHandler(async (req, res) => {
   const index = globalStore.opportunities.findIndex(o => o.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Opportunity not found' });
-  globalStore.opportunities[index] = { ...globalStore.opportunities[index], ...req.body, updatedAt: new Date().toISOString() };
-  res.json(globalStore.opportunities[index]);
-});
+  const updated = { ...globalStore.opportunities[index], ...req.body, updatedAt: new Date().toISOString() };
+  await updateDurable('opportunities', updated.id, updated);
+  globalStore.opportunities[index] = updated;
+  res.json(updated);
+}));
 
 // ----------------------------------------------------
 // 4. FLEET CRM & AVAILABILITY ENGINE (SPLENDOR CONNECT)
@@ -926,13 +958,13 @@ app.post('/api/fleet/availability', (req, res) => {
 });
 
 // Plate Assignment & Transfer with Historical Audit Trail
-app.post('/api/fleet/:id/assign-plate', (req, res) => {
+app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const { plateNumber, plateCity, reason, assignedBy, assignedByName, effectiveDate } = req.body;
   if (!plateNumber || !plateCity) {
     return res.status(400).json({ error: 'Plate number and city are required' });
   }
 
-  const result = SplendorConnectEngine.assignPlateToVehicle({
+  const result = await SplendorConnectEngine.assignPlateToVehicle({
     vehicleId: req.params.id,
     newPlateNumber: plateNumber,
     newPlateCity: plateCity,
@@ -947,43 +979,55 @@ app.post('/api/fleet/:id/assign-plate', (req, res) => {
   }
 
   res.json({ success: true, vehicle: result.vehicle });
-});
+}));
 
 // Vehicle Website Publication & Visibility Management
-app.put('/api/fleet/:id/website-publish', async (req, res) => {
+app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const vehicle = globalStore.vehicles.find(v => v.id === req.params.id);
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
 
   const { publication, actorId, actorName } = req.body;
   const now = new Date().toISOString();
 
-  vehicle.website = {
-    ...vehicle.website,
-    ...publication,
-    lastPublishedAt: now,
-    lastPublishedBy: actorId || 'USR-001',
-    lastPublishedByName: actorName || 'Admin'
-  };
-  vehicle.updatedAt = now;
-
-  vehicle.timeline = vehicle.timeline || [];
-  vehicle.timeline.push({
-    id: `EVT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-    vehicleId: vehicle.id,
-    date: now,
-    action: publication.enabled ? 'PUBLISHED_TO_WEB' : 'UNPUBLISHED_FROM_WEB',
-    newState: {
-      visibility: publication.visibility,
-      enabled: publication.enabled,
-      publicDailyRate: publication.dailyRate || vehicle.dailyRate
+  const updatedVehicle = {
+    ...vehicle,
+    website: {
+      ...vehicle.website,
+      ...publication,
+      lastPublishedAt: now,
+      lastPublishedBy: actorId || 'USR-001',
+      lastPublishedByName: actorName || 'Admin'
     },
-    reason: publication.reason || (publication.enabled ? 'Showroom website publication updated' : 'Unpublished from public website'),
-    userId: actorId || 'USR-001',
-    userName: actorName || 'Admin',
-    createdAt: now
-  });
+    updatedAt: now,
+    timeline: [
+      ...(vehicle.timeline || []),
+      {
+        id: `EVT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        vehicleId: vehicle.id,
+        date: now,
+        action: publication.enabled ? 'PUBLISHED_TO_WEB' : 'UNPUBLISHED_FROM_WEB',
+        newState: {
+          visibility: publication.visibility,
+          enabled: publication.enabled,
+          publicDailyRate: publication.dailyRate || vehicle.dailyRate
+        },
+        reason: publication.reason || (publication.enabled ? 'Showroom website publication updated' : 'Unpublished from public website'),
+        userId: actorId || 'USR-001',
+        userName: actorName || 'Admin',
+        createdAt: now
+      }
+    ]
+  };
 
-  const auditLog = globalStore.logAudit({
+  // Persist first -- a failure here now propagates as a controlled 502 via
+  // asyncHandler + the global error middleware, instead of being swallowed
+  // by a try/catch that let the (never-durably-saved) response go out as
+  // if it had succeeded.
+  await updateDurable('vehicles', updatedVehicle.id, updatedVehicle);
+  const index = globalStore.vehicles.findIndex(v => v.id === vehicle.id);
+  if (index !== -1) globalStore.vehicles[index] = updatedVehicle as any;
+
+  await recordAudit({
     userId: actorId || 'USR-001',
     userName: actorName || 'Admin',
     userRole: 'admin',
@@ -994,20 +1038,11 @@ app.put('/api/fleet/:id/website-publish', async (req, res) => {
     reason: publication.reason || 'Website showcase controls updated'
   });
 
-  if (admin.apps.length > 0) {
-    try {
-      await admin.firestore().collection('vehicles').doc(vehicle.id).set(vehicle, { merge: true });
-      await admin.firestore().collection('audit_logs').doc(auditLog.id).set(auditLog);
-    } catch (err) {
-      console.error('[publish] Firestore sync error:', err);
-    }
-  }
-
-  res.json({ success: true, vehicle });
-});
+  res.json({ success: true, vehicle: updatedVehicle });
+}));
 
 // Vehicle Lifecycle Status Transition (ACTIVE, INACTIVE, SOLD, ARCHIVED, DISPOSED, TRANSFERRED)
-app.put('/api/fleet/:id/lifecycle', async (req, res) => {
+app.put('/api/fleet/:id/lifecycle', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const vehicle = globalStore.vehicles.find(v => v.id === req.params.id);
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
 
@@ -1015,34 +1050,39 @@ app.put('/api/fleet/:id/lifecycle', async (req, res) => {
   const prevStatus = vehicle.lifecycleStatus || 'ACTIVE';
   const now = new Date().toISOString();
 
-  vehicle.lifecycleStatus = lifecycleStatus;
-  if (saleRecord) {
-    vehicle.saleRecord = saleRecord;
-  }
+  const updatedVehicle: any = {
+    ...vehicle,
+    lifecycleStatus,
+    updatedAt: now,
+    timeline: [
+      ...(vehicle.timeline || []),
+      {
+        id: `EVT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        vehicleId: vehicle.id,
+        date: now,
+        action: lifecycleStatus === 'SOLD' ? 'SOLD' : lifecycleStatus === 'ARCHIVED' ? 'ARCHIVED' : 'RESTORED',
+        previousState: { lifecycleStatus: prevStatus },
+        newState: { lifecycleStatus },
+        reason: reason || `Lifecycle transition to ${lifecycleStatus}`,
+        userId: actorId || 'USR-001',
+        userName: actorName || 'Admin',
+        createdAt: now
+      }
+    ]
+  };
+  if (saleRecord) updatedVehicle.saleRecord = saleRecord;
   if (lifecycleStatus === 'SOLD' || lifecycleStatus === 'DISPOSED' || lifecycleStatus === 'ARCHIVED') {
-    vehicle.status = 'unavailable';
-    if (vehicle.website) {
-      vehicle.website.enabled = false;
-      vehicle.website.visibility = 'INTERNAL_ONLY';
+    updatedVehicle.status = 'unavailable';
+    if (updatedVehicle.website) {
+      updatedVehicle.website = { ...updatedVehicle.website, enabled: false, visibility: 'INTERNAL_ONLY' };
     }
   }
-  vehicle.updatedAt = now;
 
-  vehicle.timeline = vehicle.timeline || [];
-  vehicle.timeline.push({
-    id: `EVT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-    vehicleId: vehicle.id,
-    date: now,
-    action: lifecycleStatus === 'SOLD' ? 'SOLD' : lifecycleStatus === 'ARCHIVED' ? 'ARCHIVED' : 'RESTORED',
-    previousState: { lifecycleStatus: prevStatus },
-    newState: { lifecycleStatus },
-    reason: reason || `Lifecycle transition to ${lifecycleStatus}`,
-    userId: actorId || 'USR-001',
-    userName: actorName || 'Admin',
-    createdAt: now
-  });
+  await updateDurable('vehicles', updatedVehicle.id, updatedVehicle);
+  const index = globalStore.vehicles.findIndex(v => v.id === vehicle.id);
+  if (index !== -1) globalStore.vehicles[index] = updatedVehicle;
 
-  const auditLog = globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-001',
     userName: actorName || 'Admin',
     userRole: 'admin',
@@ -1054,17 +1094,8 @@ app.put('/api/fleet/:id/lifecycle', async (req, res) => {
     reason: reason || 'Vehicle lifecycle update'
   });
 
-  if (admin.apps.length > 0) {
-    try {
-      await admin.firestore().collection('vehicles').doc(vehicle.id).set(vehicle, { merge: true });
-      await admin.firestore().collection('audit_logs').doc(auditLog.id).set(auditLog);
-    } catch (err) {
-      console.error('[lifecycle] Firestore sync error:', err);
-    }
-  }
-
-  res.json({ success: true, vehicle });
-});
+  res.json({ success: true, vehicle: updatedVehicle });
+}));
 
 // Fleet Reconciliation Report
 app.get('/api/fleet/reconciliation/report', (req, res) => {
@@ -1264,8 +1295,8 @@ app.post('/api/public/reservations', (req, res) => {
   });
 });
 
-app.post('/api/fleet', (req, res) => {
-  const newId = `VEH-${String(globalStore.vehicles.length + 1).padStart(4, '0')}`;
+app.post('/api/fleet', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Vehicle');
   const newVehicle = {
     ...req.body,
     id: newId,
@@ -1304,19 +1335,21 @@ app.post('/api/fleet', (req, res) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  await createDurable('vehicles', newVehicle);
   globalStore.vehicles.unshift(newVehicle);
   res.status(201).json(newVehicle);
-});
+}));
 
-app.put('/api/fleet/:id', (req, res) => {
+app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const index = globalStore.vehicles.findIndex(v => v.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Vehicle not found' });
   const prev = globalStore.vehicles[index];
   const updated = { ...prev, ...req.body, updatedAt: new Date().toISOString() };
+  await updateDurable('vehicles', updated.id, updated);
   globalStore.vehicles[index] = updated;
 
   if (prev.status !== updated.status) {
-    globalStore.logAudit({
+    await recordAudit({
       userId: req.body.actorId || 'USR-002',
       userName: req.body.actorName || 'Fleet Manager',
       userRole: 'fleet',
@@ -1330,7 +1363,7 @@ app.put('/api/fleet/:id', (req, res) => {
   }
 
   res.json(updated);
-});
+}));
 
 // ----------------------------------------------------
 // 5. QUOTATIONS
@@ -1640,36 +1673,63 @@ app.get('/api/contracts/:id', (req, res) => {
   res.json(contract);
 });
 
-app.post('/api/contracts/:id/handover', async (req, res) => {
-  const contract = globalStore.contracts.find(c => c.id === req.params.id);
-  if (!contract) return res.status(404).json({ error: 'Contract not found' });
-
+app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
   const { handoverData, actorId, actorName } = req.body;
-  contract.handover = handoverData;
-  contract.status = 'active';
-  contract.updatedAt = new Date().toISOString();
+  const now = new Date().toISOString();
+  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
 
-  // Update vehicle
-  const vehicle = globalStore.vehicles.find(v => v.id === contract.vehicleId);
+  let updatedContract: any;
+  try {
+    updatedContract = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(contractRef);
+      if (!snap.exists) throw new PersistenceError('Contract not found');
+      const contract = snap.data() as any;
+      if (contract.status === 'active') throw new PersistenceError('This contract has already been handed over.');
+
+      const updated = { ...contract, handover: handoverData, status: 'active', updatedAt: now };
+      tx.set(contractRef, updated, { merge: true });
+
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      if (vehicleSnap.exists) {
+        const vehicleUpdate: Record<string, unknown> = { status: 'rented', currentCustomerId: contract.customerId, currentContractId: contract.id, updatedAt: now };
+        if (handoverData.startMileage) vehicleUpdate.mileage = handoverData.startMileage;
+        tx.set(vehicleRef, vehicleUpdate, { merge: true });
+      }
+
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+      if (customerSnap.exists) {
+        tx.set(customerRef, { totalRentals: ((customerSnap.data() as any).totalRentals || 0) + 1, updatedAt: now }, { merge: true });
+      }
+
+      return updated;
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Contract not found' || err.message.startsWith('This contract'))) {
+      return res.status(err.message === 'Contract not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
+  if (index !== -1) globalStore.contracts[index] = updatedContract;
+  const vehicle = globalStore.vehicles.find(v => v.id === updatedContract.vehicleId);
   if (vehicle) {
     vehicle.status = 'rented';
-    vehicle.currentCustomerId = contract.customerId;
-    vehicle.currentContractId = contract.id;
+    vehicle.currentCustomerId = updatedContract.customerId;
+    vehicle.currentContractId = updatedContract.id;
     if (handoverData.startMileage) vehicle.mileage = handoverData.startMileage;
   }
+  const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
+  if (customer) customer.totalRentals += 1;
 
-  // Update customer
-  const customer = globalStore.customers.find(c => c.id === contract.customerId);
-  if (customer) {
-    customer.totalRentals += 1;
-  }
-
-  globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-002',
     userName: actorName || 'Operations Executive',
     userRole: 'operations',
     entityType: 'Contract',
-    entityId: contract.id,
+    entityId: updatedContract.id,
     action: 'status_change',
     previousValue: 'Status: Approved',
     newValue: `Status: Active (Handover Completed @ ${handoverData.startMileage} km, Fuel: ${handoverData.fuelLevelPercent}%)`,
@@ -1678,67 +1738,101 @@ app.post('/api/contracts/:id/handover', async (req, res) => {
 
   try {
     await dispatchNotificationEvent('contract_handover',
-      `Vehicle handed over to ${contract.customerName} under contract ${contract.id}.`,
-      `تم تسليم المركبة للعميل ${contract.customerName} بموجب العقد ${contract.id}.`
+      `Vehicle handed over to ${updatedContract.customerName} under contract ${updatedContract.id}.`,
+      `تم تسليم المركبة للعميل ${updatedContract.customerName} بموجب العقد ${updatedContract.id}.`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (contract_handover):', err);
   }
 
-  res.json({ success: true, contract });
-});
+  res.json({ success: true, contract: updatedContract });
+}));
 
-app.post('/api/contracts/:id/return', async (req, res) => {
-  const contract = globalStore.contracts.find(c => c.id === req.params.id);
-  if (!contract) return res.status(404).json({ error: 'Contract not found' });
-
+app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
   const { returnData, actorId, actorName } = req.body;
-  contract.returnDetails = returnData;
-  contract.status = 'completed';
-  contract.updatedAt = new Date().toISOString();
+  const now = new Date().toISOString();
+  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
 
-  // Update vehicle
-  const vehicle = globalStore.vehicles.find(v => v.id === contract.vehicleId);
+  let updatedContract: any;
+  let chargeDoc: any = null;
+  try {
+    ({ updatedContract, chargeDoc } = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(contractRef);
+      if (!snap.exists) throw new PersistenceError('Contract not found');
+      const contract = snap.data() as any;
+      if (contract.status === 'completed') throw new PersistenceError('This contract has already been returned.');
+
+      const updated = { ...contract, returnDetails: returnData, status: 'completed', updatedAt: now };
+      tx.set(contractRef, updated, { merge: true });
+
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      if (vehicleSnap.exists) {
+        const v = vehicleSnap.data() as any;
+        const vehicleUpdate: Record<string, unknown> = {
+          status: 'available', currentCustomerId: null, currentContractId: null,
+          totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now
+        };
+        if (returnData.endMileage) vehicleUpdate.mileage = returnData.endMileage;
+        tx.set(vehicleRef, vehicleUpdate, { merge: true });
+      }
+
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+      if (customerSnap.exists) {
+        tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
+      }
+
+      let charge: any = null;
+      if (returnData.totalAdditionalCharges > 0) {
+        const chargeId = await issueNextNumber('Charge');
+        charge = {
+          id: chargeId,
+          type: 'other',
+          amount: returnData.totalAdditionalCharges,
+          vatAmount: returnData.totalAdditionalCharges * 0.05,
+          totalAmount: returnData.totalAdditionalCharges * 1.05,
+          relatedContractId: contract.id,
+          customerId: contract.customerId,
+          customerName: contract.customerName,
+          vehicleId: contract.vehicleId,
+          description: `Return Settlement Charges for contract ${contract.contractNumber} (Extra KM: ${returnData.extraKms || 0} km, Fuel diff: ${returnData.fuelDifferenceCharge || 0} AED, Salik: ${returnData.salikTollCharge || 0} AED)`,
+          approvalStatus: 'approved',
+          createdBy: actorName || 'Operations',
+          timestamp: now
+        };
+        tx.create(db.collection('charges').doc(chargeId), charge);
+      }
+
+      return { updatedContract: updated, chargeDoc: charge };
+    }));
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Contract not found' || err.message.startsWith('This contract'))) {
+      return res.status(err.message === 'Contract not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
+  if (index !== -1) globalStore.contracts[index] = updatedContract;
+  const vehicle = globalStore.vehicles.find(v => v.id === updatedContract.vehicleId);
   if (vehicle) {
     vehicle.status = 'available';
     vehicle.currentCustomerId = undefined;
     vehicle.currentContractId = undefined;
     if (returnData.endMileage) vehicle.mileage = returnData.endMileage;
-    vehicle.totalRevenue += contract.grandTotal;
+    vehicle.totalRevenue += updatedContract.grandTotal;
   }
+  const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
+  if (customer) customer.lifetimeValue += updatedContract.grandTotal;
+  if (chargeDoc) globalStore.charges.push(chargeDoc);
 
-  // Update customer lifetime value
-  const customer = globalStore.customers.find(c => c.id === contract.customerId);
-  if (customer) {
-    customer.lifetimeValue += contract.grandTotal;
-  }
-
-  // Create additional charges if any
-  if (returnData.totalAdditionalCharges > 0) {
-    const chargeId = globalStore.getNextNumber('Charge');
-    globalStore.charges.push({
-      id: chargeId,
-      type: 'other',
-      amount: returnData.totalAdditionalCharges,
-      vatAmount: returnData.totalAdditionalCharges * 0.05,
-      totalAmount: returnData.totalAdditionalCharges * 1.05,
-      relatedContractId: contract.id,
-      customerId: contract.customerId,
-      customerName: contract.customerName,
-      vehicleId: contract.vehicleId,
-      description: `Return Settlement Charges for contract ${contract.contractNumber} (Extra KM: ${returnData.extraKms || 0} km, Fuel diff: ${returnData.fuelDifferenceCharge || 0} AED, Salik: ${returnData.salikTollCharge || 0} AED)`,
-      approvalStatus: 'approved',
-      createdBy: actorName || 'Operations',
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-002',
     userName: actorName || 'Ahmed Morsy',
     userRole: 'operations',
     entityType: 'Contract',
-    entityId: contract.id,
+    entityId: updatedContract.id,
     action: 'status_change',
     previousValue: 'Status: Active',
     newValue: `Status: Completed (Vehicle Return Verified. Additional Charges: ${returnData.totalAdditionalCharges} AED)`,
@@ -1747,68 +1841,92 @@ app.post('/api/contracts/:id/return', async (req, res) => {
 
   try {
     await dispatchNotificationEvent('contract_return',
-      `Vehicle returned and contract ${contract.id} closed for ${contract.customerName}.`,
-      `تم استلام المركبة وإغلاق العقد ${contract.id} للعميل ${contract.customerName}.`
+      `Vehicle returned and contract ${updatedContract.id} closed for ${updatedContract.customerName}.`,
+      `تم استلام المركبة وإغلاق العقد ${updatedContract.id} للعميل ${updatedContract.customerName}.`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (contract_return):', err);
   }
 
-  res.json({ success: true, contract });
-});
+  res.json({ success: true, contract: updatedContract });
+}));
 
 // Extends an active contract's end date -- e.g. a customer wants a few more
 // days. Recalculates the rental total/VAT/grand total for the added days
 // at the contract's existing daily rate, logs an audit entry, and sends the
 // customer a WhatsApp "extension addendum" notice (the spec's explicit
 // "ملحق تمديد للعقد" -- extension addendum -- requirement).
-app.post('/api/contracts/:id/extend', async (req, res) => {
-  const contract = globalStore.contracts.find(c => c.id === req.params.id);
-  if (!contract) return res.status(404).json({ error: 'Contract not found.' });
-
+app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
   const { newEndDateTime, actorId, actorName } = req.body || {};
   if (!newEndDateTime) return res.status(400).json({ error: 'newEndDateTime is required.' });
+  const now = new Date().toISOString();
+  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
 
-  const oldEnd = contract.endDateTime;
-  const newEndMs = new Date(newEndDateTime).getTime();
-  const oldEndMs = new Date(oldEnd).getTime();
-  if (isNaN(newEndMs) || newEndMs <= oldEndMs) {
-    return res.status(400).json({ error: 'The new end date must be after the current end date.' });
+  let outcome: { updated: any; extraDays: number; extraAmount: number };
+  try {
+    outcome = await runDurableTransaction(async (tx) => {
+      const snap = await tx.get(contractRef);
+      if (!snap.exists) throw new PersistenceError('Contract not found.');
+      const contract = snap.data() as any;
+
+      const oldEnd = contract.endDateTime;
+      const newEndMs = new Date(newEndDateTime).getTime();
+      const oldEndMs = new Date(oldEnd).getTime();
+      // Naturally idempotent: once endDateTime is updated to newEndDateTime,
+      // a repeat of the exact same request fails this same check (new <=
+      // old) instead of double-extending.
+      if (Number.isNaN(newEndMs) || newEndMs <= oldEndMs) {
+        throw new PersistenceError('The new end date must be after the current end date.');
+      }
+
+      const extraDays = Math.ceil((newEndMs - oldEndMs) / 86400000);
+      const extraRental = extraDays * contract.dailyRate;
+      const extraVat = extraRental * 0.05;
+      const updated = {
+        ...contract,
+        endDateTime: newEndDateTime,
+        rentalTotal: contract.rentalTotal + extraRental,
+        vatAmount: contract.vatAmount + extraVat,
+        grandTotal: contract.grandTotal + extraRental + extraVat,
+        updatedAt: now
+      };
+      tx.set(contractRef, updated, { merge: true });
+      return { updated, extraDays, extraAmount: Math.round((extraRental + extraVat) * 100) / 100 };
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Contract not found.' || err.message.startsWith('The new end date'))) {
+      return res.status(err.message === 'Contract not found.' ? 404 : 400).json({ error: err.message });
+    }
+    throw err;
   }
 
-  const extraDays = Math.ceil((newEndMs - oldEndMs) / 86400000);
-  const extraRental = extraDays * contract.dailyRate;
-  const extraVat = extraRental * 0.05;
+  const { updated: updatedContract, extraDays, extraAmount } = outcome;
+  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
+  if (index !== -1) globalStore.contracts[index] = updatedContract;
 
-  contract.endDateTime = newEndDateTime;
-  contract.rentalTotal += extraRental;
-  contract.vatAmount += extraVat;
-  contract.grandTotal += extraRental + extraVat;
-  contract.updatedAt = new Date().toISOString();
-
-  globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-001',
     userName: actorName || 'Operations',
     userRole: 'operations',
     entityType: 'Contract',
-    entityId: contract.id,
+    entityId: updatedContract.id,
     action: 'update',
-    previousValue: `End date: ${oldEnd}`,
-    newValue: `Extended to ${newEndDateTime} (+${extraDays} day(s), +${(extraRental + extraVat).toLocaleString()} AED)`,
+    previousValue: `End date: ${updatedContract.endDateTime}`,
+    newValue: `Extended to ${newEndDateTime} (+${extraDays} day(s), +${extraAmount.toLocaleString()} AED)`,
     reason: 'Contract extension'
   });
 
   try {
-    const customer = globalStore.customers.find(c => c.id === contract.customerId);
-    await dispatchCustomerNotification('customer_contract_extended', contract.customerId, contract.customerName, customer?.phone,
-      `Your contract ${contract.id} has been extended by ${extraDays} day(s) -- new return date ${newEndDateTime.slice(0, 10)}. Additional amount: ${(extraRental + extraVat).toLocaleString()} AED.`,
-      `تم تمديد عقدكم رقم ${contract.id} لمدة ${extraDays} يوم/أيام -- تاريخ التسليم الجديد ${newEndDateTime.slice(0, 10)}. المبلغ الإضافي: ${(extraRental + extraVat).toLocaleString()} درهم.`);
+    const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
+    await dispatchCustomerNotification('customer_contract_extended', updatedContract.customerId, updatedContract.customerName, customer?.phone,
+      `Your contract ${updatedContract.id} has been extended by ${extraDays} day(s) -- new return date ${newEndDateTime.slice(0, 10)}. Additional amount: ${extraAmount.toLocaleString()} AED.`,
+      `تم تمديد عقدكم رقم ${updatedContract.id} لمدة ${extraDays} يوم/أيام -- تاريخ التسليم الجديد ${newEndDateTime.slice(0, 10)}. المبلغ الإضافي: ${extraAmount.toLocaleString()} درهم.`);
   } catch (err) {
     console.error('WhatsApp dispatch failed (customer_contract_extended):', err);
   }
 
-  res.json({ success: true, contract, extraDays, extraAmount: Math.round((extraRental + extraVat) * 100) / 100 });
-});
+  res.json({ success: true, contract: updatedContract, extraDays, extraAmount });
+}));
 
 // ----------------------------------------------------
 // 8. CHARGES, DEPOSITS, PAYMENTS & STATEMENTS
@@ -1817,8 +1935,8 @@ app.get('/api/charges', (req, res) => {
   res.json(globalStore.charges);
 });
 
-app.post('/api/charges', async (req, res) => {
-  const newId = `CHG-${String(globalStore.charges.length + 1).padStart(6, '0')}`;
+app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Charge');
   const amount = Number(req.body.amount) || 0;
   const vat = amount * 0.05;
   const charge = {
@@ -1830,6 +1948,7 @@ app.post('/api/charges', async (req, res) => {
     approvalStatus: req.body.approvalStatus || 'approved',
     timestamp: new Date().toISOString()
   };
+  await createDurable('charges', charge);
   globalStore.charges.unshift(charge);
 
   if ((charge.type === 'salik' || charge.type === 'traffic_fine') && charge.customerId) {
@@ -1846,15 +1965,16 @@ app.post('/api/charges', async (req, res) => {
   }
 
   res.status(201).json(charge);
-});
+}));
 
 app.get('/api/deposits', (req, res) => {
   res.json(globalStore.deposits);
 });
 
-app.post('/api/deposits', (req, res) => {
-  const newId = globalStore.getNextNumber('Deposit');
+app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Deposit');
   const amount = Number(req.body.amount) || 0;
+  const now = new Date().toISOString();
   const deposit = {
     ...req.body,
     id: newId,
@@ -1863,84 +1983,148 @@ app.post('/api/deposits', (req, res) => {
     refundedAmount: 0,
     balance: amount,
     status: req.body.status || 'held',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: now,
+    updatedAt: now
   };
-  globalStore.deposits.unshift(deposit);
 
+  const customerRef = req.body.customerId ? admin.firestore().collection('customers').doc(req.body.customerId) : null;
+  await runDurableTransaction(async (tx, db) => {
+    tx.create(db.collection('deposits').doc(newId), deposit);
+    if (customerRef) {
+      const snap = await tx.get(customerRef);
+      if (snap.exists) {
+        tx.set(customerRef, { securityDepositsHeld: ((snap.data() as any).securityDepositsHeld || 0) + amount, updatedAt: now }, { merge: true });
+      }
+    }
+  });
+
+  globalStore.deposits.unshift(deposit);
   const customer = globalStore.customers.find(c => c.id === deposit.customerId);
-  if (customer) {
-    customer.securityDepositsHeld += amount;
-  }
+  if (customer) customer.securityDepositsHeld += amount;
 
   res.status(201).json(deposit);
-});
+}));
 
-app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), (req, res) => {
-  const deposit = globalStore.deposits.find(d => d.id === req.params.id);
-  if (!deposit) return res.status(404).json({ error: 'Deposit not found' });
-
+app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
   const { applyAmount, reason, actorId, actorName } = req.body;
   const amt = Number(applyAmount);
-  if (amt > deposit.balance) return res.status(400).json({ error: 'Apply amount exceeds held balance' });
+  const now = new Date().toISOString();
 
-  deposit.appliedAmount += amt;
-  deposit.balance -= amt;
-  deposit.appliedReason = reason;
-  deposit.status = deposit.balance === 0 ? 'applied' : 'held';
-  deposit.updatedAt = new Date().toISOString();
+  const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
+  let updatedDeposit: any;
+  try {
+    updatedDeposit = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(depositRef);
+      if (!snap.exists) throw new PersistenceError('Deposit not found');
+      const deposit = snap.data() as any;
+      if (amt > deposit.balance) throw new PersistenceError('Apply amount exceeds held balance');
 
-  const customer = globalStore.customers.find(c => c.id === deposit.customerId);
-  if (customer) {
-    customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
+      const updated = {
+        ...deposit,
+        appliedAmount: deposit.appliedAmount + amt,
+        balance: deposit.balance - amt,
+        appliedReason: reason,
+        status: deposit.balance - amt === 0 ? 'applied' : 'held',
+        updatedAt: now
+      };
+      tx.set(depositRef, updated, { merge: true });
+
+      if (deposit.customerId) {
+        const customerRef = db.collection('customers').doc(deposit.customerId);
+        const customerSnap = await tx.get(customerRef);
+        if (customerSnap.exists) {
+          const held = (customerSnap.data() as any).securityDepositsHeld || 0;
+          tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
+        }
+      }
+      return updated;
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Deposit not found' || err.message === 'Apply amount exceeds held balance')) {
+      return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
+    }
+    throw err;
   }
 
-  globalStore.logAudit({
+  const index = globalStore.deposits.findIndex(d => d.id === req.params.id);
+  if (index !== -1) globalStore.deposits[index] = updatedDeposit;
+  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
+  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
+
+  await recordAudit({
     userId: actorId || 'USR-004',
     userName: actorName || 'Finance Manager',
     userRole: 'finance',
     entityType: 'Deposit',
-    entityId: deposit.id,
+    entityId: updatedDeposit.id,
     action: 'update',
     newValue: `Applied ${amt} AED from deposit against charges: ${reason}`,
     reason
   });
 
-  res.json({ success: true, deposit });
-});
+  res.json({ success: true, deposit: updatedDeposit });
+}));
 
-app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), (req, res) => {
-  const deposit = globalStore.deposits.find(d => d.id === req.params.id);
-  if (!deposit) return res.status(404).json({ error: 'Deposit not found' });
-
+app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
   const { refundAmount, actorId, actorName } = req.body;
-  const amt = Number(refundAmount) || deposit.balance;
-  if (amt > deposit.balance) return res.status(400).json({ error: 'Refund amount exceeds held balance' });
+  const now = new Date().toISOString();
 
-  deposit.refundedAmount += amt;
-  deposit.balance -= amt;
-  deposit.status = deposit.balance === 0 ? 'refunded' : 'partially_refunded';
-  deposit.refundDate = new Date().toISOString();
-  deposit.updatedAt = new Date().toISOString();
+  const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
+  let updatedDeposit: any;
+  let amt = 0;
+  try {
+    updatedDeposit = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(depositRef);
+      if (!snap.exists) throw new PersistenceError('Deposit not found');
+      const deposit = snap.data() as any;
+      amt = Number(refundAmount) || deposit.balance;
+      if (amt > deposit.balance) throw new PersistenceError('Refund amount exceeds held balance');
 
-  const customer = globalStore.customers.find(c => c.id === deposit.customerId);
-  if (customer) {
-    customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
+      const updated = {
+        ...deposit,
+        refundedAmount: deposit.refundedAmount + amt,
+        balance: deposit.balance - amt,
+        status: deposit.balance - amt === 0 ? 'refunded' : 'partially_refunded',
+        refundDate: now,
+        updatedAt: now
+      };
+      tx.set(depositRef, updated, { merge: true });
+
+      if (deposit.customerId) {
+        const customerRef = db.collection('customers').doc(deposit.customerId);
+        const customerSnap = await tx.get(customerRef);
+        if (customerSnap.exists) {
+          const held = (customerSnap.data() as any).securityDepositsHeld || 0;
+          tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
+        }
+      }
+      return updated;
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
+      return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
+    }
+    throw err;
   }
 
-  globalStore.logAudit({
+  const index = globalStore.deposits.findIndex(d => d.id === req.params.id);
+  if (index !== -1) globalStore.deposits[index] = updatedDeposit;
+  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
+  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
+
+  await recordAudit({
     userId: actorId || 'USR-004',
     userName: actorName || 'Finance Manager',
     userRole: 'finance',
     entityType: 'Deposit',
-    entityId: deposit.id,
+    entityId: updatedDeposit.id,
     action: 'refund',
-    newValue: `Processed deposit refund of ${amt} AED to customer ${deposit.customerName}`,
+    newValue: `Processed deposit refund of ${amt} AED to customer ${updatedDeposit.customerName}`,
     reason: 'Vehicle return inspection clear with no outstanding penalties'
   });
 
-  res.json({ success: true, deposit });
-});
+  res.json({ success: true, deposit: updatedDeposit });
+}));
 
 app.get('/api/invoices', (req, res) => {
   res.json(globalStore.invoices);
@@ -1950,65 +2134,103 @@ app.get('/api/payments', (req, res) => {
   res.json(globalStore.payments);
 });
 
-app.post('/api/payments', async (req, res) => {
-  const data = req.body;
-  const newId = globalStore.getNextNumber('Payment');
-  const receiptNum = globalStore.getNextNumber('Receipt');
+// Idempotency-Key protected: a double-click or network retry on this route
+// previously created two separate Payment records, each independently
+// decrementing invoice.paidAmount and customer.outstandingBalance --
+// double-crediting the customer. The whole payment+invoice+customer write
+// is now one atomic transaction, replayed (not repeated) on a matching key.
+app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+  const data = req.body || {};
   const amount = Number(data.amount) || 0;
+  if (amount <= 0) {
+    return res.status(400).json({ error: 'A positive payment amount is required.' });
+  }
+  const idempotencyKey = (req.header('Idempotency-Key') || data.idempotencyKey || null) as string | null;
 
-  const payment = {
-    ...data,
-    id: newId,
-    amount,
-    receiptNumber: receiptNum,
-    status: 'allocated' as const,
-    receivedAt: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  };
-  globalStore.payments.unshift(payment);
+  const newId = await issueNextNumber('Payment');
+  const receiptNum = await issueNextNumber('Receipt');
+  const now = new Date().toISOString();
 
-  // Update invoice if specified
-  if (data.invoiceId) {
-    const inv = globalStore.invoices.find(i => i.id === data.invoiceId);
-    if (inv) {
-      inv.paidAmount += amount;
-      inv.balanceDue = Math.max(0, inv.totalAmount - inv.paidAmount);
-      inv.status = inv.balanceDue === 0 ? 'paid' : 'partially_paid';
+  const { result: payment, replayed } = await runIdempotent('payment-create', idempotencyKey, async (tx, db) => {
+    const paymentDoc = {
+      ...data,
+      id: newId,
+      amount,
+      receiptNumber: receiptNum,
+      status: 'allocated' as const,
+      receivedAt: now,
+      createdAt: now
+    };
+
+    let invoiceRef: FirebaseFirestore.DocumentReference | null = null;
+    let invoiceSnap: FirebaseFirestore.DocumentSnapshot | null = null;
+    if (data.invoiceId) {
+      invoiceRef = db.collection('invoices').doc(data.invoiceId);
+      invoiceSnap = await tx.get(invoiceRef);
     }
-  }
+    let customerRef: FirebaseFirestore.DocumentReference | null = null;
+    let customerSnap: FirebaseFirestore.DocumentSnapshot | null = null;
+    if (data.customerId) {
+      customerRef = db.collection('customers').doc(data.customerId);
+      customerSnap = await tx.get(customerRef);
+    }
 
-  // Update customer balance
-  const customer = globalStore.customers.find(c => c.id === data.customerId);
-  if (customer) {
-    customer.outstandingBalance = Math.max(0, customer.outstandingBalance - amount);
-  }
+    tx.create(db.collection('payments').doc(newId), paymentDoc);
 
-  globalStore.logAudit({
-    userId: data.receivedById || 'USR-004',
-    userName: data.receivedByName || 'Faisal Al-Hashimi',
-    userRole: 'finance',
-    entityType: 'Payment',
-    entityId: newId,
-    action: 'create',
-    newValue: `Recorded payment of ${amount} AED (${data.method}) from ${data.customerName}. Receipt: ${receiptNum}`
+    if (invoiceRef && invoiceSnap?.exists) {
+      const inv = invoiceSnap.data() as any;
+      const paidAmount = inv.paidAmount + amount;
+      const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
+      tx.set(invoiceRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
+    }
+    if (customerRef && customerSnap?.exists) {
+      const cust = customerSnap.data() as any;
+      tx.set(customerRef, { outstandingBalance: Math.max(0, (cust.outstandingBalance || 0) - amount), updatedAt: now }, { merge: true });
+    }
+
+    return paymentDoc;
   });
 
-  try {
-    await dispatchNotificationEvent('payment_received',
-      `Payment of ${amount} AED received from ${data.customerName} (${data.method}). Receipt ${receiptNum}.`,
-      `تم استلام دفعة بقيمة ${amount} درهم من ${data.customerName} (${data.method}). إيصال ${receiptNum}.`
-    );
-    if (data.customerId) {
-      await dispatchCustomerNotification('customer_payment_receipt', data.customerId, data.customerName, customer?.phone,
-        `Payment received -- ${amount.toLocaleString()} AED (${data.method}). Receipt No. ${receiptNum}. Thank you.`,
-        `تم استلام دفعتكم بقيمة ${amount.toLocaleString()} درهم (${data.method}). رقم الإيصال ${receiptNum}. شكراً لكم.`);
+  if (!replayed) {
+    globalStore.payments.unshift(payment as any);
+    if (data.invoiceId) {
+      const inv = globalStore.invoices.find(i => i.id === data.invoiceId);
+      if (inv) {
+        inv.paidAmount += amount;
+        inv.balanceDue = Math.max(0, inv.totalAmount - inv.paidAmount);
+        inv.status = inv.balanceDue === 0 ? 'paid' : 'partially_paid';
+      }
     }
-  } catch (err) {
-    console.error('WhatsApp dispatch failed (payment_received):', err);
+    const customer = globalStore.customers.find(c => c.id === data.customerId);
+    if (customer) customer.outstandingBalance = Math.max(0, customer.outstandingBalance - amount);
+
+    await recordAudit({
+      userId: data.receivedById || 'USR-004',
+      userName: data.receivedByName || 'Faisal Al-Hashimi',
+      userRole: 'finance',
+      entityType: 'Payment',
+      entityId: newId,
+      action: 'create',
+      newValue: `Recorded payment of ${amount} AED (${data.method}) from ${data.customerName}. Receipt: ${receiptNum}`
+    });
+
+    try {
+      await dispatchNotificationEvent('payment_received',
+        `Payment of ${amount} AED received from ${data.customerName} (${data.method}). Receipt ${receiptNum}.`,
+        `تم استلام دفعة بقيمة ${amount} درهم من ${data.customerName} (${data.method}). إيصال ${receiptNum}.`
+      );
+      if (data.customerId) {
+        await dispatchCustomerNotification('customer_payment_receipt', data.customerId, data.customerName, customer?.phone,
+          `Payment received -- ${amount.toLocaleString()} AED (${data.method}). Receipt No. ${receiptNum}. Thank you.`,
+          `تم استلام دفعتكم بقيمة ${amount.toLocaleString()} درهم (${data.method}). رقم الإيصال ${receiptNum}. شكراً لكم.`);
+      }
+    } catch (err) {
+      console.error('WhatsApp dispatch failed (payment_received):', err);
+    }
   }
 
   res.status(201).json(payment);
-});
+}));
 
 app.get('/api/statements/:customerId', (req, res) => {
   const statement = globalStore.getCustomerStatement(req.params.customerId);
@@ -2106,45 +2328,75 @@ app.post('/api/bank-batches', async (req, res) => {
   res.status(201).json({ batch, transactions: parsedTxns });
 });
 
-app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), (req, res) => {
-  const txn = globalStore.bankTransactions.find(t => t.id === req.params.id);
-  if (!txn) return res.status(404).json({ error: 'Bank transaction not found' });
-
+// Guards against double-reconcile (the audit's finding: reconciling twice
+// would double-credit the matched invoice) by checking txn.reconciled
+// inside the same transaction that writes the reconciliation.
+app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
   const { targetRecordType, targetRecordId, actorId, actorName } = req.body;
+  const now = new Date().toISOString();
+  const txnRef = admin.firestore().collection('bank_transactions').doc(req.params.id);
 
-  txn.status = 'approved';
-  txn.reconciled = true;
-  txn.matchedRecord = {
-    type: targetRecordType || 'invoice',
-    id: targetRecordId || (txn.suggestedMatch ? txn.suggestedMatch.invoiceId || '' : ''),
-    matchedBy: actorName || 'Faisal Al-Hashimi',
-    matchedAt: new Date().toISOString()
-  };
+  let updatedTxn: any;
+  try {
+    updatedTxn = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(txnRef);
+      if (!snap.exists) throw new PersistenceError('Bank transaction not found');
+      const txn = snap.data() as any;
+      if (txn.reconciled) throw new PersistenceError('This transaction has already been reconciled.');
 
-  // If matched to an invoice, auto-settle invoice
-  if (targetRecordId) {
+      const matchedRecord = {
+        type: targetRecordType || 'invoice',
+        id: targetRecordId || (txn.suggestedMatch ? txn.suggestedMatch.invoiceId || '' : ''),
+        matchedBy: actorName || 'Faisal Al-Hashimi',
+        matchedAt: now
+      };
+      const updated = { ...txn, status: 'approved', reconciled: true, matchedRecord };
+      tx.set(txnRef, updated, { merge: true });
+
+      if (targetRecordId && txn.credit > 0) {
+        const invRef = db.collection('invoices').doc(targetRecordId);
+        const invSnap = await tx.get(invRef);
+        if (invSnap.exists) {
+          const inv = invSnap.data() as any;
+          const paidAmount = inv.paidAmount + txn.credit;
+          const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
+          tx.set(invRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
+        }
+      }
+      return updated;
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Bank transaction not found' || err.message.startsWith('This transaction'))) {
+      return res.status(err.message === 'Bank transaction not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.bankTransactions.findIndex(t => t.id === req.params.id);
+  if (index !== -1) globalStore.bankTransactions[index] = updatedTxn;
+  if (targetRecordId && updatedTxn.credit > 0) {
     const inv = globalStore.invoices.find(i => i.id === targetRecordId);
-    if (inv && txn.credit > 0) {
-      inv.paidAmount += txn.credit;
+    if (inv) {
+      inv.paidAmount += updatedTxn.credit;
       inv.balanceDue = Math.max(0, inv.totalAmount - inv.paidAmount);
       inv.status = inv.balanceDue === 0 ? 'paid' : 'partially_paid';
     }
   }
 
-  globalStore.logAudit({
+  await recordAudit({
     userId: actorId || 'USR-004',
     userName: actorName || 'Faisal Al-Hashimi',
     userRole: 'finance',
     entityType: 'BankReconciliation',
-    entityId: txn.id,
+    entityId: updatedTxn.id,
     action: 'reconcile',
     previousValue: 'Status: Pending / Suggested',
-    newValue: `Reconciled transaction ${txn.reference} (${txn.credit > 0 ? '+' : '-'}${txn.credit || txn.debit} AED) with ${txn.matchedRecord.type} ${txn.matchedRecord.id}`,
+    newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}`,
     reason: 'Approved by authorized financial reconciler'
   });
 
-  res.json({ success: true, transaction: txn });
-});
+  res.json({ success: true, transaction: updatedTxn });
+}));
 
 // ----------------------------------------------------
 // 9B. TOLLS, PARKING & PROFIT MARGIN (Salik / Darb / Parking)

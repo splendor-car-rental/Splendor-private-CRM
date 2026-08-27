@@ -14,6 +14,7 @@ import { Modal } from '../common/Modal';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
+import { apiFetch } from '../../lib/apiFetch';
 
 const DOCUMENT_CATEGORIES: CRMDocument['category'][] = ['customer_id', 'driving_license', 'contract', 'invoice', 'receipt', 'other'];
 
@@ -135,15 +136,20 @@ export const Customer360View: React.FC = () => {
   const fetchCustomerAiBrief = async (customerId: string) => {
     setAiBriefLoading(true);
     try {
-      const res = await fetch('/api/ai/customer-summary', {
+      const res = await apiFetch('/api/ai/customer-summary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customerId, language })
       });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Request failed (${res.status})`);
+      }
       const data = await res.json();
       setAiBrief(data.summary);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      showToast('AI Summary Failed', e?.message || 'Could not generate the customer summary. Please try again.', 'error');
     } finally {
       setAiBriefLoading(false);
     }
