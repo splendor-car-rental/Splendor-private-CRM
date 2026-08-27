@@ -2578,6 +2578,64 @@ app.get('/api/whatsapp/message-log', (req, res) => {
   res.json(globalStore.whatsappMessageLog.slice(0, 200));
 });
 
+// WhatsApp Cloud API webhook -- Meta calls these two endpoints directly (no
+// session cookie or bearer token of ours is ever attached), so they must
+// stay outside requireAuth/requireRole entirely. Security here is
+// WHATSAPP_WEBHOOK_VERIFY_TOKEN on the one-time GET handshake, not our own
+// login system -- exactly like WHATSAPP_ACCESS_TOKEN/WHATSAPP_PHONE_NUMBER_ID
+// in src/server/whatsapp.ts, this is configured purely through an
+// environment variable and needs no code change once it's set.
+//
+// GET: Meta's one-time subscription verification. It sends hub.mode,
+// hub.verify_token and hub.challenge as query params; we must echo back
+// hub.challenge as plain text with HTTP 200 only if hub.verify_token matches
+// our own secret, or refuse with 403 otherwise -- this is the entire trust
+// boundary for the webhook, so it isn't optional.
+app.get('/api/whatsapp/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  const expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+
+  if (mode === 'subscribe' && expected && token === expected) {
+    res.status(200).type('text/plain').send(String(challenge ?? ''));
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+// POST: every incoming customer message and every outbound delivery-status
+// update (sent/delivered/read/failed) for our number arrives here. Meta
+// requires a fast HTTP 200 on every delivery -- it retries with backoff, and
+// eventually disables the webhook, if we don't -- so this always
+// acknowledges immediately and only logs for now. Turning incoming messages
+// into a real in-app inbox/reply flow (a new WhatsAppMessageLogEntry shape
+// with direction/from, a UI thread view, etc.) is a separate, larger
+// feature to build once basic sending is confirmed working end-to-end.
+app.post('/api/whatsapp/webhook', (req, res) => {
+  try {
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0]?.value;
+    const messages = change?.messages;
+    const statuses = change?.statuses;
+
+    if (Array.isArray(messages)) {
+      for (const m of messages) {
+        console.log(`[whatsapp webhook] incoming message from ${m.from}: ${m.text?.body ?? `[${m.type}]`}`);
+      }
+    }
+    if (Array.isArray(statuses)) {
+      for (const s of statuses) {
+        console.log(`[whatsapp webhook] status update: message ${s.id} -> ${s.status}`);
+      }
+    }
+  } catch (error) {
+    console.error('[whatsapp webhook] failed to process payload:', error);
+  }
+
+  res.sendStatus(200);
+});
+
 app.get('/api/custom-reminders', (req, res) => {
   res.json(globalStore.customReminders);
 });
@@ -2833,6 +2891,17 @@ app.post('/api/ai/customer-summary', async (req, res) => {
 // 12. AUTOMATED END-TO-END WORKFLOW TEST SUITE
 // ----------------------------------------------------
 app.post('/api/tests/run-all', (req, res) => {
+  // Every TC-xx fixture below (fake leads, customers, vehicles, contracts,
+  // bank transactions...) used to push directly into the shared production
+  // `globalStore` singleton -- meaning running this test suite injected
+  // permanent-looking demo records (e.g. vehicle VEH-0001 "Rolls-Royce
+  // Spectre") into the real, live CRM data. withIsolatedState() runs this
+  // entire test body against a throwaway copy of the store's state and
+  // restores the real data afterward, so none of it can leak into
+  // production -- see the method's doc comment in src/server/dataStore.ts
+  // for how/why this is safe. Nothing inside this handler changed; it is
+  // only wrapped.
+  const { testResults, startTime } = globalStore.withIsolatedState(() => {
   const testResults: Array<{
     id: string;
     workflowName: string;
@@ -3755,16 +3824,18 @@ app.post('/api/tests/run-all', (req, res) => {
     });
   }
 
-  // Purge any temporary test artifacts from globalStore
-  globalStore.leads = globalStore.leads.filter(l => !l.id.startsWith('TEST-'));
-  globalStore.customers = globalStore.customers.filter(c => !c.id.startsWith('TEST-') && c.id !== 'CUS-TEST-99');
-  globalStore.quotations = globalStore.quotations.filter(q => !q.id.startsWith('TEST-') && q.notes !== 'Automated test quotation');
-  globalStore.reservations = globalStore.reservations.filter(r => !r.id.startsWith('TEST-') && r.notes !== 'Auto test' && !r.notes?.includes('Test Hardening') && r.customerPhone !== '+971 55 999 8811' && r.customerPhone !== '+971 55 999 8822');
-  globalStore.contracts = globalStore.contracts.filter(c => !c.id.startsWith('CON-TEST-') && !c.id.startsWith('TEST-'));
-  globalStore.vehicles = globalStore.vehicles.filter(v => !v.id.startsWith('TEST-') && !v.id.startsWith('VEH-TEST-'));
-  globalStore.invoices = globalStore.invoices.filter(i => !i.id.startsWith('INV-TEST-') && !i.id.startsWith('TEST-'));
-  globalStore.bankTransactions = globalStore.bankTransactions.filter(t => !t.id.startsWith('TEST-'));
-  globalStore.auditLogs = globalStore.auditLogs.filter(a => a.entityId !== 'SEC-TEST');
+  // This used to be where a post-hoc filter re-scanned globalStore's arrays
+  // by ID prefix ("TEST-", "CON-TEST-", ...) to try to strip test fixtures
+  // back out after the fact. That approach is removed entirely now --
+  // withIsolatedState() above means these fixtures were never in the real
+  // store to begin with, so there is nothing left to purge here -- and it
+  // was never reliable anyway: TC-12's demo vehicle used a real-looking ID
+  // (VEH-0001, not "VEH-TEST-...") that such a filter would have missed
+  // entirely, and TC-04/TC-05 pushed a contract referencing the real
+  // production customer id CUS-000001.
+
+  return { testResults, startTime };
+  });
 
   const totalDuration = Date.now() - startTime;
   const passedCount = testResults.filter(t => t.status === 'PASSED').length;
@@ -3786,13 +3857,17 @@ app.post('/api/tests/run-all', (req, res) => {
 // 12b. HYDRATE IN-MEMORY STORE FROM FIRESTORE ON BOOT
 // ----------------------------------------------------
 // `globalStore` (src/server/dataStore.ts) is a plain in-memory object -- it
-// starts every process with the same hardcoded demo records and forgets
-// everything on restart/redeploy. Real operational data created through the
-// app IS separately mirrored into Firestore (see FirestoreService calls in
+// starts every process with EMPTY business arrays (customers, vehicles,
+// leads, contracts, etc. all start as []) and forgets everything on
+// restart/redeploy. Real operational data created through the app IS
+// separately mirrored into Firestore (see FirestoreService calls in
 // CRMContext), so on boot we pull whatever is actually in Firestore back
-// into memory. A collection that's genuinely empty in Firestore is left on
-// its hardcoded demo data, so a brand-new project still has something to
-// look at.
+// into memory. A collection that's genuinely empty in Firestore stays
+// empty in memory too -- see "never fall back to demo records" below --
+// with the sole exception of customFields/numberingConfigs, which are
+// system configuration (not business data) and keep their built-in
+// defaults so numbering/custom-field setup still works on a brand-new,
+// not-yet-configured project.
 //
 // This does NOT make Firestore and the in-memory store consistent in real
 // time, and it doesn't change how any existing route reads/writes data --

@@ -354,6 +354,49 @@ export class DataStore {
       generatedAt: new Date().toISOString()
     };
   }
+
+  /**
+   * Runs `fn` against a completely fresh, isolated copy of this store's
+   * data (every array/object own-property reset to the same defaults a
+   * brand-new DataStore starts with), then restores the REAL data
+   * afterward -- always, even if fn throws. Every own data property is
+   * swapped by reference, not deep-copied, so the swap is cheap and every
+   * module holding a reference to this exact `globalStore` object (e.g.
+   * splendorConnectEngine.ts, which imports `globalStore` directly and
+   * reads/writes its properties the same way server.ts does) transparently
+   * sees the isolated test data too -- there is only ever one `globalStore`
+   * object; only which arrays its properties point to changes, briefly.
+   *
+   * This exists solely for the Test Suite Runner (POST
+   * /api/tests/run-all): every TC-xx fixture in that handler pushes demo
+   * customers/vehicles/contracts/etc. from *within* the callback passed
+   * here, so none of it can ever enter, or be read from, the real
+   * production data -- not even transiently, since no other request can
+   * interleave with a synchronous callback in Node's single-threaded event
+   * loop, and this handler makes no Firestore writes of its own.
+   *
+   * IMPORTANT: `fn` must be synchronous. An async fn would let a real
+   * request read or mutate this store mid-test-run, seeing (or corrupting)
+   * the temporary isolated state -- the whole safety property of this
+   * method depends on the swap-run-restore sequence never yielding to the
+   * event loop in between.
+   */
+  public withIsolatedState<T>(fn: () => T): T {
+    const fresh = new DataStore();
+    const keys = Object.keys(this) as (keyof DataStore)[];
+    const original: Partial<Record<keyof DataStore, any>> = {};
+    for (const key of keys) {
+      original[key] = (this as any)[key];
+      (this as any)[key] = (fresh as any)[key];
+    }
+    try {
+      return fn();
+    } finally {
+      for (const key of keys) {
+        (this as any)[key] = original[key];
+      }
+    }
+  }
 }
 
 export const globalStore = new DataStore();
