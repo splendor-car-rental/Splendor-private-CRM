@@ -8,6 +8,13 @@
     --font-arabic: 'Cairo', 'Tajawal', sans-serif;
   }
 
+  html, body, #root {
+    min-height: 100vh;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
   html[dir="rtl"] {
     font-family: var(--font-arabic);
     letter-spacing: normal;

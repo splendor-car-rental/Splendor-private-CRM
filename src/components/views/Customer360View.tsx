@@ -13,6 +13,7 @@ import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { uploadFile, formatFileSize } from '../../lib/upload';
+import { formatDate, formatDateTime } from '../../lib/dateFormat';
 
 const DOCUMENT_CATEGORIES: CRMDocument['category'][] = ['customer_id', 'driving_license', 'contract', 'invoice', 'receipt', 'other'];
 
@@ -506,7 +507,7 @@ export const Customer360View: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-xs text-zinc-400 mt-1">
-                          {contract.contractNumber} • {contract.startDateTime ? new Date(contract.startDateTime).toLocaleDateString() : 'N/A'} to {contract.endDateTime ? new Date(contract.endDateTime).toLocaleDateString() : 'N/A'}
+                          {contract.contractNumber} • {contract.startDateTime ? formatDate(contract.startDateTime) : 'N/A'} to {contract.endDateTime ? formatDate(contract.endDateTime) : 'N/A'}
                         </p>
                       </div>
                       <div className="text-end">
@@ -555,7 +556,7 @@ export const Customer360View: React.FC = () => {
                         <tr key={inv.id} className="text-zinc-300">
                           <td className="py-3 font-semibold text-[#f5d97f]">Invoice</td>
                           <td className="py-3 font-mono">{inv.id}</td>
-                          <td className="py-3">{inv.issueDate ? new Date(inv.issueDate).toLocaleDateString() : 'N/A'}</td>
+                          <td className="py-3">{inv.issueDate ? formatDate(inv.issueDate) : 'N/A'}</td>
                           <td className="py-3 text-end font-medium">{(inv.totalAmount || 0).toLocaleString()}</td>
                           <td className="py-3 text-end text-emerald-400 font-medium">{(inv.paidAmount || 0).toLocaleString()}</td>
                           <td className="py-3 text-end">
@@ -581,7 +582,7 @@ export const Customer360View: React.FC = () => {
                     <div key={comm.id} className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-semibold text-zinc-200 uppercase">{comm.channel} • {comm.direction}</span>
-                        <span className="text-zinc-500">{comm.timestamp ? new Date(comm.timestamp).toLocaleString() : 'N/A'}</span>
+                        <span className="text-zinc-500">{comm.timestamp ? formatDateTime(comm.timestamp) : 'N/A'}</span>
                       </div>
                       <p className="text-xs text-zinc-300">{comm.content}</p>
                       <p className="text-[10px] text-zinc-400">Logged by {comm.createdByName}</p>

@@ -8,6 +8,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Quotation } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate } from '../../lib/dateFormat';
 
 export const QuotationsView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -182,7 +183,7 @@ export const QuotationsView: React.FC = () => {
                   OFFICIAL PROPOSAL
                 </span>
                 <p className="text-xs font-mono text-zinc-300 font-bold mt-2">No: {activeQuote.id}</p>
-                <p className="text-[11px] text-zinc-400">Date: {new Date(activeQuote.createdAt).toLocaleDateString()}</p>
+                <p className="text-[11px] text-zinc-400">Date: {formatDate(activeQuote.createdAt)}</p>
               </div>
             </div>
 
@@ -199,7 +200,7 @@ export const QuotationsView: React.FC = () => {
                 <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Rental Schedule</span>
                 <p className="font-bold text-zinc-100">{activeQuote.vehicleName}</p>
                 <p className="text-zinc-400">
-                  {new Date(activeQuote.startDate).toLocaleDateString()} to {new Date(activeQuote.endDate).toLocaleDateString()} ({activeQuote.durationDays} Days)
+                  {formatDate(activeQuote.startDate)} to {formatDate(activeQuote.endDate)} ({activeQuote.durationDays} Days)
                 </p>
                 <p className="text-zinc-400">Valid Until: {activeQuote.validUntil}</p>
               </div>

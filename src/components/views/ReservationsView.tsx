@@ -9,6 +9,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Reservation } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate } from '../../lib/dateFormat';
 
 export const ReservationsView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -166,7 +167,7 @@ export const ReservationsView: React.FC = () => {
                   </td>
                   <td className="p-4 space-y-0.5">
                     <p className="text-zinc-200">
-                      {new Date(res.pickupDateTime).toLocaleDateString()} → {new Date(res.returnDateTime).toLocaleDateString()}
+                      {formatDate(res.pickupDateTime)} → {formatDate(res.returnDateTime)}
                     </p>
                     <p className="text-[11px] text-zinc-500">{res.durationDays} Days Duration</p>
                   </td>

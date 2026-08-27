@@ -9,6 +9,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Task, TaskPriority } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate } from '../../lib/dateFormat';
 
 export const TasksFollowupsView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -170,7 +171,7 @@ export const TasksFollowupsView: React.FC = () => {
               {/* Bottom bar */}
               <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
                 <span className="text-zinc-500 text-[11px] flex items-center gap-1">
-                  <Clock className="w-3 h-3" /> Due {new Date(task.dueDate).toLocaleDateString()}
+                  <Clock className="w-3 h-3" /> Due {formatDate(task.dueDate)}
                 </span>
 
                 <button

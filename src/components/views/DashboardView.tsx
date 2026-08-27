@@ -12,6 +12,7 @@ import { Badge } from '../common/Badge';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { SplendorLogo } from '../common/SplendorLogo';
 import proudOfUaeBanner from '../../assets/proud-of-uae-banner.jpg';
+import { formatDate } from '../../lib/dateFormat';
 
 export const DashboardView: React.FC = () => {
   const { language } = useLanguage();
@@ -337,7 +338,7 @@ export const DashboardView: React.FC = () => {
                       <div className="text-start sm:text-end">
                         <p className="text-xs font-semibold text-zinc-200">{(contract.grandTotal || 0).toLocaleString()} AED</p>
                         <p className="text-[11px] text-zinc-400">
-                          {language === 'ar' ? 'الاسترجاع:' : 'Return:'} {new Date(contract.endDateTime).toLocaleDateString()}
+                          {language === 'ar' ? 'الاسترجاع:' : 'Return:'} {formatDate(contract.endDateTime)}
                         </p>
                       </div>
                       <Badge variant="emerald" size="sm">

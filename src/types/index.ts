@@ -367,8 +367,8 @@ export interface PublicWebsiteReservationRequest {
   whatsapp?: string;
   pickupDateTime: string;
   returnDateTime: string;
-  pickupLocation: string;
-  returnLocation: string;
+  pickupLocation?: string;
+  returnLocation?: string;
   specialRequests?: string;
   sourcePage?: string;
   campaign?: string;
@@ -978,4 +978,67 @@ export interface TollImportBatch {
   uploadedAt: string;
   status: 'processed' | 'failed';
   errorMessage?: string;
+}
+
+// ----------------------------------------------------
+// Global Notification & WhatsApp Control Center
+// ----------------------------------------------------
+// One toggle-able "event" per real action/milestone across the CRM. The
+// static list of events (key/category/labels) lives in
+// src/config/notificationEvents.ts, shared by client and server, so both
+// always agree on what "customer_blocklisted" etc. means. What's stored
+// here is only the per-event CONFIG (on/off, who gets it).
+export type NotificationCategory = 'customer' | 'contract' | 'fleet' | 'financial' | 'tolls' | 'system';
+
+export interface NotificationEventConfig {
+  eventKey: string;
+  enabled: boolean;
+  /** "General WhatsApp Group Broadcast" toggle from the spec. The WhatsApp
+   *  Cloud API has no concept of posting into a group from a business
+   *  number, so this fans out to every number listed in the
+   *  WHATSAPP_GROUP_RECIPIENTS env var -- functionally identical to
+   *  broadcasting into a group of those people. */
+  broadcastToGroup: boolean;
+  /** Specific staff (by User.id) who should get this event on WhatsApp, independent of the group toggle. */
+  staffRecipientIds: string[];
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt?: string;
+}
+
+/** Admin-authored ad-hoc notification/task, routed to the group and/or specific staff -- the "manual custom-reminder creator" from the spec. */
+export interface CustomReminder {
+  id: string; // REM-000001
+  title: string;
+  message: string;
+  broadcastToGroup: boolean;
+  staffRecipientIds: string[];
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  /** 'not_configured' means WhatsApp credentials aren't set yet -- the reminder is still saved, just not actually sendable. */
+  status: 'sent' | 'partially_sent' | 'failed' | 'not_configured';
+}
+
+/** One row per actual WhatsApp send attempt (real or blocked-by-not-configured), for the Control Center's activity log. */
+export interface WhatsAppMessageLogEntry {
+  id: string; // WA-000001
+  eventKey?: string; // absent for a custom reminder
+  reminderId?: string;
+  recipientType: 'group' | 'staff' | 'customer';
+  recipientLabel: string;
+  recipientPhone?: string;
+  message: string;
+  status: 'sent' | 'failed' | 'not_configured';
+  errorMessage?: string;
+  createdAt: string;
+}
+
+/** On/off switch for one customer-facing WhatsApp message type (Salik/fine charges, payment receipts, payment due/overdue reminders, contract-expiring reminders, extension notices). No staff/group routing -- the recipient is always the customer on the specific record. */
+export interface CustomerNotificationConfig {
+  eventKey: string;
+  enabled: boolean;
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt?: string;
 }

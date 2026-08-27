@@ -44,7 +44,11 @@ export const COLLECTIONS = {
   NUMBERING_CONFIGS: 'numbering_configs',
   NOTIFICATIONS: 'notifications',
   TOLL_TRANSACTIONS: 'toll_transactions',
-  TOLL_IMPORT_BATCHES: 'toll_import_batches'
+  TOLL_IMPORT_BATCHES: 'toll_import_batches',
+  NOTIFICATION_EVENT_CONFIGS: 'notification_event_configs',
+  CUSTOM_REMINDERS: 'custom_reminders',
+  WHATSAPP_MESSAGE_LOG: 'whatsapp_message_log',
+  CUSTOMER_NOTIFICATION_CONFIGS: 'customer_notification_configs'
 } as const;
 
 export class FirestoreService {

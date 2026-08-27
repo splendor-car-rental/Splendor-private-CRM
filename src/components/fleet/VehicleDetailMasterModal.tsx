@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate, formatDateTime } from '../../lib/dateFormat';
 
 interface VehicleDetailMasterModalProps {
   vehicleId: string | null;
@@ -306,7 +307,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
                               <Badge variant="zinc" size="sm">{isAr ? 'أرشيف سابق' : 'ARCHIVED'}</Badge>
                             )}
                             <span className="text-zinc-400 text-[10px]">
-                              {new Date(plate.startDate).toLocaleDateString()} — {plate.endDate ? new Date(plate.endDate).toLocaleDateString() : (isAr ? 'حتى الآن' : 'Present')}
+                              {formatDate(plate.startDate)} — {plate.endDate ? formatDate(plate.endDate) : (isAr ? 'حتى الآن' : 'Present')}
                             </span>
                           </div>
                           <p className="text-[11px] text-zinc-300 mt-1">
@@ -474,7 +475,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
                       <div>
                         <div className="flex items-center gap-2">
                           <Badge variant="purple" size="sm">{evt.action}</Badge>
-                          <span className="text-[10px] text-zinc-400 font-mono">{new Date(evt.date).toLocaleString()}</span>
+                          <span className="text-[10px] text-zinc-400 font-mono">{formatDateTime(evt.date)}</span>
                         </div>
                         <p className="text-zinc-200 font-medium text-xs mt-1">{evt.reason}</p>
                       </div>

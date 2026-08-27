@@ -67,5 +67,7 @@ service cloud.firestore {
     match /notifications/{id} { allow read, write: if request.auth != null; }
     match /toll_transactions/{id} { allow read, write: if request.auth != null; }
     match /toll_import_batches/{id} { allow read, write: if request.auth != null; }
+    match /settings/{id} { allow read, write: if request.auth != null; }
+    match /{document=**} { allow read, write: if request.auth != null; }
   }
 }

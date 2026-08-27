@@ -8,6 +8,7 @@ import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate } from '../../lib/dateFormat';
 
 export const FinanceLedgerView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -180,7 +181,7 @@ export const FinanceLedgerView: React.FC = () => {
                   <tr key={inv.id} className="hover:bg-zinc-900/40 transition-colors">
                     <td className="p-4 font-mono font-bold text-[#f5d97f]">{inv.id}</td>
                     <td className="p-4 font-semibold text-zinc-200">{inv.customerName || 'N/A'}</td>
-                    <td className="p-4">{inv.issueDate ? new Date(inv.issueDate).toLocaleDateString() : 'N/A'}</td>
+                    <td className="p-4">{inv.issueDate ? formatDate(inv.issueDate) : 'N/A'}</td>
                     <td className="p-4 text-end font-mono">{(inv.subtotal || 0).toLocaleString()} AED</td>
                     <td className="p-4 text-end font-mono text-zinc-400">{(inv.vatAmount || 0).toLocaleString()} AED</td>
                     <td className="p-4 text-end font-mono font-bold text-zinc-100">{(inv.totalAmount || 0).toLocaleString()} AED</td>
@@ -290,7 +291,7 @@ export const FinanceLedgerView: React.FC = () => {
                     <td className="p-4 font-semibold text-zinc-200">{pay.customerName || 'N/A'}</td>
                     <td className="p-4 uppercase font-medium">{(pay.method || 'payment').replace(/_/g, ' ')}</td>
                     <td className="p-4 font-mono text-zinc-400">{pay.referenceNumber || 'N/A'}</td>
-                    <td className="p-4">{pay.receivedAt ? new Date(pay.receivedAt).toLocaleDateString() : 'N/A'}</td>
+                    <td className="p-4">{pay.receivedAt ? formatDate(pay.receivedAt) : 'N/A'}</td>
                     <td className="p-4 text-end font-mono font-bold text-emerald-400">{(pay.amount || 0).toLocaleString()} AED</td>
                     <td className="p-4 text-center">
                       <Badge variant="emerald" size="sm">ALLOCATED</Badge>

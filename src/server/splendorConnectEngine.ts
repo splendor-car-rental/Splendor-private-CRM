@@ -1,10 +1,53 @@
+import admin from 'firebase-admin';
 import {
   Vehicle, PlateAssignmentHistory, VehicleTimelineEvent,
   PublicVehicleDTO, WebsiteVehiclePublication, PublicWebsiteLeadRequest,
   PublicWebsiteReservationRequest, WebsiteReconciliationItem, TollTransaction,
-  Contract, Reservation, Customer, Lead
+  Contract, Reservation, Customer, Lead, AuditLog
 } from '../types';
 import { globalStore } from './dataStore';
+
+/**
+ * In-memory idempotency cache for deduplicating rapid duplicate submissions
+ * Key -> { result: any, timestamp: number }
+ */
+const idempotencyCache = new Map<string, { result: any; timestamp: number }>();
+const IDEMPOTENCY_TTL_MS = 60 * 1000; // 60 seconds
+
+function checkIdempotency(key: string): any | null {
+  const entry = idempotencyCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > IDEMPOTENCY_TTL_MS) {
+    idempotencyCache.delete(key);
+    return null;
+  }
+  return entry.result;
+}
+
+function storeIdempotency(key: string, result: any): void {
+  // Clean old entries if cache grows
+  if (idempotencyCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of idempotencyCache.entries()) {
+      if (now - v.timestamp > IDEMPOTENCY_TTL_MS) {
+        idempotencyCache.delete(k);
+      }
+    }
+  }
+  idempotencyCache.set(key, { result, timestamp: Date.now() });
+}
+
+/**
+ * Safe asynchronous Firestore persistence helper
+ */
+async function syncToFirestore(collectionName: string, docId: string, data: any) {
+  if (admin.apps.length === 0) return;
+  try {
+    await admin.firestore().collection(collectionName).doc(docId).set(data, { merge: true });
+  } catch (err) {
+    console.error(`[SplendorConnectEngine/Firestore] Failed to persist to ${collectionName}/${docId}:`, err);
+  }
+}
 
 /**
  * SPLENDOR CONNECT MASTER ENGINE
@@ -23,7 +66,14 @@ export class SplendorConnectEngine {
    */
   public static toPublicVehicleDTO(vehicle: Vehicle): PublicVehicleDTO | null {
     // If not active in lifecycle or unpublished / hidden, do not expose
-    if (vehicle.lifecycleStatus === 'SOLD' || vehicle.lifecycleStatus === 'DISPOSED' || vehicle.lifecycleStatus === 'ARCHIVED') {
+    if (
+      !vehicle ||
+      vehicle.lifecycleStatus === 'SOLD' ||
+      vehicle.lifecycleStatus === 'DISPOSED' ||
+      vehicle.lifecycleStatus === 'ARCHIVED' ||
+      vehicle.lifecycleStatus === 'TRANSFERRED' ||
+      vehicle.lifecycleStatus === 'INACTIVE'
+    ) {
       return null;
     }
 
@@ -121,6 +171,9 @@ export class SplendorConnectEngine {
         userName: params.assignedByName,
         createdAt: now
       });
+
+      // Persist other vehicle to Firestore
+      syncToFirestore('vehicles', otherVehicleWithPlate.id, otherVehicleWithPlate);
     }
 
     // Close previous assignment on this vehicle
@@ -170,7 +223,7 @@ export class SplendorConnectEngine {
       createdAt: now
     });
 
-    globalStore.logAudit({
+    const auditLog = globalStore.logAudit({
       userId: params.assignedBy,
       userName: params.assignedByName,
       userRole: 'fleet',
@@ -181,6 +234,10 @@ export class SplendorConnectEngine {
       newValue: `Plate: ${params.newPlateCity} ${params.newPlateNumber}`,
       reason: params.reason
     });
+
+    // Persist this vehicle & audit log to Firestore
+    syncToFirestore('vehicles', vehicle.id, vehicle);
+    syncToFirestore('audit_logs', auditLog.id, auditLog);
 
     return { success: true, vehicle };
   }
@@ -204,9 +261,12 @@ export class SplendorConnectEngine {
     // 1. Find vehicle that held this plate at this specific timestamp
     let matchedVehicle: Vehicle | null = null;
 
+    const cleanInputPlate = plateNumber.trim().toUpperCase().replace(/\s+/g, ' ');
+
     for (const v of globalStore.vehicles) {
-      // Check current plate if timestamp is recent and no history
-      if (v.plateNumber === plateNumber) {
+      const vPlate = (v.plateNumber || '').trim().toUpperCase().replace(/\s+/g, ' ');
+      // Check current plate
+      if (vPlate === cleanInputPlate) {
         if (!v.plateHistory || v.plateHistory.length === 0) {
           matchedVehicle = v;
           break;
@@ -216,7 +276,8 @@ export class SplendorConnectEngine {
       // Search plate history intervals [startDate, endDate]
       if (v.plateHistory && v.plateHistory.length > 0) {
         const found = v.plateHistory.find(ph => {
-          if (ph.plateNumber !== plateNumber) return false;
+          const phPlate = (ph.plateNumber || '').trim().toUpperCase().replace(/\s+/g, ' ');
+          if (phPlate !== cleanInputPlate) return false;
           const start = new Date(ph.startDate).getTime();
           const end = ph.endDate ? new Date(ph.endDate).getTime() : Infinity;
           return txTime >= start && txTime <= end;
@@ -226,6 +287,12 @@ export class SplendorConnectEngine {
           matchedVehicle = v;
           break;
         }
+      }
+
+      // Fallback: if current plate matches and no conflicting interval found
+      if (vPlate === cleanInputPlate) {
+        matchedVehicle = v;
+        break;
       }
     }
 
@@ -264,15 +331,34 @@ export class SplendorConnectEngine {
   }
 
   /**
-   * Process Public Website Inbound Lead
+   * Process Public Website Inbound Lead with validation, idempotency, and persistence
    */
-  public static handlePublicLead(data: PublicWebsiteLeadRequest): { success: boolean; leadId: string } {
+  public static handlePublicLead(data: PublicWebsiteLeadRequest): { success: boolean; leadId: string; error?: string } {
+    // Basic validation
+    const fullName = (data.fullName || '').trim();
+    const email = (data.email || '').trim();
+    const phone = (data.phone || '').trim();
+
+    if (!fullName || fullName.length < 2) {
+      return { success: false, leadId: '', error: 'Please provide a valid full name.' };
+    }
+    if (!email && !phone) {
+      return { success: false, leadId: '', error: 'A valid email address or phone number is required.' };
+    }
+
+    // Idempotency check
+    const idempotencyKey = `lead:${email.toLowerCase()}:${phone}:${data.preferredVehicle || ''}:${data.pickupDateTime || ''}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
     const leadId = globalStore.getNextNumber('Lead');
     const newLead: Lead = {
       id: leadId,
-      fullName: data.fullName,
-      email: data.email,
-      phone: data.phone,
+      fullName,
+      email,
+      phone,
       source: 'website',
       status: 'new',
       ownerId: 'USR-001',
@@ -290,48 +376,126 @@ Message: ${data.message || 'No additional message'}`,
 
     globalStore.leads.unshift(newLead);
 
-    globalStore.logAudit({
+    const auditLog = globalStore.logAudit({
       userId: 'SPLENDOR-CONNECT',
       userName: 'Website Gateway',
       userRole: 'admin',
       entityType: 'Lead',
       entityId: leadId,
       action: 'create',
-      newValue: `Website lead received from ${data.fullName} for vehicle ${data.preferredVehicle || 'N/A'}`
+      newValue: `Website lead received from ${fullName} for vehicle ${data.preferredVehicle || 'N/A'}`
     });
 
-    return { success: true, leadId };
+    // Persist to Firestore
+    syncToFirestore('leads', leadId, newLead);
+    syncToFirestore('audit_logs', auditLog.id, auditLog);
+
+    const response = { success: true, leadId };
+    storeIdempotency(idempotencyKey, response);
+    return response;
   }
 
   /**
    * Process Public Reservation Request from Website
+   * STRICT HARDENING: Zero fallback to invalid vehicles, server pricing derivation, idempotency, availability check
    */
   public static handlePublicReservation(data: PublicWebsiteReservationRequest): {
     success: boolean;
     reservationId?: string;
     error?: string;
   } {
-    // 1. Resolve vehicle
-    let targetVehicle = globalStore.vehicles.find(
-      v => v.id === data.publicVehicleId || v.publicVehicleId === data.publicVehicleId || (v.website && v.website.publicVehicleId === data.publicVehicleId)
-    );
+    // 1. Strict input validation
+    const fullName = (data.fullName || '').trim();
+    const email = (data.email || '').trim();
+    const phone = (data.phone || '').trim();
+    const vehicleKey = (data.publicVehicleId || '').trim();
 
-    if (!targetVehicle) {
-      targetVehicle = globalStore.vehicles[0];
+    if (!vehicleKey) {
+      return {
+        success: false,
+        error: 'A valid luxury vehicle must be specified for this reservation request.'
+      };
+    }
+    if (!fullName || fullName.length < 2) {
+      return { success: false, error: 'Please provide a valid full name.' };
+    }
+    if (!email || !phone) {
+      return { success: false, error: 'Both a valid email address and phone number are required for VIP booking verification.' };
+    }
+    if (!data.pickupDateTime || !data.returnDateTime) {
+      return { success: false, error: 'Pickup date and return date are required.' };
     }
 
-    // 2. Check schedule availability
+    const pickupTime = new Date(data.pickupDateTime).getTime();
+    const returnTime = new Date(data.returnDateTime).getTime();
+
+    if (isNaN(pickupTime) || isNaN(returnTime)) {
+      return { success: false, error: 'Invalid pickup or return date format.' };
+    }
+    if (returnTime <= pickupTime) {
+      return { success: false, error: 'Return date must be scheduled after the pickup date.' };
+    }
+
+    // 2. Strict Vehicle Resolution (NO FALLBACK to vehicles[0])
+    const target = vehicleKey.toLowerCase();
+    const targetVehicle = globalStore.vehicles.find(v =>
+      v.id.toLowerCase() === target ||
+      (v.publicVehicleId && v.publicVehicleId.toLowerCase() === target) ||
+      (v.website && v.website.publicVehicleId && v.website.publicVehicleId.toLowerCase() === target) ||
+      (v.website && v.website.slug && v.website.slug.toLowerCase() === target)
+    );
+
+    // Reject unknown, unlisted, sold, or archived vehicles immediately
+    if (!targetVehicle) {
+      console.warn(`[SplendorConnectEngine] Reservation rejected: Invalid or unknown vehicle identifier "${vehicleKey}" requested by ${email}`);
+      return {
+        success: false,
+        error: 'The requested vehicle is currently unavailable or could not be found in our active showroom fleet.'
+      };
+    }
+
+    if (
+      targetVehicle.lifecycleStatus === 'SOLD' ||
+      targetVehicle.lifecycleStatus === 'DISPOSED' ||
+      targetVehicle.lifecycleStatus === 'ARCHIVED' ||
+      targetVehicle.lifecycleStatus === 'TRANSFERRED' ||
+      targetVehicle.lifecycleStatus === 'INACTIVE'
+    ) {
+      console.warn(`[SplendorConnectEngine] Reservation rejected: Vehicle ${targetVehicle.id} is in status ${targetVehicle.lifecycleStatus}`);
+      return {
+        success: false,
+        error: 'The requested vehicle is currently out of service or unavailable for new bookings.'
+      };
+    }
+
+    const pub = targetVehicle.website;
+    if (!pub || !pub.enabled || pub.visibility === 'INTERNAL_ONLY' || pub.visibility === 'PRIVATE') {
+      console.warn(`[SplendorConnectEngine] Reservation rejected: Vehicle ${targetVehicle.id} is not publicly listed for online booking`);
+      return {
+        success: false,
+        error: 'The requested vehicle is reserved for private CRM requests and not available for online booking.'
+      };
+    }
+
+    // 3. Idempotency Check (Prevent duplicate reservations from double clicks / network retries)
+    const idempotencyKey = `res:${email.toLowerCase()}:${targetVehicle.id}:${data.pickupDateTime}:${data.returnDateTime}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
+    // 4. Server-Authoritative Availability Check (Prevent double booking)
     const avail = globalStore.checkVehicleAvailability(targetVehicle.id, data.pickupDateTime, data.returnDateTime);
     if (!avail.available) {
       return {
         success: false,
-        error: 'The requested vehicle is already booked for these selected dates. Please select alternate dates or another model.'
+        error: 'The requested vehicle is already reserved for the selected dates. Please choose alternate dates or select another model from our showroom.'
       };
     }
 
-    // 3. Find or Create Customer
+    // 5. Customer Deduplication: Find existing customer by email or phone
     let customer = globalStore.customers.find(
-      c => c.email.toLowerCase() === data.email.toLowerCase() || c.phone === data.phone
+      c => (c.email && c.email.toLowerCase() === email.toLowerCase()) || (phone && c.phone === phone)
     );
 
     if (!customer) {
@@ -339,18 +503,18 @@ Message: ${data.message || 'No additional message'}`,
       customer = {
         id: custId,
         type: 'individual',
-        fullName: data.fullName,
-        email: data.email,
-        phone: data.phone,
-        whatsapp: data.whatsapp || data.phone,
+        fullName,
+        email,
+        phone,
+        whatsapp: data.whatsapp || phone,
         address: data.pickupLocation || 'Dubai, UAE',
         city: 'Dubai',
         country: 'United Arab Emirates',
         nationality: 'VIP Visitor',
         idType: 'passport',
-        idNumber: 'PENDING_UPLOAD',
+        idNumber: 'PENDING_VERIFICATION',
         idExpiryDate: '2028-12-31',
-        licenseNumber: 'PENDING_UPLOAD',
+        licenseNumber: 'PENDING_VERIFICATION',
         licenseCountry: 'UAE',
         licenseExpiryDate: '2028-12-31',
         source: 'website',
@@ -372,14 +536,18 @@ Message: ${data.message || 'No additional message'}`,
         lastActivityAt: new Date().toISOString()
       };
       globalStore.customers.unshift(customer);
+      syncToFirestore('customers', customer.id, customer);
     }
 
-    // 4. Create Reservation Record in CRM
-    const resId = globalStore.getNextNumber('Reservation');
-    const days = Math.max(1, Math.ceil((new Date(data.returnDateTime).getTime() - new Date(data.pickupDateTime).getTime()) / (1000 * 60 * 60 * 24)));
-    const dailyRate = targetVehicle.dailyRate || 5000;
-    const estAmount = days * dailyRate;
+    // 6. Server-Authoritative Pricing Calculation (Client cannot override rates)
+    const durationMs = returnTime - pickupTime;
+    const days = Math.max(1, Math.ceil(durationMs / (1000 * 60 * 60 * 24)));
+    const dailyRate = targetVehicle.website?.dailyRate || targetVehicle.dailyRate || 5000;
+    const totalAmount = days * dailyRate;
+    const depositAmount = targetVehicle.website?.deposit || targetVehicle.minDeposit || 10000;
 
+    // 7. Create Reservation Record in CRM with 'pending' review lifecycle status
+    const resId = globalStore.getNextNumber('Reservation');
     const newReservation: Reservation = {
       id: resId,
       customerId: customer.id,
@@ -394,13 +562,16 @@ Message: ${data.message || 'No additional message'}`,
       pickupLocation: data.pickupLocation || 'Dubai Flagship Showroom',
       returnLocation: data.returnLocation || 'Dubai Flagship Showroom',
       dailyRate,
-      totalAmount: estAmount,
-      depositAmount: targetVehicle.minDeposit || 10000,
+      totalAmount,
+      depositAmount,
       depositStatus: 'pending',
-      status: 'confirmed',
+      status: 'pending', // Pending operations / concierge review
       ownerId: 'USR-001',
       ownerName: 'Tariq Al-Mansoor',
-      notes: `[ONLINE RESERVATION] Special requests: ${data.specialRequests || 'None'}. Delivery: ${data.pickupLocation || 'Showroom'}`,
+      notes: `[WEBSITE ONLINE RESERVATION - PENDING REVIEW]
+Requested Vehicle: ${targetVehicle.make} ${targetVehicle.model} (${targetVehicle.id})
+Special requests: ${data.specialRequests || 'None'}
+Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.returnLocation || 'Dubai Flagship Showroom'}`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -408,17 +579,23 @@ Message: ${data.message || 'No additional message'}`,
     globalStore.reservations.unshift(newReservation);
 
     // Audit log
-    globalStore.logAudit({
+    const auditLog = globalStore.logAudit({
       userId: 'SPLENDOR-CONNECT',
-      userName: 'Website Reservation Engine',
+      userName: 'Website Reservation Gateway',
       userRole: 'sales',
       entityType: 'Reservation',
       entityId: resId,
       action: 'create',
-      newValue: `Confirmed online booking for ${customer.fullName} - ${targetVehicle.make} ${targetVehicle.model} (${days} days, ${estAmount} AED)`
+      newValue: `Website reservation request for ${customer.fullName} - ${targetVehicle.make} ${targetVehicle.model} (${days} days, ${totalAmount} AED) [Pending Review]`
     });
 
-    return { success: true, reservationId: resId };
+    // Persist to Firestore
+    syncToFirestore('reservations', resId, newReservation);
+    syncToFirestore('audit_logs', auditLog.id, auditLog);
+
+    const response = { success: true, reservationId: resId };
+    storeIdempotency(idempotencyKey, response);
+    return response;
   }
 
   /**
@@ -458,3 +635,4 @@ Message: ${data.message || 'No additional message'}`,
     });
   }
 }
+

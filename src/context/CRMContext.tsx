@@ -6,7 +6,8 @@ import {
   CRMTask, Communication, CRMDocument, AuditLog,
   CustomFieldDefinition, NumberingConfig, NotificationItem,
   TollTransaction, TollImportBatch, TollPricingConfig,
-  WebsiteVehiclePublication, VehicleLifecycleStatus, WebsiteReconciliationItem
+  WebsiteVehiclePublication, VehicleLifecycleStatus, WebsiteReconciliationItem,
+  NotificationEventConfig, CustomReminder, WhatsAppMessageLogEntry, CustomerNotificationConfig
 } from '../types';
 import { FirestoreService, COLLECTIONS } from '../firebase/firestoreService';
 import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
@@ -50,6 +51,11 @@ interface CRMContextType {
   tollTransactions: TollTransaction[];
   tollImportBatches: TollImportBatch[];
   tollPricingConfig: TollPricingConfig | null;
+  notificationEventConfigs: NotificationEventConfig[];
+  customerNotificationConfigs: CustomerNotificationConfig[];
+  customReminders: CustomReminder[];
+  whatsappMessageLog: WhatsAppMessageLogEntry[];
+  whatsappStatus: { configured: boolean; groupRecipientCount: number };
   tasks: CRMTask[];
   communications: Communication[];
   documents: CRMDocument[];
@@ -130,6 +136,16 @@ interface CRMContextType {
   queryAI: (prompt: string, language?: string) => Promise<{ text: string; confidence: number }>;
   generateCustomerAISummary: (customerId: string, language?: string) => Promise<{ summary: string; confidence: number }>;
 
+  updateNotificationConfig: (eventKey: string, data: Partial<NotificationEventConfig>) => Promise<NotificationEventConfig>;
+  updateCustomerNotificationConfig: (eventKey: string, enabled: boolean) => Promise<CustomerNotificationConfig>;
+  sendCustomReminder: (data: { title: string; message: string; broadcastToGroup: boolean; staffRecipientIds: string[] }) => Promise<CustomReminder>;
+  runNotificationChecksNow: () => Promise<{ ranAt: string; alertsFired: number; details: string[] }>;
+  refreshWhatsappStatus: () => Promise<void>;
+  extendContract: (contractId: string, newEndDateTime: string) => Promise<{ contract: Contract; extraDays: number; extraAmount: number }>;
+
+  /** CEO/Admin only -- wipes every transactional/demo record and resets numbering back to 1. Irreversible. */
+  resetTransactionalData: (confirmText: string) => Promise<{ success: boolean; deletedDocs: number }>;
+
   createTask: (taskData: Partial<CRMTask>) => Promise<CRMTask>;
   updateTask: (id: string, data: Partial<CRMTask>) => Promise<CRMTask>;
   
@@ -157,6 +173,11 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tollTransactions, setTollTransactions] = useState<TollTransaction[]>([]);
   const [tollImportBatches, setTollImportBatches] = useState<TollImportBatch[]>([]);
   const [tollPricingConfig, setTollPricingConfig] = useState<TollPricingConfig | null>(null);
+  const [notificationEventConfigs, setNotificationEventConfigs] = useState<NotificationEventConfig[]>([]);
+  const [customerNotificationConfigs, setCustomerNotificationConfigs] = useState<CustomerNotificationConfig[]>([]);
+  const [customReminders, setCustomReminders] = useState<CustomReminder[]>([]);
+  const [whatsappMessageLog, setWhatsappMessageLog] = useState<WhatsAppMessageLogEntry[]>([]);
+  const [whatsappStatus, setWhatsappStatus] = useState<{ configured: boolean; groupRecipientCount: number }>({ configured: false, groupRecipientCount: 0 });
   const [tasks, setTasks] = useState<CRMTask[]>([]);
   const [communications, setCommunications] = useState<Communication[]>([]);
   const [documents, setDocuments] = useState<CRMDocument[]>([]);
@@ -231,7 +252,8 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resRes, conRes, chgRes, depRes, payRes,
         invRes, bBatchRes, bTxnRes, tskRes, commRes,
         docRes, auditRes, cfRes, numRes, notifRes,
-        tollRes, tollBatchRes, tollPricingRes
+        tollRes, tollBatchRes, tollPricingRes,
+        notifCfgRes, remindersRes, waLogRes, waStatusRes, custNotifCfgRes
       ] = await Promise.all([
         fetch('/api/customers').then(r => r.json()).catch(() => []),
         fetch('/api/leads').then(r => r.json()).catch(() => []),
@@ -255,37 +277,47 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/notifications').then(r => r.json()).catch(() => []),
         fetch('/api/tolls').then(r => r.json()).catch(() => []),
         fetch('/api/toll-batches').then(r => r.json()).catch(() => []),
-        fetch('/api/toll-pricing-config').then(r => r.json()).catch(() => null)
+        fetch('/api/toll-pricing-config').then(r => r.json()).catch(() => null),
+        fetch('/api/notification-configs').then(r => r.json()).catch(() => []),
+        fetch('/api/custom-reminders').then(r => r.json()).catch(() => []),
+        fetch('/api/whatsapp/message-log').then(r => r.json()).catch(() => []),
+        fetch('/api/whatsapp/status').then(r => r.json()).catch(() => ({ configured: false, groupRecipientCount: 0 })),
+        fetch('/api/customer-notification-configs').then(r => r.json()).catch(() => [])
       ]);
 
-      if (custRes && custRes.length > 0) setCustomers(custRes);
-      if (leadRes && leadRes.length > 0) setLeads(leadRes);
-      if (oppRes && oppRes.length > 0) setOpportunities(oppRes);
-      if (vehRes && vehRes.length > 0) setVehicles(vehRes);
-      if (quoteRes && quoteRes.length > 0) setQuotations(quoteRes);
-      if (resRes && resRes.length > 0) setReservations(resRes);
-      if (conRes && conRes.length > 0) setContracts(conRes);
-      if (chgRes && chgRes.length > 0) setCharges(chgRes);
-      if (depRes && depRes.length > 0) setDeposits(depRes);
-      if (payRes && payRes.length > 0) setPayments(payRes);
-      if (invRes && invRes.length > 0) setInvoices(invRes);
-      if (bBatchRes && bBatchRes.length > 0) setBankBatches(bBatchRes);
-      if (bTxnRes && bTxnRes.length > 0) setBankTransactions(bTxnRes);
-      if (tskRes && tskRes.length > 0) setTasks(tskRes);
-      if (commRes && commRes.length > 0) setCommunications(commRes);
-      if (docRes && docRes.length > 0) setDocuments(docRes);
-      if (auditRes && auditRes.length > 0) setAuditLogs(auditRes);
-      if (cfRes && cfRes.length > 0) setCustomFields(cfRes);
-      if (numRes && numRes.length > 0) setNumberingConfigs(numRes);
-      if (notifRes && notifRes.length > 0) setNotifications(notifRes);
-      if (tollRes && tollRes.length > 0) setTollTransactions(tollRes);
-      if (tollBatchRes && tollBatchRes.length > 0) setTollImportBatches(tollBatchRes);
+      setCustomers(Array.isArray(custRes) ? custRes : []);
+      setLeads(Array.isArray(leadRes) ? leadRes : []);
+      setOpportunities(Array.isArray(oppRes) ? oppRes : []);
+      setVehicles(Array.isArray(vehRes) ? vehRes : []);
+      setQuotations(Array.isArray(quoteRes) ? quoteRes : []);
+      setReservations(Array.isArray(resRes) ? resRes : []);
+      setContracts(Array.isArray(conRes) ? conRes : []);
+      setCharges(Array.isArray(chgRes) ? chgRes : []);
+      setDeposits(Array.isArray(depRes) ? depRes : []);
+      setPayments(Array.isArray(payRes) ? payRes : []);
+      setInvoices(Array.isArray(invRes) ? invRes : []);
+      setBankBatches(Array.isArray(bBatchRes) ? bBatchRes : []);
+      setBankTransactions(Array.isArray(bTxnRes) ? bTxnRes : []);
+      setTasks(Array.isArray(tskRes) ? tskRes : []);
+      setCommunications(Array.isArray(commRes) ? commRes : []);
+      setDocuments(Array.isArray(docRes) ? docRes : []);
+      setAuditLogs(Array.isArray(auditRes) ? auditRes : []);
+      setCustomFields(Array.isArray(cfRes) ? cfRes : []);
+      setNumberingConfigs(Array.isArray(numRes) ? numRes : []);
+      setNotifications(Array.isArray(notifRes) ? notifRes : []);
+      setTollTransactions(Array.isArray(tollRes) ? tollRes : []);
+      setTollImportBatches(Array.isArray(tollBatchRes) ? tollBatchRes : []);
       if (tollPricingRes) setTollPricingConfig(tollPricingRes);
+      if (notifCfgRes && notifCfgRes.length > 0) setNotificationEventConfigs(notifCfgRes);
+      if (remindersRes && remindersRes.length > 0) setCustomReminders(remindersRes);
+      if (waLogRes && waLogRes.length > 0) setWhatsappMessageLog(waLogRes);
+      if (waStatusRes) setWhatsappStatus(waStatusRes);
+      if (custNotifCfgRes && custNotifCfgRes.length > 0) setCustomerNotificationConfigs(custNotifCfgRes);
 
       await refreshFirebaseStats();
     } catch (error) {
       console.error('Failed to fetch CRM dataset:', error);
-      showToast('Sync Warning', 'Using cached state while connecting to Firebase', 'info');
+      showToast('Sync Warning', 'Using live Firestore connection directly', 'info');
     } finally {
       setLoading(false);
     }
@@ -315,111 +347,124 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isRealtime: true
         }));
 
-        // Subscribe to Vehicles
+        // Real-time Firestore subscriptions directly hydrating live state
         unsubs.push(
           FirestoreService.subscribe<Vehicle>(COLLECTIONS.VEHICLES, (items) => {
-            if (items && items.length > 0) {
-              setVehicles(items);
-            }
+            setVehicles(items || []);
           })
         );
 
-        // Subscribe to Customers
         unsubs.push(
           FirestoreService.subscribe<Customer>(COLLECTIONS.CUSTOMERS, (items) => {
-            if (items && items.length > 0) {
-              setCustomers(items);
-            }
+            setCustomers(items || []);
           })
         );
 
-        // Subscribe to Contracts
         unsubs.push(
           FirestoreService.subscribe<Contract>(COLLECTIONS.CONTRACTS, (items) => {
-            if (items && items.length > 0) {
-              setContracts(items);
-            }
+            setContracts(items || []);
           })
         );
 
-        // Subscribe to Leads
         unsubs.push(
           FirestoreService.subscribe<Lead>(COLLECTIONS.LEADS, (items) => {
-            if (items && items.length > 0) {
-              setLeads(items);
-            }
+            setLeads(items || []);
           })
         );
 
-        // Subscribe to Reservations
+        unsubs.push(
+          FirestoreService.subscribe<Opportunity>(COLLECTIONS.OPPORTUNITIES, (items) => {
+            setOpportunities(items || []);
+          })
+        );
+
         unsubs.push(
           FirestoreService.subscribe<Reservation>(COLLECTIONS.RESERVATIONS, (items) => {
-            if (items && items.length > 0) {
-              setReservations(items);
-            }
+            setReservations(items || []);
           })
         );
 
-        // Subscribe to Quotations
         unsubs.push(
           FirestoreService.subscribe<Quotation>(COLLECTIONS.QUOTATIONS, (items) => {
-            if (items && items.length > 0) {
-              setQuotations(items);
-            }
+            setQuotations(items || []);
           })
         );
 
-        // Subscribe to Invoices
         unsubs.push(
           FirestoreService.subscribe<Invoice>(COLLECTIONS.INVOICES, (items) => {
-            if (items && items.length > 0) {
-              setInvoices(items);
-            }
+            setInvoices(items || []);
           })
         );
 
-        // Subscribe to Payments
         unsubs.push(
           FirestoreService.subscribe<Payment>(COLLECTIONS.PAYMENTS, (items) => {
-            if (items && items.length > 0) {
-              setPayments(items);
-            }
+            setPayments(items || []);
           })
         );
 
-        // Subscribe to Deposits
         unsubs.push(
           FirestoreService.subscribe<Deposit>(COLLECTIONS.DEPOSITS, (items) => {
-            if (items && items.length > 0) {
-              setDeposits(items);
-            }
+            setDeposits(items || []);
           })
         );
 
-        // Subscribe to Bank Transactions
+        unsubs.push(
+          FirestoreService.subscribe<AdditionalCharge>(COLLECTIONS.CHARGES, (items) => {
+            setCharges(items || []);
+          })
+        );
+
         unsubs.push(
           FirestoreService.subscribe<BankTransaction>(COLLECTIONS.BANK_TRANSACTIONS, (items) => {
-            if (items && items.length > 0) {
-              setBankTransactions(items);
-            }
+            setBankTransactions(items || []);
           })
         );
 
-        // Subscribe to Tasks
+        unsubs.push(
+          FirestoreService.subscribe<BankImportBatch>(COLLECTIONS.BANK_BATCHES, (items) => {
+            setBankBatches(items || []);
+          })
+        );
+
         unsubs.push(
           FirestoreService.subscribe<CRMTask>(COLLECTIONS.TASKS, (items) => {
-            if (items && items.length > 0) {
-              setTasks(items);
-            }
+            setTasks(items || []);
           })
         );
 
-        // Subscribe to Toll Transactions (Salik/Darb/Parking)
+        unsubs.push(
+          FirestoreService.subscribe<Communication>(COLLECTIONS.COMMUNICATIONS, (items) => {
+            setCommunications(items || []);
+          })
+        );
+
+        unsubs.push(
+          FirestoreService.subscribe<CRMDocument>(COLLECTIONS.DOCUMENTS, (items) => {
+            setDocuments(items || []);
+          })
+        );
+
+        unsubs.push(
+          FirestoreService.subscribe<AuditLog>(COLLECTIONS.AUDIT_LOGS, (items) => {
+            setAuditLogs(items || []);
+          })
+        );
+
+        unsubs.push(
+          FirestoreService.subscribe<NotificationItem>(COLLECTIONS.NOTIFICATIONS, (items) => {
+            setNotifications(items || []);
+          })
+        );
+
         unsubs.push(
           FirestoreService.subscribe<TollTransaction>(COLLECTIONS.TOLL_TRANSACTIONS, (items) => {
-            if (items && items.length > 0) {
-              setTollTransactions(items);
-            }
+            setTollTransactions(items || []);
+          })
+        );
+
+        unsubs.push(
+          FirestoreService.subscribe<TollImportBatch>(COLLECTIONS.TOLL_IMPORT_BATCHES, (items) => {
+            setTollImportBatches(items || []);
           })
         );
       } catch (err) {
@@ -1161,6 +1206,98 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /**
+   * Notification & WhatsApp Control Center: per-event staff/group toggles,
+   * per-event customer-facing toggles, the custom-reminder composer, the
+   * message activity log, WhatsApp connection status, and the manual
+   * "Run Checks Now" trigger for the automated monitoring sweep.
+   */
+  const updateNotificationConfig = async (eventKey: string, data: Partial<NotificationEventConfig>) => {
+    const res = await fetch(`/api/notification-configs/${eventKey}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const updated = await res.json();
+    if (!res.ok) throw new Error(updated.error);
+    setNotificationEventConfigs(prev => prev.map(c => c.eventKey === eventKey ? updated : c));
+    return updated;
+  };
+
+  const updateCustomerNotificationConfig = async (eventKey: string, enabled: boolean) => {
+    const res = await fetch(`/api/customer-notification-configs/${eventKey}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    const updated = await res.json();
+    if (!res.ok) throw new Error(updated.error);
+    setCustomerNotificationConfigs(prev => prev.map(c => c.eventKey === eventKey ? updated : c));
+    return updated;
+  };
+
+  const sendCustomReminder = async (data: { title: string; message: string; broadcastToGroup: boolean; staffRecipientIds: string[] }) => {
+    const res = await fetch('/api/custom-reminders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const reminder = await res.json();
+    if (!res.ok) throw new Error(reminder.error);
+    setCustomReminders(prev => [reminder, ...prev]);
+    showToast(
+      reminder.status === 'not_configured' ? 'Reminder Saved (Not Sent)' : 'Reminder Sent',
+      reminder.status === 'not_configured' ? 'WhatsApp isn\'t connected yet -- the reminder was saved but not dispatched.' : `Sent to ${data.broadcastToGroup ? 'the group and ' : ''}${data.staffRecipientIds.length} staff member(s).`
+    );
+    return reminder;
+  };
+
+  const runNotificationChecksNow = async () => {
+    const res = await fetch('/api/notifications/run-checks', { method: 'POST' });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error);
+    showToast('Checks Complete', `${result.alertsFired} alert(s) fired.`);
+    return result;
+  };
+
+  const refreshWhatsappStatus = async () => {
+    const res = await fetch('/api/whatsapp/status').then(r => r.json()).catch(() => null);
+    if (res) setWhatsappStatus(res);
+  };
+
+  const extendContract = async (contractId: string, newEndDateTime: string) => {
+    const res = await fetch(`/api/contracts/${contractId}/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newEndDateTime })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    setContracts(prev => prev.map(c => c.id === contractId ? data.contract : c));
+    showToast('Contract Extended', `+${data.extraDays} day(s), +${data.extraAmount.toLocaleString()} AED.`);
+    return data;
+  };
+
+  const resetTransactionalData = async (confirmText: string) => {
+    const res = await fetch('/api/admin/reset-transactional-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmText })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    // Every list this app renders should read empty immediately rather than
+    // waiting on the next full fetchData() poll.
+    setCustomers([]); setLeads([]); setOpportunities([]); setVehicles([]);
+    setQuotations([]); setReservations([]); setContracts([]); setCharges([]);
+    setDeposits([]); setPayments([]); setInvoices([]); setBankBatches([]);
+    setBankTransactions([]); setTollTransactions([]); setTollImportBatches([]);
+    setTasks([]); setCommunications([]); setDocuments([]); setAuditLogs([]);
+    setNotifications([]); setCustomReminders([]); setWhatsappMessageLog([]);
+    showToast('System Reset', `Cleared ${data.deletedDocs} record(s). The system is ready for real data.`);
+    return data;
+  };
+
+  /**
    * Client-side wrappers for the AI endpoints server.ts already exposes
    * (/api/ai/query, /api/ai/customer-summary). AIStudioView has called
    * queryAI()/generateCustomerAISummary() since it was built, but neither
@@ -1272,7 +1409,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customers, leads, opportunities, vehicles, quotations,
       reservations, contracts, charges, deposits, payments,
       invoices, bankBatches, bankTransactions, tollTransactions,
-      tollImportBatches, tollPricingConfig, tasks, communications,
+      tollImportBatches, tollPricingConfig,
+      notificationEventConfigs, customerNotificationConfigs, customReminders,
+      whatsappMessageLog, whatsappStatus, tasks, communications,
       documents, auditLogs, customFields, numberingConfigs, notifications,
       loading, activeView, setActiveView,
       firebaseSyncState, syncAllToFirestore,
@@ -1292,6 +1431,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       uploadBankBatch, reconcileBankTransaction, runAutoReconciliation,
       addManualToll, updateTollTransaction, deleteTollTransaction,
       previewTollImport, confirmTollImport, updateTollPricingConfig,
+      updateNotificationConfig, updateCustomerNotificationConfig,
+      sendCustomReminder, runNotificationChecksNow, refreshWhatsappStatus,
+      extendContract, resetTransactionalData,
       queryAI, generateCustomerAISummary,
       createTask, updateTask, addCommunication, addDocument
     }}>

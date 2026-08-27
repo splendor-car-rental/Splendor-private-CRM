@@ -50,6 +50,7 @@ export type ViewKey =
   | 'finance'
   | 'reconciliation'
   | 'tolls'
+  | 'notification-center'
   | 'tasks'
   | 'ai-studio'
   | 'test-suite'
@@ -57,7 +58,7 @@ export type ViewKey =
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
-  'contracts', 'finance', 'reconciliation', 'tolls', 'tasks', 'ai-studio', 'test-suite', 'settings'
+  'contracts', 'finance', 'reconciliation', 'tolls', 'notification-center', 'tasks', 'ai-studio', 'test-suite', 'settings'
 ];
 
 /**

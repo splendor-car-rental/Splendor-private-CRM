@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck
+  TicketCheck, BellRing
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -153,6 +153,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
       title: language === 'ar' ? 'الذكاء والتحكم' : 'INTELLIGENCE & SYSTEM',
       items: [
         {
+          id: 'notification-center',
+          label: language === 'ar' ? 'مركز الإشعارات وواتساب' : 'Notification & WhatsApp Center',
+          icon: <BellRing className="w-4 h-4 text-[#D4AF37]" />
+        },
+        {
           id: 'ai-studio',
           label: language === 'ar' ? 'استوديو الذكاء الاصطناعي' : 'AI Intelligence',
           icon: <Sparkles className="w-4 h-4 text-[#D4AF37]" />,
@@ -188,8 +193,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
       <aside
         className={`fixed inset-y-0 start-0 z-50 w-72 bg-zinc-950 border-e border-zinc-800/80 flex flex-col h-screen shrink-0 select-none
           transition-transform duration-200 ease-out
-          ${isMobileOpen ? 'translate-x-0' : 'ltr:-translate-x-full rtl:translate-x-full'}
-          md:static md:z-30 md:translate-x-0 md:w-64 lg:w-72`}
+          ${isMobileOpen ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full'}
+          md:sticky md:top-0 md:h-screen md:translate-x-0 md:rtl:translate-x-0 md:transform-none md:z-30 md:w-64 lg:w-72`}
       >
         {/* Brand Header */}
         <div className="p-4 sm:p-5 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-950">
