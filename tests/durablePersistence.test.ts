@@ -184,6 +184,39 @@ describe('reserveVehicleSlot — transactional double-booking prevention (Phase 
       )
     ).rejects.toBeInstanceOf(AvailabilityConflictError);
   });
+
+  it('replays the original reservation instead of re-running the conflict check when retried with the same Idempotency-Key (Phase 7)', async () => {
+    await seedVehicle('VEH-IDEMPOTENT-1');
+    const idempotencyKey = 'client-retry-key-abc123';
+    const buildDoc = () => ({
+      id: 'RES-IDEMPOTENT-1', vehicleId: 'VEH-IDEMPOTENT-1',
+      pickupDateTime: '2026-12-01T10:00:00.000Z', returnDateTime: '2026-12-03T10:00:00.000Z',
+      status: 'confirmed'
+    });
+
+    const first = await reserveVehicleSlot(
+      { vehicleId: 'VEH-IDEMPOTENT-1', startIso: '2026-12-01T10:00:00.000Z', endIso: '2026-12-03T10:00:00.000Z', idempotencyKey },
+      'reservations',
+      buildDoc
+    );
+    expect(first.replayed).toBe(false);
+    expect(first.doc.id).toBe('RES-IDEMPOTENT-1');
+
+    // Simulates a network-retry of the SAME request: without idempotency-key
+    // replay, this would see its own just-created reservation as a
+    // date-overlap conflict (a false 409) instead of returning the original
+    // success.
+    const second = await reserveVehicleSlot(
+      { vehicleId: 'VEH-IDEMPOTENT-1', startIso: '2026-12-01T10:00:00.000Z', endIso: '2026-12-03T10:00:00.000Z', idempotencyKey },
+      'reservations',
+      buildDoc
+    );
+    expect(second.replayed).toBe(true);
+    expect(second.doc.id).toBe('RES-IDEMPOTENT-1');
+
+    const snap = await db.collection('reservations').where('vehicleId', '==', 'VEH-IDEMPOTENT-1').get();
+    expect(snap.size).toBe(1); // the retry never created a second document
+  });
 });
 
 describe('createContractDurable — server-authoritative pricing + idempotency (Phases 5 & 7)', () => {

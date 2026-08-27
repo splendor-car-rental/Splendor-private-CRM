@@ -1429,7 +1429,7 @@ app.post('/api/quotations/:id/convert-reservation', asyncHandler(async (req, res
   let reservation: any;
   if (quote.vehicleId) {
     try {
-      reservation = await reserveVehicleSlot(
+      ({ doc: reservation } = await reserveVehicleSlot(
         { vehicleId: quote.vehicleId, startIso: quote.startDate, endIso: quote.endDate },
         'reservations',
         () => ({
@@ -1457,7 +1457,7 @@ app.post('/api/quotations/:id/convert-reservation', asyncHandler(async (req, res
           createdAt: now,
           updatedAt: now
         })
-      );
+      ));
     } catch (err) {
       if (err instanceof AvailabilityConflictError) {
         return res.status(400).json({ error: 'Vehicle is not available for requested dates', conflicts: err.conflicts });
@@ -1524,14 +1524,16 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
   if (!data.vehicleId || !data.pickupDateTime || !data.returnDateTime) {
     return res.status(400).json({ error: 'vehicleId, pickupDateTime, and returnDateTime are required.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || data.idempotencyKey || null) as string | null;
 
   const newId = await issueNextNumber('Reservation');
   const now = new Date().toISOString();
 
   let resObj: any;
+  let replayed = false;
   try {
-    resObj = await reserveVehicleSlot(
-      { vehicleId: data.vehicleId, startIso: data.pickupDateTime, endIso: data.returnDateTime },
+    ({ doc: resObj, replayed } = await reserveVehicleSlot(
+      { vehicleId: data.vehicleId, startIso: data.pickupDateTime, endIso: data.returnDateTime, idempotencyKey },
       'reservations',
       () => ({
         ...data,
@@ -1541,7 +1543,7 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
         createdAt: now,
         updatedAt: now
       })
-    );
+    ));
   } catch (err) {
     if (err instanceof AvailabilityConflictError) {
       return res.status(400).json({ error: 'Vehicle has a scheduling conflict and cannot be reserved for these dates.', conflicts: err.conflicts });
@@ -1549,12 +1551,14 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
     throw err;
   }
 
-  globalStore.reservations.unshift(resObj);
+  if (!replayed) {
+    globalStore.reservations.unshift(resObj);
 
-  const vehicle = globalStore.vehicles.find(v => v.id === data.vehicleId);
-  if (vehicle) {
-    vehicle.status = 'reserved';
-    await updateDurable('vehicles', vehicle.id, { status: 'reserved' });
+    const vehicle = globalStore.vehicles.find(v => v.id === data.vehicleId);
+    if (vehicle) {
+      vehicle.status = 'reserved';
+      await updateDurable('vehicles', vehicle.id, { status: 'reserved' });
+    }
   }
 
   res.status(201).json(resObj);

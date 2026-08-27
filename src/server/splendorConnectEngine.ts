@@ -647,12 +647,13 @@ Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.ret
 
     const resId = await issueNextNumber('Reservation');
     let newReservation: Reservation;
+    let replayed = false;
     try {
-      newReservation = await reserveVehicleSlot(
-        { vehicleId: targetVehicle.id, startIso: data.pickupDateTime, endIso: data.returnDateTime },
+      ({ doc: newReservation, replayed } = await reserveVehicleSlot(
+        { vehicleId: targetVehicle.id, startIso: data.pickupDateTime, endIso: data.returnDateTime, idempotencyKey },
         'reservations',
         () => SplendorConnectEngine.buildReservationRecord(data, resId, customer!, targetVehicle, days, dailyRate, totalAmount, depositAmount)
-      );
+      ));
     } catch (err) {
       if (err instanceof AvailabilityConflictError) {
         return {
@@ -661,6 +662,11 @@ Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.ret
         };
       }
       throw err;
+    }
+    if (replayed) {
+      const response = { success: true, reservationId: newReservation.id };
+      storeIdempotency(idempotencyKey, response);
+      return response;
     }
     globalStore.reservations.unshift(newReservation);
 

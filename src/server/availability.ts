@@ -1,4 +1,5 @@
-import { runDurableTransaction, PersistenceError } from './persistence';
+import { PersistenceError } from './persistence';
+import { runIdempotent } from './idempotency';
 
 // Replaces relying on globalStore.checkVehicleAvailability() as the GATE
 // for actually creating a reservation/contract. That function is still
@@ -32,6 +33,15 @@ export interface SlotCheckInput {
    * that same reservation into a contract). */
   excludeReservationId?: string;
   excludeContractId?: string;
+  /**
+   * Optional durable idempotency key (e.g. from an Idempotency-Key header).
+   * When supplied, a retried/double-submitted request with the SAME key
+   * replays the original result instead of re-running the conflict check
+   * against the reservation it itself already created -- without this, a
+   * network-retry of a successful booking would see its own just-created
+   * reservation as a date-overlap conflict and fail with a false 409.
+   */
+  idempotencyKey?: string | null;
 }
 
 /**
@@ -40,16 +50,21 @@ export interface SlotCheckInput {
  * [startIso, endIso], then creates `buildDoc()`'s document in
  * `newCollection` -- all inside one Firestore transaction. Throws
  * AvailabilityConflictError (never writes) if a conflict exists.
+ *
+ * Returns `replayed: true` when `input.idempotencyKey` matches a previous
+ * successful call -- callers MUST skip re-applying their own in-memory
+ * cache mutations (globalStore.*.unshift, vehicle status flips, etc.) in
+ * that case, the same way POST /api/contracts does for createContractDurable().
  */
 export async function reserveVehicleSlot<T extends { id: string }>(
   input: SlotCheckInput,
   newCollection: string,
   buildDoc: () => T
-): Promise<T> {
+): Promise<{ doc: T; replayed: boolean }> {
   const targetStart = new Date(input.startIso).getTime();
   const targetEnd = new Date(input.endIso).getTime();
 
-  return runDurableTransaction(async (tx, db) => {
+  const { result, replayed } = await runIdempotent(`reserve-slot:${newCollection}`, input.idempotencyKey, async (tx, db) => {
     const vehicleRef = db.collection('vehicles').doc(input.vehicleId);
     const vehicleSnap = await tx.get(vehicleRef);
     if (!vehicleSnap.exists) {
@@ -94,4 +109,6 @@ export async function reserveVehicleSlot<T extends { id: string }>(
     tx.create(db.collection(newCollection).doc(doc.id), doc as unknown as Record<string, unknown>);
     return doc;
   });
+
+  return { doc: result, replayed };
 }
