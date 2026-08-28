@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck, Calculator, HandCoins } from 'lucide-react';
+import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck, Calculator, HandCoins, Wallet, Undo2 } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
-import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver } from '../../types';
+import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver, Debt, DebtSettlementMovement } from '../../types';
 
 /**
  * Splendor Procurement, Phase 1 -- operator-facing surface.
@@ -25,9 +25,14 @@ import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAm
  * TARS (vehicle-transfer deadline tracking -- see the TARS tab below and
  * src/server/tars.ts; deadlines and delays are always computed from real
  * timestamps, never a value a user can type in).
- * Quotes/payments/balances/refunds/debts/custody/invoices/receiving/
- * late-fee screens are intentionally not built in this checkpoint -- see
- * the closure report's UI-coverage section.
+ * Debts (customer/supplier charges -- late fees, traffic fines, damage,
+ * etc.) get a full tab too: create a charge, record settlement movements
+ * against it, and request (approval-gated) settlement reversal, amount
+ * correction, or cancellation -- see the Debts tab below and
+ * src/server/debts.ts.
+ * Quotes/payments/balances/refunds/custody/invoices/receiving screens are
+ * intentionally not built in this checkpoint -- see the closure report's
+ * UI-coverage section.
  */
 
 interface ProcurementApproval {
@@ -65,6 +70,9 @@ const STATUS_BADGE: Record<string, { variant: any; label: string; labelAr: strin
   fulfilled: { variant: 'emerald', label: 'Fulfilled', labelAr: 'منفّذ بالكامل' },
   partially_cancelled: { variant: 'rose', label: 'Partially cancelled', labelAr: 'ملغى جزئياً' },
   cancelled: { variant: 'rose', label: 'Cancelled', labelAr: 'ملغى' },
+  open: { variant: 'amber', label: 'Open', labelAr: 'مفتوح' },
+  partially_paid: { variant: 'sky', label: 'Partially paid', labelAr: 'مدفوع جزئياً' },
+  paid: { variant: 'emerald', label: 'Paid', labelAr: 'مدفوع بالكامل' },
   active: { variant: 'emerald', label: 'Active', labelAr: 'نشط' },
   pending_completion: { variant: 'amber', label: 'Pending completion', labelAr: 'بانتظار الاستكمال' },
   inactive: { variant: 'zinc', label: 'Inactive', labelAr: 'غير نشط' }
@@ -79,10 +87,10 @@ function StatusBadge({ status }: { status: string }) {
 export const ProcurementView: React.FC = () => {
   const { language } = useLanguage();
   const { currentUser } = useAuth();
-  const { showToast } = useCRM();
+  const { showToast, customers } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
-  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees'>('purchase-orders');
+  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts'>('purchase-orders');
   const [loading, setLoading] = useState(true);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
@@ -91,6 +99,9 @@ export const ProcurementView: React.FC = () => {
   const [tarsRecords, setTarsRecords] = useState<TarsRecord[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [lateFeeWaivers, setLateFeeWaivers] = useState<LateFeeWaiver[]>([]);
+  const [debts, setDebts] = useState<Debt[]>([]);
+  const [debtTypeDefs, setDebtTypeDefs] = useState<Array<{ key: string; labelEn: string; labelAr: string }>>([]);
+  const [paymentMethodDefs, setPaymentMethodDefs] = useState<Array<{ key: string; labelEn: string; labelAr: string }>>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
@@ -98,6 +109,9 @@ export const ProcurementView: React.FC = () => {
   const [amendmentModalPo, setAmendmentModalPo] = useState<PurchaseOrder | null>(null);
   const [amendmentsByPo, setAmendmentsByPo] = useState<Record<string, PurchaseOrderAmendmentRequest[]>>({});
   const [tarsModalOpen, setTarsModalOpen] = useState(false);
+  const [newDebtModalOpen, setNewDebtModalOpen] = useState(false);
+  const [settlementModalDebt, setSettlementModalDebt] = useState<Debt | null>(null);
+  const [correctionModalDebt, setCorrectionModalDebt] = useState<Debt | null>(null);
 
   // Late-fee calculator state -- purely a display tool until "Request
   // Waiver" is pressed; nothing here is persisted by typing into it.
@@ -119,7 +133,7 @@ export const ProcurementView: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes, lateFeeWaiversRes] = await Promise.all([
+      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes, lateFeeWaiversRes, debtsRes, debtTypesRes, paymentMethodsRes] = await Promise.all([
         apiFetch('/api/suppliers'),
         apiFetch('/api/purchase-orders'),
         apiFetch('/api/procurement/approvals'),
@@ -127,7 +141,10 @@ export const ProcurementView: React.FC = () => {
         apiFetch('/api/tars-records'),
         apiFetch('/api/tars-records/escalations'),
         apiFetch('/api/contracts'),
-        apiFetch('/api/late-fee-waivers')
+        apiFetch('/api/late-fee-waivers'),
+        apiFetch('/api/debts'),
+        apiFetch('/api/procurement/debt-types'),
+        apiFetch('/api/procurement/payment-methods')
       ]);
       if (suppliersRes.ok) setSuppliers(await suppliersRes.json());
       let pos: PurchaseOrder[] = [];
@@ -147,6 +164,9 @@ export const ProcurementView: React.FC = () => {
       }
       if (contractsRes.ok) setContracts(await contractsRes.json());
       if (lateFeeWaiversRes.ok) setLateFeeWaivers(await lateFeeWaiversRes.json());
+      if (debtsRes.ok) setDebts(await debtsRes.json());
+      if (debtTypesRes.ok) setDebtTypeDefs(await debtTypesRes.json());
+      if (paymentMethodsRes.ok) setPaymentMethodDefs(await paymentMethodsRes.json());
 
       // Only fetch amendment history for POs that actually have any --
       // most never do, so this stays cheap rather than N fetches per load.
@@ -330,6 +350,74 @@ export const ProcurementView: React.FC = () => {
     }
   };
 
+  const requestDebtReversal = async (debt: Debt, movement: DebtSettlementMovement) => {
+    const reason = window.prompt(language === 'ar' ? 'سبب طلب عكس هذه الحركة:' : 'Reason for requesting this settlement to be reversed:');
+    if (!reason || !reason.trim()) return;
+    setBusyKey(movement.id);
+    try {
+      const res = await apiFetch(`/api/debts/${encodeURIComponent(debt.id)}/settlements/${encodeURIComponent(movement.id)}/reverse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to request the reversal.');
+      showToast(language === 'ar' ? 'تم إرسال طلب العكس' : 'Reversal requested', movement.id);
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const requestDebtCancellation = async (debt: Debt) => {
+    const reason = window.prompt(language === 'ar' ? 'سبب طلب إلغاء هذا الدين:' : 'Reason for requesting this debt to be cancelled:');
+    if (!reason || !reason.trim()) return;
+    setBusyKey(debt.id);
+    try {
+      const res = await apiFetch(`/api/debts/${encodeURIComponent(debt.id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to request cancellation.');
+      showToast(language === 'ar' ? 'تم إرسال طلب الإلغاء' : 'Cancellation requested', debt.id);
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  // Approval payloads for Debt actions only carry ids (debtId + movementId,
+  // or debtId + correctionIndex) -- resolve the real amounts/methods from
+  // the already-loaded debts list so an approver never has to decide blind.
+  const findDebtApprovalContext = (a: ProcurementApproval): { kind: 'reversal' | 'correction' | 'cancellation'; debt: Debt; text: string } | null => {
+    if (a.entityType !== 'Debt') return null;
+    const debtId = a.payload?.debtId as string | undefined;
+    const debt = debts.find(d => d.id === debtId);
+    if (!debt) return null;
+    if (a.action === 'approve_settlement_reversal') {
+      const movementId = a.payload?.movementId as string | undefined;
+      const movement = debt.settlements.find(m => m.id === movementId);
+      if (!movement) return null;
+      return { kind: 'reversal', debt, text: `${movement.amount.toLocaleString()} AED via ${movement.method}${movement.methodOther ? ` (${movement.methodOther})` : ''}` };
+    }
+    if (a.action === 'approve_correction') {
+      const correctionIndex = a.payload?.correctionIndex as number | undefined;
+      const correction = typeof correctionIndex === 'number' ? (debt.corrections || [])[correctionIndex] : undefined;
+      if (!correction) return null;
+      return { kind: 'correction', debt, text: `${correction.amountBefore.toLocaleString()} AED → ${correction.amountAfter.toLocaleString()} AED` };
+    }
+    if (a.action === 'approve_cancellation') {
+      return { kind: 'cancellation', debt, text: `${language === 'ar' ? 'المتبقي:' : 'Remaining:'} ${debt.remainingAmount.toLocaleString()} AED` };
+    }
+    return null;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-zinc-500 text-sm gap-2">
@@ -391,6 +479,7 @@ export const ProcurementView: React.FC = () => {
           { id: 'suppliers', label: language === 'ar' ? 'الموردون' : 'Suppliers', icon: <Truck className="w-3.5 h-3.5" /> },
           { id: 'tars', label: 'TARS', icon: <Timer className="w-3.5 h-3.5" /> },
           { id: 'late-fees', label: language === 'ar' ? 'رسوم التأخير' : 'Late Fees', icon: <HandCoins className="w-3.5 h-3.5" /> },
+          { id: 'debts', label: language === 'ar' ? 'الديون' : 'Debts', icon: <Wallet className="w-3.5 h-3.5" /> },
           { id: 'approvals', label: `${language === 'ar' ? 'الموافقات' : 'Approvals'} (${pendingApprovals.length})`, icon: <ShieldCheck className="w-3.5 h-3.5" /> }
         ].map(item => (
           <button
@@ -737,6 +826,103 @@ export const ProcurementView: React.FC = () => {
         </div>
       )}
 
+      {tab === 'debts' && (
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <button
+              onClick={() => setNewDebtModalOpen(true)}
+              disabled={customers.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {language === 'ar' ? 'دين/رسم جديد' : 'New Debt/Charge'}
+            </button>
+          </div>
+          <div className="space-y-2.5">
+            {debts.map(debt => {
+              const typeDef = debtTypeDefs.find(t => t.key === debt.type);
+              const canAct = ['ceo', 'admin', 'finance'].includes(currentUser.role);
+              const hasPendingCorrection = (debt.corrections || []).some(c => c.status === 'pending_approval');
+              const hasPendingCancellation = debt.cancellation?.status === 'pending_approval';
+              return (
+                <div key={debt.id} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-zinc-100 font-mono">{debt.id}</p>
+                      <StatusBadge status={debt.status} />
+                      <Badge variant="zinc" size="sm">{language === 'ar' ? typeDef?.labelAr : typeDef?.labelEn || debt.type}</Badge>
+                    </div>
+                    <p className="text-zinc-400">{debt.customerName}</p>
+                  </div>
+                  <p className="text-zinc-500 mt-1">{debt.description}</p>
+                  <div className="mt-2 flex items-center gap-4">
+                    <p className="text-zinc-400">{language === 'ar' ? 'الأصل:' : 'Original:'} <span className="font-mono text-zinc-200">{debt.originalAmount.toLocaleString()} AED</span></p>
+                    <p className="text-zinc-400">{language === 'ar' ? 'مدفوع:' : 'Paid:'} <span className="font-mono text-emerald-400">{debt.paidAmount.toLocaleString()} AED</span></p>
+                    <p className="text-zinc-400">{language === 'ar' ? 'متبقٍ:' : 'Remaining:'} <span className="font-mono text-[#f5d97f]">{debt.remainingAmount.toLocaleString()} AED</span></p>
+                  </div>
+
+                  {debt.settlements.length > 0 && (
+                    <div className="mt-2.5 space-y-1.5">
+                      {debt.settlements.map(m => (
+                        <div key={m.id} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-950/60 border border-zinc-800/60">
+                          <div className="min-w-0">
+                            <p className={`truncate ${m.isReversal ? 'text-rose-400' : 'text-zinc-300'}`}>
+                              {m.isReversal ? (language === 'ar' ? 'عكس:' : 'Reversal:') : ''} {m.amount.toLocaleString()} AED via {m.method}{m.methodOther ? ` (${m.methodOther})` : ''}
+                            </p>
+                            <p className="text-zinc-600 font-mono text-[10px]">{m.id} · {m.recordedByName} · {new Date(m.recordedAt).toLocaleString()}</p>
+                          </div>
+                          {canAct && !m.isReversal && !debt.settlements.some(other => other.reversedMovementId === m.id) && (
+                            <button
+                              disabled={busyKey === m.id}
+                              onClick={() => requestDebtReversal(debt, m)}
+                              title={language === 'ar' ? 'طلب عكس هذه الحركة' : 'Request reversal of this movement'}
+                              className="p-1 rounded-md bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 disabled:opacity-50 shrink-0"
+                            >
+                              <Undo2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {canAct && (
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      {(debt.status === 'open' || debt.status === 'partially_paid') && (
+                        <button onClick={() => setSettlementModalDebt(debt)} className="px-3 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 font-medium">
+                          {language === 'ar' ? 'تسجيل تسوية' : 'Record settlement'}
+                        </button>
+                      )}
+                      {debt.status !== 'cancelled' && !hasPendingCorrection && (
+                        <button onClick={() => setCorrectionModalDebt(debt)} className="px-3 py-1.5 rounded-lg bg-sky-500/15 text-sky-400 hover:bg-sky-500/25 font-medium">
+                          {language === 'ar' ? 'طلب تصحيح المبلغ' : 'Request amount correction'}
+                        </button>
+                      )}
+                      {hasPendingCorrection && (
+                        <span className="text-[11px] text-amber-400">{language === 'ar' ? 'يوجد طلب تصحيح معلّق' : 'A correction request is pending'}</span>
+                      )}
+                      {debt.status !== 'cancelled' && debt.status !== 'paid' && !hasPendingCancellation && (
+                        <button
+                          disabled={busyKey === debt.id}
+                          onClick={() => requestDebtCancellation(debt)}
+                          className="px-3 py-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 font-medium disabled:opacity-50"
+                        >
+                          {language === 'ar' ? 'طلب إلغاء' : 'Request cancellation'}
+                        </button>
+                      )}
+                      {hasPendingCancellation && (
+                        <span className="text-[11px] text-amber-400">{language === 'ar' ? 'يوجد طلب إلغاء معلّق' : 'A cancellation request is pending'}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {debts.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد ديون/رسوم بعد.' : 'No debts/charges yet.'}</p>}
+          </div>
+        </div>
+      )}
+
       {tab === 'approvals' && (
         <div className="space-y-6">
           <div>
@@ -749,6 +935,7 @@ export const ProcurementView: React.FC = () => {
               <div className="space-y-2">
                 {pendingApprovals.map(a => {
                   const amendment = findAmendment(a);
+                  const debtContext = findDebtApprovalContext(a);
                   return (
                   <div key={a.id} className="p-3 rounded-xl bg-zinc-900/60 border border-amber-500/30 flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -765,6 +952,11 @@ export const ProcurementView: React.FC = () => {
                           <p className="text-zinc-500 text-[10px] mt-0.5">
                             {amendment.proposedLineItems.length} {language === 'ar' ? 'عنصر بعد التعديل — راجع أمر التوريد لرؤية كل سطر.' : 'line item(s) after this amendment — see the purchase order card for the full line-level detail.'}
                           </p>
+                        </div>
+                      )}
+                      {debtContext && (
+                        <div className="mt-1.5 p-2 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
+                          <p className="text-zinc-300">{debtContext.debt.customerName} — <span className="font-mono text-[#f5d97f]">{debtContext.text}</span></p>
                         </div>
                       )}
                     </div>
@@ -844,6 +1036,24 @@ export const ProcurementView: React.FC = () => {
         context={waiverModalContext}
         onClose={() => setWaiverModalContext(null)}
         onCreated={async () => { setWaiverModalContext(null); setLateFeeComputation(null); await load(); }}
+      />
+      <NewDebtModal
+        isOpen={newDebtModalOpen}
+        onClose={() => setNewDebtModalOpen(false)}
+        customers={customers}
+        debtTypeDefs={debtTypeDefs}
+        onCreated={async () => { setNewDebtModalOpen(false); await load(); }}
+      />
+      <DebtSettlementModal
+        debt={settlementModalDebt}
+        paymentMethodDefs={paymentMethodDefs}
+        onClose={() => setSettlementModalDebt(null)}
+        onCreated={async () => { setSettlementModalDebt(null); await load(); }}
+      />
+      <DebtCorrectionModal
+        debt={correctionModalDebt}
+        onClose={() => setCorrectionModalDebt(null)}
+        onCreated={async () => { setCorrectionModalDebt(null); await load(); }}
       />
     </div>
   );
@@ -1434,6 +1644,261 @@ const LateFeeWaiverModal: React.FC<{
           </button>
           <button type="submit" disabled={submitting || !reason.trim() || waivedAmount <= 0} className="px-5 py-2 rounded-xl bg-sky-500 text-zinc-950 font-semibold disabled:opacity-50">
             {language === 'ar' ? 'إرسال طلب الإعفاء' : 'Submit waiver request'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const NewDebtModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  customers: Array<{ id: string; fullName: string }>;
+  debtTypeDefs: Array<{ key: string; labelEn: string; labelAr: string }>;
+  onCreated: () => void;
+}> = ({ isOpen, onClose, customers, debtTypeDefs, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [customerId, setCustomerId] = useState('');
+  const [type, setType] = useState('');
+  const [typeOther, setTypeOther] = useState('');
+  const [description, setDescription] = useState('');
+  const [originalAmount, setOriginalAmount] = useState<number>(0);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) { setCustomerId(''); setType(''); setTypeOther(''); setDescription(''); setOriginalAmount(0); }
+  }, [isOpen]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const customer = customers.find(c => c.id === customerId);
+    if (!customer || !type || !description.trim() || originalAmount <= 0) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch('/api/debts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: customer.id,
+          customerName: customer.fullName,
+          type,
+          typeOther: type === 'other' ? typeOther.trim() : undefined,
+          description: description.trim(),
+          originalAmount
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to create this debt/charge.');
+      showToast(language === 'ar' ? 'تم إنشاء الدين/الرسم' : 'Debt/charge created', `${data.id} — ${originalAmount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل الإنشاء' : 'Creation failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={language === 'ar' ? 'دين/رسم جديد' : 'New Debt/Charge'}
+      subtitle={language === 'ar'
+        ? 'سجل حقيقة مالية على عميل -- سالك، مخالفة، ضرر، إلخ. لا يُسدَّد شيء تلقائياً؛ التسوية خطوة لاحقة منفصلة.'
+        : 'Records a financial fact against a customer -- a toll, fine, damage, etc. Nothing is settled automatically; settlement is a separate later step.'}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'العميل *' : 'Customer *'}</label>
+          <select required value={customerId} onChange={e => setCustomerId(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر عميلاً --' : '-- Select a customer --'}</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.fullName} — {c.id}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'النوع *' : 'Type *'}</label>
+          <select required value={type} onChange={e => setType(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر نوعاً --' : '-- Select a type --'}</option>
+            {debtTypeDefs.map(t => <option key={t.key} value={t.key}>{language === 'ar' ? t.labelAr : t.labelEn}</option>)}
+          </select>
+        </div>
+        {type === 'other' && (
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'وصف النوع الآخر *' : 'Describe the other type *'}</label>
+            <input required value={typeOther} onChange={e => setTypeOther(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          </div>
+        )}
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الوصف *' : 'Description *'}</label>
+          <textarea required rows={2} value={description} onChange={e => setDescription(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ الأصلي *' : 'Original amount *'}</label>
+          <input type="number" min={0.01} step="0.01" required value={originalAmount} onChange={e => setOriginalAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !customerId || !type || !description.trim() || originalAmount <= 0} className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'إنشاء' : 'Create'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const DebtSettlementModal: React.FC<{
+  debt: Debt | null;
+  paymentMethodDefs: Array<{ key: string; labelEn: string; labelAr: string }>;
+  onClose: () => void;
+  onCreated: () => void;
+}> = ({ debt, paymentMethodDefs, onClose, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [method, setMethod] = useState('');
+  const [methodOther, setMethodOther] = useState('');
+  const [amount, setAmount] = useState<number>(0);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (debt) { setMethod(''); setMethodOther(''); setAmount(debt.remainingAmount); }
+  }, [debt]);
+
+  if (!debt) return null;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!method || amount <= 0 || amount > debt.remainingAmount) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/debts/${encodeURIComponent(debt.id)}/settlements`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method, methodOther: method === 'other' ? methodOther.trim() : undefined, amount })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to record this settlement.');
+      showToast(language === 'ar' ? 'تم تسجيل التسوية' : 'Settlement recorded', `${amount.toLocaleString()} AED — ${language === 'ar' ? 'المتبقي:' : 'remaining:'} ${data.remainingAmount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل التسجيل' : 'Recording failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={!!debt}
+      onClose={onClose}
+      title={language === 'ar' ? 'تسجيل تسوية' : 'Record a Settlement'}
+      subtitle={language === 'ar' ? `${debt.id} — ${debt.customerName} — المتبقي: ${debt.remainingAmount.toLocaleString()} AED` : `${debt.id} — ${debt.customerName} — remaining: ${debt.remainingAmount.toLocaleString()} AED`}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'طريقة الدفع *' : 'Payment method *'}</label>
+          <select required value={method} onChange={e => setMethod(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر طريقة --' : '-- Select a method --'}</option>
+            {paymentMethodDefs.map(m => <option key={m.key} value={m.key}>{language === 'ar' ? m.labelAr : m.labelEn}</option>)}
+          </select>
+        </div>
+        {method === 'other' && (
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'وصف الطريقة الأخرى *' : 'Describe the other method *'}</label>
+            <input required value={methodOther} onChange={e => setMethodOther(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          </div>
+        )}
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ *' : 'Amount *'}</label>
+          <input type="number" min={0.01} max={debt.remainingAmount} step="0.01" required value={amount} onChange={e => setAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <p className="text-[10px] text-zinc-500 mt-1">{language === 'ar' ? 'لا يمكن أن يتجاوز المبلغ المتبقي.' : 'Cannot exceed the remaining amount.'}</p>
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !method || amount <= 0 || amount > debt.remainingAmount} className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'تسجيل' : 'Record'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const DebtCorrectionModal: React.FC<{
+  debt: Debt | null;
+  onClose: () => void;
+  onCreated: () => void;
+}> = ({ debt, onClose, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [newAmount, setNewAmount] = useState<number>(0);
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (debt) { setNewAmount(debt.originalAmount); setReason(''); }
+  }, [debt]);
+
+  if (!debt) return null;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newAmount <= 0 || !reason.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/debts/${encodeURIComponent(debt.id)}/correction-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newAmount, reason: reason.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to request this correction.');
+      showToast(language === 'ar' ? 'تم إرسال طلب التصحيح' : 'Correction requested', `${debt.originalAmount.toLocaleString()} → ${newAmount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={!!debt}
+      onClose={onClose}
+      title={language === 'ar' ? 'طلب تصحيح المبلغ' : 'Request an Amount Correction'}
+      subtitle={language === 'ar'
+        ? 'تصحيح المبلغ الأصلي يتطلب موافقة منفصلة ولا يُطبَّق فوراً.'
+        : 'Correcting the original amount is approval-gated and never applies immediately.'}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
+          <p className="text-zinc-400">{language === 'ar' ? 'الدين:' : 'Debt:'} <span className="font-mono text-zinc-200">{debt.id}</span></p>
+          <p className="text-zinc-400">{language === 'ar' ? 'المبلغ الحالي:' : 'Current amount:'} <span className="font-mono text-zinc-200">{debt.originalAmount.toLocaleString()} AED</span></p>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ الجديد *' : 'New amount *'}</label>
+          <input type="number" min={0.01} step="0.01" required value={newAmount} onChange={e => setNewAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'السبب *' : 'Reason *'}</label>
+          <input required value={reason} onChange={e => setReason(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || newAmount <= 0 || !reason.trim()} className="px-5 py-2 rounded-xl bg-sky-500 text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'إرسال طلب التصحيح' : 'Submit correction request'}
           </button>
         </div>
       </form>
