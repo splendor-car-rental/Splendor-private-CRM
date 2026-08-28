@@ -201,6 +201,36 @@ export const Customer360View: React.FC = () => {
     }
   };
 
+  // Documents uploaded after the customer-document security fix get a
+  // fileUrl pointing at the authenticated GET /api/documents/file proxy
+  // (a relative path), which requires the Bearer auth header apiFetch
+  // attaches -- a plain <a href> navigation can't send that header, so
+  // this fetches the file as a blob and opens THAT instead. Documents
+  // uploaded before the fix still carry an absolute Firebase Storage
+  // signed URL and keep working exactly as before (no auth header
+  // needed, and none is sent for an absolute URL).
+  const handleOpenDocument = async (e: React.MouseEvent, doc: CRMDocument) => {
+    e.preventDefault();
+    if (/^https?:\/\//i.test(doc.fileUrl)) {
+      window.open(doc.fileUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    try {
+      const res = await apiFetch(doc.fileUrl);
+      if (!res.ok) throw new Error(`Failed to load document (${res.status}).`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    } catch (err: any) {
+      showToast(
+        language === 'ar' ? 'تعذر فتح المستند' : 'Could Not Open Document',
+        err?.message || (language === 'ar' ? 'حدث خطأ أثناء تحميل المستند.' : 'Something went wrong loading the document.'),
+        'error'
+      );
+    }
+  };
+
   const docCategoryLabel = (cat: CRMDocument['category']) => {
     const labels: Record<string, { en: string; ar: string }> = {
       customer_id: { en: 'Emirates ID / Passport', ar: 'هوية إماراتية / جواز سفر' },
@@ -647,8 +677,7 @@ export const Customer360View: React.FC = () => {
                       <a
                         key={doc.id}
                         href={doc.fileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        onClick={(e) => handleOpenDocument(e, doc)}
                         className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 flex items-center justify-between hover:border-[#D4AF37]/40 transition-colors"
                       >
                         <div className="flex items-center gap-3 min-w-0">

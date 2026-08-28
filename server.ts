@@ -554,7 +554,30 @@ app.post('/api/upload', async (req, res) => {
     const bucket = admin.storage().bucket();
     const file = bucket.file(storagePath);
     await file.save(buffer, { metadata: { contentType: fileType || 'application/octet-stream' } });
-    const [url] = await file.getSignedUrl({ action: 'read', expires: '01-01-2500' });
+
+    let url: string;
+    if (folder === 'customer-documents') {
+      // Customer KYC documents (Emirates ID / passport / driving license
+      // scans) previously got a Firebase Storage signed URL expiring
+      // "01-01-2500" -- a de-facto permanent, unauthenticated public link:
+      // anyone who ever obtained it (browser history, a leaked log line, a
+      // screenshot, a database export) could read the document forever,
+      // completely bypassing this app's login system. This now points at
+      // GET /api/documents/file below instead, which requires a valid
+      // session on every single access and streams the file from Storage
+      // itself rather than ever handing out a Storage credential. No
+      // Storage-level URL is generated or logged anywhere in this flow.
+      url = `/api/documents/file?path=${encodeURIComponent(storagePath)}`;
+    } else {
+      // Avatars are low-sensitivity (a staff profile photo, not PII/KYC
+      // data) and are rendered via plain <img src> across the app, which
+      // cannot attach the Bearer auth header the proxy route above
+      // requires -- routing them through it would just break every avatar
+      // image. Left on a Storage signed URL for that reason; the security
+      // directive this phase addresses is specifically about customer
+      // documents.
+      [url] = await file.getSignedUrl({ action: 'read', expires: '01-01-2500' });
+    }
 
     res.json({ url, path: storagePath });
   } catch (error: any) {
@@ -562,6 +585,43 @@ app.post('/api/upload', async (req, res) => {
     res.status(400).json({ error: error?.message || 'Failed to upload file.' });
   }
 });
+
+// Authenticated proxy for reading an uploaded avatar or customer document.
+// Requires a valid session (enforced by the /api auth gate above -- this
+// route is not exempted from it) on every access, so a copied/leaked link
+// stops working the moment the requester's session is invalid, unlike the
+// permanent Storage signed URL this replaces. `path` is restricted to the
+// two folders POST /api/upload itself ever writes to, both server-
+// generated (never a client-supplied filesystem/Storage path), which rules
+// out path traversal to an unrelated object in the same bucket.
+const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/'];
+
+app.get('/api/documents/file', asyncHandler(async (req, res) => {
+  const path = String(req.query.path || '');
+  if (!path || !ALLOWED_DOCUMENT_PATH_PREFIXES.some(prefix => path.startsWith(prefix)) || path.includes('..')) {
+    return res.status(400).json({ error: 'Invalid or missing file path.' });
+  }
+
+  const file = admin.storage().bucket().file(path);
+  const [exists] = await file.exists();
+  if (!exists) {
+    return res.status(404).json({ error: 'File not found.' });
+  }
+
+  const [metadata] = await file.getMetadata();
+  res.setHeader('Content-Type', metadata.contentType || 'application/octet-stream');
+  // private: this is a per-request-authenticated file, never something a
+  // shared/CDN cache should be allowed to retain and re-serve without
+  // re-checking the requester's session.
+  res.setHeader('Cache-Control', 'private, max-age=300');
+
+  file.createReadStream()
+    .on('error', (err) => {
+      console.error(`[documents/file] failed to stream ${path}:`, err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to read the requested file.' });
+    })
+    .pipe(res);
+}));
 
 app.get('/api/notifications', (req, res) => {
   res.json(globalStore.notifications);
