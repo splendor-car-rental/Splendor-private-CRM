@@ -212,6 +212,80 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     sourceNote: 'Real value lives in globalStore.tollPricingConfig / settings/toll_pricing_config.'
   },
 
+  // ---- business_rule: Anomaly Detection sensitivity (Phase 23.6) ----
+  // Unlike every other rule in this catalog, these are NOT migrated from an
+  // existing value -- there is nothing to migrate from; no anomaly
+  // detection existed before this phase. They are DETECTION SENSITIVITY
+  // knobs, not business policy: a wrong value produces a false-positive
+  // review flag, never a blocked transaction or an incorrect charge to a
+  // customer. Conservative starting defaults, explicitly meant to be tuned
+  // once the business has a feel for its own normal activity volume -- see
+  // src/server/anomalyDetection.ts.
+  {
+    id: 'anomalyHighFrequencyActionCount',
+    label: 'Anomaly: sensitive-action frequency threshold',
+    labelAr: 'حساسية الشذوذ: عدد العمليات الحساسة',
+    description: 'Flag for review when the same staff member performs at least this many sensitive actions (refund, merge, rule/kill-switch change, charge, deposit) within the frequency window below. Detection sensitivity, not a business policy -- tune freely.',
+    tier: 'business_rule', valueType: 'number', value: 5, min: 2, max: 100, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyHighFrequencyWindowHours',
+    label: 'Anomaly: sensitive-action frequency window (hours)',
+    labelAr: 'حساسية الشذوذ: مدة نافذة العمليات الحساسة (ساعات)',
+    description: 'Rolling window size for the sensitive-action frequency check above.',
+    tier: 'business_rule', valueType: 'number', value: 1, min: 1, max: 168, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyRepeatedEntityOverrideCount',
+    label: 'Anomaly: repeated-override threshold',
+    labelAr: 'حساسية الشذوذ: عدد التعديلات المتكررة على نفس السجل',
+    description: 'Flag for review when the same record (any entity) is changed at least this many times within the window below, regardless of who changed it -- a record edited back-and-forth repeatedly deserves a look.',
+    tier: 'business_rule', valueType: 'number', value: 3, min: 2, max: 100, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyRepeatedEntityOverrideWindowHours',
+    label: 'Anomaly: repeated-override window (hours)',
+    labelAr: 'حساسية الشذوذ: مدة نافذة التعديلات المتكررة (ساعات)',
+    description: 'Rolling window size for the repeated-override check above.',
+    tier: 'business_rule', valueType: 'number', value: 1, min: 1, max: 168, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyCustomerMergeCount',
+    label: 'Anomaly: customer-merge frequency threshold',
+    labelAr: 'حساسية الشذوذ: عدد عمليات دمج العملاء',
+    description: 'Flag for review when the same staff member merges at least this many customer records within the window below.',
+    tier: 'business_rule', valueType: 'number', value: 3, min: 2, max: 100, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyCustomerMergeWindowHours',
+    label: 'Anomaly: customer-merge window (hours)',
+    labelAr: 'حساسية الشذوذ: مدة نافذة دمج العملاء (ساعات)',
+    description: 'Rolling window size for the customer-merge frequency check above.',
+    tier: 'business_rule', valueType: 'number', value: 24, min: 1, max: 168, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyOffHoursStartHour',
+    label: 'Anomaly: off-hours window start (24h, Gulf Standard Time)',
+    labelAr: 'حساسية الشذوذ: بداية ساعات خارج الدوام (توقيت الخليج)',
+    description: 'Sensitive actions performed at or after this hour (Gulf Standard Time, UTC+4, no DST) are flagged for review. Paired with the end-hour value below; the window wraps past midnight.',
+    tier: 'business_rule', valueType: 'number', value: 22, min: 0, max: 23, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+  {
+    id: 'anomalyOffHoursEndHour',
+    label: 'Anomaly: off-hours window end (24h, Gulf Standard Time)',
+    labelAr: 'حساسية الشذوذ: نهاية ساعات خارج الدوام (توقيت الخليج)',
+    description: 'Sensitive actions performed before this hour (Gulf Standard Time, UTC+4, no DST) are flagged for review.',
+    tier: 'business_rule', valueType: 'number', value: 6, min: 0, max: 23, editable: true,
+    sourceNote: 'New in Phase 23.6 -- no prior value exists to migrate.'
+  },
+
   // ---- emergency_rule: kill switches (new safety controls, approved 2026-08-28) ----
   // All default to `false` (not tripped) -- the default state is SAFE and
   // fully operational, per the explicit governance decision. Flipping one

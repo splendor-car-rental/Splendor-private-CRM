@@ -26,6 +26,7 @@ import {
   RuleValidationError, RuleNotEditableError, RuleForbiddenError, RuleNotFoundError
 } from './src/server/businessRules';
 import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
+import { detectAnomalies } from './src/server/anomalyDetection';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -3695,6 +3696,16 @@ app.get('/api/document-templates', (req, res) => {
 
 app.get('/api/audit-logs', (req, res) => {
   res.json(globalStore.auditLogs);
+});
+
+// Phase 23.6 Anomaly Detection: pattern-level review flags over the audit
+// trail (high-frequency actions by one actor, a record changed repeatedly
+// in a short window, frequent customer merges, sensitive actions outside
+// business hours). Detection only -- never blocks or modifies anything;
+// see src/server/anomalyDetection.ts for why. CEO/Admin-only, same as the
+// rest of the governance surface.
+app.get('/api/anomalies', requireRole('ceo', 'admin'), (req, res) => {
+  res.json(detectAnomalies(globalStore.auditLogs));
 });
 
 // ----------------------------------------------------

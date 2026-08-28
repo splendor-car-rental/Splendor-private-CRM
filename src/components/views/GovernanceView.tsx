@@ -1,10 +1,19 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { ShieldAlert, ShieldCheck, History, Check, X, RotateCcw, Loader2 } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, History, Check, X, RotateCcw, Loader2, Radar } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import type { BusinessRule, ApprovalRequest } from '../../types';
+
+interface AnomalyFlag {
+  id: string;
+  type: string;
+  summary: string;
+  summaryAr: string;
+  detectedAt: string;
+  supportingAuditLogIds: string[];
+}
 
 const TIER_LABEL: Record<string, { en: string; ar: string }> = {
   system_configuration: { en: 'System configuration (read-only)', ar: 'إعدادات النظام (للعرض فقط)' },
@@ -31,24 +40,27 @@ export const GovernanceView: React.FC = () => {
 
   const [rules, setRules] = useState<BusinessRule[]>([]);
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
+  const [anomalies, setAnomalies] = useState<AnomalyFlag[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [rulesRes, requestsRes] = await Promise.all([
+      const [rulesRes, requestsRes, anomaliesRes] = await Promise.all([
         apiFetch('/api/business-rules'),
-        apiFetch('/api/approval-requests')
+        apiFetch('/api/approval-requests'),
+        isDecider ? apiFetch('/api/anomalies') : Promise.resolve(null)
       ]);
       if (rulesRes.ok) setRules(await rulesRes.json());
       if (requestsRes.ok) setRequests(await requestsRes.json());
+      if (anomaliesRes && anomaliesRes.ok) setAnomalies(await anomaliesRes.json());
     } catch (e) {
       console.error('Failed to load governance data:', e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isDecider]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -127,6 +139,27 @@ export const GovernanceView: React.FC = () => {
 
   return (
     <div className="space-y-8 text-xs">
+      {/* Anomaly Detection (Phase 23.6) -- review-only, never blocks anything */}
+      {isDecider && (
+        <div>
+          <h3 className="text-sm font-bold text-zinc-100 mb-2 flex items-center gap-2">
+            <Radar className="w-4 h-4 text-[#D4AF37]" />
+            {language === 'ar' ? `تنبيهات نمط غير معتاد (${anomalies.length})` : `Unusual pattern flags (${anomalies.length})`}
+          </h3>
+          {anomalies.length === 0 ? (
+            <p className="text-zinc-500">{language === 'ar' ? 'لا توجد أنماط غير معتادة حالياً.' : 'No unusual patterns detected right now.'}</p>
+          ) : (
+            <div className="space-y-1.5">
+              {anomalies.map(a => (
+                <div key={a.id} className="p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/25 text-zinc-300">
+                  {language === 'ar' ? a.summaryAr : a.summary}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Pending approvals */}
       <div>
         <h3 className="text-sm font-bold text-zinc-100 mb-2 flex items-center gap-2">
