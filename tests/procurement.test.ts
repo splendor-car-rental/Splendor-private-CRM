@@ -1564,3 +1564,215 @@ describe('Operational expenses: expense-without-invoice / fully-undocumented (st
     expect(rejected.status).toBe('rejected');
   });
 });
+
+describe('Vehicle receiving: reservation-severity levels form a baseline, impactful needs handover approval, dangerous_safety blocks', () => {
+  it('a matching receipt proceeds with no approval needed', async () => {
+    const po = await createApprovedPO({ lineItems: [{ operationType: 'vehicle_supply_rental', description: 'Vehicle A', quantity: 1, unitPrice: 40000 }] });
+    const opId = po.lineItems[0].operationId;
+
+    const res = await request(app)
+      .post('/api/vehicle-receiving-records')
+      .set(authAs(OPS_UID))
+      .send({ operationId: opId, purchaseOrderId: po.id, supplierId: po.supplierId, result: 'matching', description: 'Vehicle matches the order exactly.' });
+    expect(res.status).toBe(201);
+    expect(res.body.record.decision).toBe('proceed');
+    expect(res.body.approvalRequestId).toBeUndefined();
+  });
+
+  it('a simple reservation proceeds; an impactful one requires handover approval; a dangerous_safety one is blocked', async () => {
+    const po = await createApprovedPO({ lineItems: [{ operationType: 'vehicle_supply_rental', description: 'Vehicle A', quantity: 1, unitPrice: 40000 }] });
+    const opId = po.lineItems[0].operationId;
+
+    const simpleRes = await request(app)
+      .post('/api/vehicle-receiving-records')
+      .set(authAs(OPS_UID))
+      .send({ operationId: opId, purchaseOrderId: po.id, supplierId: po.supplierId, result: 'with_reservation', reservationSeverity: 'simple', reservationReason: 'Minor scuff on the bumper', description: 'Otherwise fine.' });
+    expect(simpleRes.body.record.decision).toBe('proceed');
+
+    const impactfulRes = await request(app)
+      .post('/api/vehicle-receiving-records')
+      .set(authAs(OPS_UID))
+      .send({ operationId: opId, purchaseOrderId: po.id, supplierId: po.supplierId, result: 'with_reservation', reservationSeverity: 'impactful', reservationReason: 'AC not cooling properly', description: 'Needs review before customer handover.' });
+    expect(impactfulRes.body.record.decision).toBe('requires_approval_before_handover');
+    expect(impactfulRes.body.approvalRequestId).toBeTruthy();
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${impactfulRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${impactfulRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'AC checked, minor issue, cleared for handover.' });
+
+    const clearedCheck = (await request(app).get(`/api/vehicle-receiving-records/${impactfulRes.body.record.id}`).set(authAs(OPS_UID))).body;
+    expect(clearedCheck.approvedForHandoverAt).toBeTruthy();
+
+    const dangerousRes = await request(app)
+      .post('/api/vehicle-receiving-records')
+      .set(authAs(OPS_UID))
+      .send({ operationId: opId, purchaseOrderId: po.id, supplierId: po.supplierId, result: 'with_reservation', reservationSeverity: 'dangerous_safety', reservationReason: 'Brakes failing', description: 'Do not drive.' });
+    expect(dangerousRes.body.record.decision).toBe('blocked');
+    expect(dangerousRes.body.approvalRequestId).toBeUndefined();
+  });
+
+  it('a rejected vehicle is always blocked', async () => {
+    const po = await createApprovedPO({ lineItems: [{ operationType: 'vehicle_supply_rental', description: 'Vehicle A', quantity: 1, unitPrice: 40000 }] });
+    const res = await request(app)
+      .post('/api/vehicle-receiving-records')
+      .set(authAs(OPS_UID))
+      .send({ operationId: po.lineItems[0].operationId, purchaseOrderId: po.id, supplierId: po.supplierId, result: 'rejected', description: 'Wrong model entirely.' });
+    expect(res.body.record.decision).toBe('blocked');
+  });
+});
+
+describe('TARS: 3-hour deadline from the REAL signed-contract time, supplier delay never blocks Splendor operations', () => {
+  it('computes the deadline as exactly 3 hours from contractSignedAt (not from any listing time), and on-time execution is not flagged delayed', async () => {
+    const signedAt = new Date().toISOString(); // "now" -- so an immediate execution is comfortably on time
+    const createRes = await request(app)
+      .post('/api/tars-records')
+      .set(authAs(OPS_UID))
+      .send({ contractId: 'CON-TARS-1', contractSignedAt: signedAt });
+    expect(createRes.status).toBe(201);
+    expect(new Date(createRes.body.deadlineAt).getTime() - new Date(signedAt).getTime()).toBe(3 * 60 * 60 * 1000);
+
+    const execRes = await request(app)
+      .post(`/api/tars-records/${createRes.body.id}/execute`)
+      .set(authAs(OPS_UID));
+    expect(execRes.status).toBe(200);
+    expect(execRes.body.isDelayed).toBe(false);
+  });
+
+  it('a delayed TARS transfer attributes the fine to the supplier when linked to an operation, and to Splendor when not', async () => {
+    const pastSignedAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(); // 5h ago -> deadline already 2h in the past
+    const supplierLinkedRes = await request(app)
+      .post('/api/tars-records')
+      .set(authAs(OPS_UID))
+      .send({ operationId: 'OPS-TEST-1', contractId: 'CON-TARS-2', contractSignedAt: pastSignedAt });
+    const execRes = await request(app)
+      .post(`/api/tars-records/${supplierLinkedRes.body.id}/execute`)
+      .set(authAs(OPS_UID));
+    expect(execRes.body.isDelayed).toBe(true);
+    expect(execRes.body.fineResponsibility).toBe('supplier');
+    expect(execRes.body.supplierListingDelay).toBe(true);
+
+    const splendorOwnedRes = await request(app)
+      .post('/api/tars-records')
+      .set(authAs(OPS_UID))
+      .send({ contractId: 'CON-TARS-3', contractSignedAt: pastSignedAt }); // no operationId -- Splendor-owned vehicle
+    const execRes2 = await request(app)
+      .post(`/api/tars-records/${splendorOwnedRes.body.id}/execute`)
+      .set(authAs(OPS_UID));
+    expect(execRes2.body.fineResponsibility).toBe('splendor');
+  });
+
+  it('the return-to-supplier flow records both timestamps and flags an unusually long gap', async () => {
+    const createRes = await request(app)
+      .post('/api/tars-records')
+      .set(authAs(OPS_UID))
+      .send({ contractId: 'CON-TARS-4', contractSignedAt: new Date().toISOString() });
+    await request(app).post(`/api/tars-records/${createRes.body.id}/execute`).set(authAs(OPS_UID));
+
+    const returnRes = await request(app).post(`/api/tars-records/${createRes.body.id}/return-to-supplier`).set(authAs(OPS_UID));
+    expect(returnRes.status).toBe(200);
+    expect(returnRes.body.returnedToSupplierAt).toBeTruthy();
+
+    const closeRes = await request(app).post(`/api/tars-records/${createRes.body.id}/close-return`).set(authAs(OPS_UID));
+    expect(closeRes.status).toBe(200);
+    expect(closeRes.body.returnClosedAt).toBeTruthy();
+    expect(closeRes.body.closingDelayed).toBe(false); // closed immediately, well under the threshold
+  });
+
+  it('escalation monitoring flags an overdue, not-yet-executed TARS record without blocking anything', async () => {
+    const veryOldSignedAt = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString(); // 10h ago -> 7h overdue past the 3h deadline
+    await request(app)
+      .post('/api/tars-records')
+      .set(authAs(OPS_UID))
+      .send({ contractId: 'CON-TARS-URGENT', contractSignedAt: veryOldSignedAt });
+
+    const escalationsRes = await request(app).get('/api/tars-records/escalations').set(authAs(CEO_UID));
+    expect(escalationsRes.status).toBe(200);
+    expect(escalationsRes.body.some((r: any) => r.contractId === 'CON-TARS-URGENT' && r.escalationLevel === 'urgent')).toBe(true);
+  });
+});
+
+describe('Customer late fee: 1h grace, round-to-nearest-hour (exact 30min rounds up), 6h-past-grace converts to a full extra day, waiver never erases the original', () => {
+  it('rounds correctly and never charges within grace, via the compute endpoint', async () => {
+    const withinGrace = await request(app)
+      .post('/api/late-fees/compute')
+      .set(authAs(FINANCE_UID))
+      .send({ dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T10:45:00.000Z' }); // 45 min, within 1h grace
+    expect(withinGrace.body.feeAmount).toBe(0);
+    expect(withinGrace.body.withinGrace).toBe(true);
+
+    // 1h grace + 1h29m past grace -> rounds DOWN to 1 billable hour.
+    const roundsDown = await request(app)
+      .post('/api/late-fees/compute')
+      .set(authAs(FINANCE_UID))
+      .send({ dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T12:29:00.000Z' });
+    expect(roundsDown.body.billableHours).toBe(1);
+    expect(roundsDown.body.feeAmount).toBe(10); // 1 * (240/24)
+
+    // 1h grace + exactly 1h30m past grace -> exact half-hour rounds UP to 2.
+    const roundsUpAtHalf = await request(app)
+      .post('/api/late-fees/compute')
+      .set(authAs(FINANCE_UID))
+      .send({ dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T12:30:00.000Z' });
+    expect(roundsUpAtHalf.body.billableHours).toBe(2);
+
+    // 1h grace + more than 6h past grace -> converts to one full extra day, not hourly.
+    const convertsToDay = await request(app)
+      .post('/api/late-fees/compute')
+      .set(authAs(FINANCE_UID))
+      .send({ dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T17:30:00.000Z' }); // 1h grace + 6h31m
+    expect(convertsToDay.body.convertedToExtraDay).toBe(true);
+    expect(convertsToDay.body.feeAmount).toBe(240);
+  });
+
+  it('waiving a late fee always computes the original first, requires a mandatory reason, and is approval-gated', async () => {
+    const missingReason = await request(app)
+      .post('/api/late-fee-waivers')
+      .set(authAs(OPS_UID))
+      .send({ contractId: 'CON-LATE-1', dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T12:30:00.000Z', waivedAmount: 20 });
+    expect(missingReason.status).toBe(400);
+
+    const waiveRes = await request(app)
+      .post('/api/late-fee-waivers')
+      .set(authAs(OPS_UID))
+      .send({
+        contractId: 'CON-LATE-1', dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T12:30:00.000Z',
+        waivedAmount: 20, reason: 'Customer notified of a family emergency, goodwill gesture.'
+      });
+    expect(waiveRes.status).toBe(201);
+    expect(waiveRes.body.originalLateFeeAmount).toBe(20); // 2 billable hours * 10
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${waiveRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${waiveRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Waiver approved.' });
+
+    const waiversRes = await request(app).get('/api/late-fee-waivers?contractId=CON-LATE-1').set(authAs(FINANCE_UID));
+    expect(waiversRes.body).toHaveLength(1);
+    expect(waiversRes.body[0].originalLateFeeAmount).toBe(20);
+    expect(waiversRes.body[0].waivedAmount).toBe(20);
+  });
+
+  it('rejects waiving more than the original computed fee', async () => {
+    const res = await request(app)
+      .post('/api/late-fee-waivers')
+      .set(authAs(OPS_UID))
+      .send({
+        contractId: 'CON-LATE-2', dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T12:30:00.000Z',
+        waivedAmount: 999, reason: 'Trying to waive more than the fee itself'
+      });
+    expect(res.status).toBe(400);
+  });
+});

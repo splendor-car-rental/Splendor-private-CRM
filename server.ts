@@ -62,6 +62,12 @@ import {
 import {
   submitOperationalExpense, markOperationalExpenseRejected, OperationalExpenseError
 } from './src/server/operationalExpenses';
+import { recordVehicleReceiving, VehicleReceivingError } from './src/server/vehicleReceiving';
+import {
+  createTarsRecord, recordTarsExecution, recordReturnToSupplier, closeTarsReturn,
+  computeTarsEscalations, TarsError
+} from './src/server/tars';
+import { computeLateFee, requestLateFeeWaiver, LateFeeError } from './src/server/lateFees';
 import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
@@ -6171,6 +6177,181 @@ app.post('/api/operational-expenses', requireRole('ceo', 'admin', 'finance', 'op
   }
 }));
 
+// ---- Vehicle receiving from supplier: reservation-severity baseline for later damage claims ----
+app.get('/api/vehicle-receiving-records', (req, res) => {
+  const { operationId, purchaseOrderId } = req.query;
+  let records = globalStore.vehicleReceivingRecords;
+  if (operationId) records = records.filter(r => r.operationId === operationId);
+  if (purchaseOrderId) records = records.filter(r => r.purchaseOrderId === purchaseOrderId);
+  res.json(records);
+});
+
+app.get('/api/vehicle-receiving-records/:id', (req, res) => {
+  const record = globalStore.vehicleReceivingRecords.find(r => r.id === req.params.id);
+  if (!record) return res.status(404).json({ error: 'Receiving record not found.' });
+  res.json(record);
+});
+
+app.post('/api/vehicle-receiving-records', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const { record, approvalRequestId } = await recordVehicleReceiving({
+      operationId: body.operationId,
+      purchaseOrderId: body.purchaseOrderId,
+      supplierId: body.supplierId,
+      vehicleId: body.vehicleId,
+      result: body.result,
+      reservationSeverity: body.reservationSeverity,
+      reservationReason: body.reservationReason,
+      description: body.description,
+      mediaDocumentIds: body.mediaDocumentIds,
+      financialImpact: body.financialImpact,
+      receivedBy: actor.uid,
+      receivedByName: actor.name,
+      receivedByRole: actor.role as any
+    }, recordAudit);
+    globalStore.vehicleReceivingRecords.unshift(record);
+    res.status(201).json({ record, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof VehicleReceivingError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- TARS: real 3-hour deadline from the signed contract, never from mere listing ----
+app.get('/api/tars-records', (req, res) => {
+  const { contractId } = req.query;
+  let records = globalStore.tarsRecords;
+  if (contractId) records = records.filter(r => r.contractId === contractId);
+  res.json(records);
+});
+
+app.get('/api/tars-records/escalations', requireRole('ceo', 'admin', 'operations', 'fleet'), (req, res) => {
+  res.json(computeTarsEscalations(globalStore.tarsRecords));
+});
+
+app.post('/api/tars-records', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const record = await createTarsRecord({
+      operationId: body.operationId,
+      contractId: body.contractId,
+      vehicleId: body.vehicleId,
+      contractSignedAt: body.contractSignedAt,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    globalStore.tarsRecords.unshift(record);
+    res.status(201).json(record);
+  } catch (error: any) {
+    if (error instanceof TarsError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tars-records/:id/execute', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const record = await recordTarsExecution({
+      tarsRecordId: req.params.id,
+      proofDocumentIds: body.proofDocumentIds,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.tarsRecords.findIndex(r => r.id === record.id);
+    if (index !== -1) globalStore.tarsRecords[index] = record;
+    res.json(record);
+  } catch (error: any) {
+    if (error instanceof TarsError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tars-records/:id/return-to-supplier', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const record = await recordReturnToSupplier({
+      tarsRecordId: req.params.id,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.tarsRecords.findIndex(r => r.id === record.id);
+    if (index !== -1) globalStore.tarsRecords[index] = record;
+    res.json(record);
+  } catch (error: any) {
+    if (error instanceof TarsError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tars-records/:id/close-return', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const record = await closeTarsReturn({
+      tarsRecordId: req.params.id,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.tarsRecords.findIndex(r => r.id === record.id);
+    if (index !== -1) globalStore.tarsRecords[index] = record;
+    res.json(record);
+  } catch (error: any) {
+    if (error instanceof TarsError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Customer late fee: 1h grace, round-to-nearest-hour (exact 30min rounds up), 6h->extra day, waiver never erases the original ----
+app.post('/api/late-fees/compute', requireRole('ceo', 'admin', 'finance', 'operations'), (req, res) => {
+  const { dailyRate, scheduledReturnAt, actualReturnAt } = req.body || {};
+  if (typeof dailyRate !== 'number' || !scheduledReturnAt || !actualReturnAt) {
+    return res.status(400).json({ error: 'dailyRate, scheduledReturnAt, and actualReturnAt are required.' });
+  }
+  res.json(computeLateFee(dailyRate, scheduledReturnAt, actualReturnAt));
+});
+
+app.get('/api/late-fee-waivers', (req, res) => {
+  const { contractId } = req.query;
+  let waivers = globalStore.lateFeeWaivers;
+  if (contractId) waivers = waivers.filter(w => w.contractId === contractId);
+  res.json(waivers);
+});
+
+app.post('/api/late-fee-waivers', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const { originalLateFeeAmount, approvalRequestId } = await requestLateFeeWaiver({
+      contractId: body.contractId,
+      dailyRate: body.dailyRate,
+      scheduledReturnAt: body.scheduledReturnAt,
+      actualReturnAt: body.actualReturnAt,
+      waivedAmount: body.waivedAmount,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ originalLateFeeAmount, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof LateFeeError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -6409,6 +6590,26 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
         if (index !== -1) globalStore.operationalExpenses[index] = snap.data() as any;
         else globalStore.operationalExpenses.unshift(snap.data() as any);
       }
+    }
+
+    if (decided.entityType === 'VehicleReceivingRecord' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('vehicle_receiving_records').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.vehicleReceivingRecords.findIndex(r => r.id === decided.entityId);
+        if (index !== -1) globalStore.vehicleReceivingRecords[index] = snap.data() as any;
+        else globalStore.vehicleReceivingRecords.unshift(snap.data() as any);
+      }
+    }
+
+    if (decided.entityType === 'LateFeeWaiver' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('late_fee_waivers').get();
+      snap.docs.forEach(d => {
+        if (!globalStore.lateFeeWaivers.some(w => w.id === d.id)) {
+          globalStore.lateFeeWaivers.unshift(d.data() as any);
+        }
+      });
     }
 
     res.json(decided);
