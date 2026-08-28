@@ -378,18 +378,42 @@ describe('POST /api/deposits/:id/apply and /refund', () => {
 });
 
 describe('POST /api/bank-transactions/:id/reconcile', () => {
-  it('reconciles a pending transaction against an invoice', async () => {
+  it('reconciles a pending transaction against an invoice with a real classification', async () => {
     seedDoc('bank_transactions', 'BTX-REC-1', { id: 'BTX-REC-1', reference: 'REF1', credit: 500, reconciled: false, status: 'pending' });
     seedDoc('invoices', 'INV-REC-1', { id: 'INV-REC-1', totalAmount: 1000, paidAmount: 0, balanceDue: 1000, status: 'unpaid' });
 
     const res = await request(app)
       .post('/api/bank-transactions/BTX-REC-1/reconcile')
       .set(authAs(FINANCE_UID))
-      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1' });
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1', classification: 'settlement' });
 
     expect(res.status).toBe(200);
-    expect(adminMock.store.get('bank_transactions')?.get('BTX-REC-1').reconciled).toBe(true);
+    const txn = adminMock.store.get('bank_transactions')?.get('BTX-REC-1');
+    expect(txn.reconciled).toBe(true);
+    expect(txn.receivedAmountClassification).toBe('settlement');
+    expect(txn.classificationHistory).toHaveLength(1);
     expect(adminMock.store.get('invoices')?.get('INV-REC-1').paidAmount).toBe(500);
+  });
+
+  // FIN-002: classification is required and never guessed -- omitting it
+  // must fail loudly (400), not silently default to something.
+  it('rejects reconciliation with no classification', async () => {
+    seedDoc('bank_transactions', 'BTX-REC-3', { id: 'BTX-REC-3', reference: 'REF3', credit: 200, reconciled: false, status: 'pending' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-REC-3/reconcile')
+      .set(authAs(FINANCE_UID))
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/classification is required/i);
+  });
+
+  it('rejects reconciliation with an invalid classification value', async () => {
+    seedDoc('bank_transactions', 'BTX-REC-4', { id: 'BTX-REC-4', reference: 'REF4', credit: 200, reconciled: false, status: 'pending' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-REC-4/reconcile')
+      .set(authAs(FINANCE_UID))
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1', classification: 'made_up_value' });
+    expect(res.status).toBe(400);
   });
 
   it('rejects reconciling the same transaction twice', async () => {
@@ -397,7 +421,56 @@ describe('POST /api/bank-transactions/:id/reconcile', () => {
     const res = await request(app)
       .post('/api/bank-transactions/BTX-REC-2/reconcile')
       .set(authAs(FINANCE_UID))
-      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1' });
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1', classification: 'settlement' });
+    expect(res.status).toBe(409);
+  });
+
+  it('does not touch the invoices collection when targetRecordType is not invoice', async () => {
+    seedDoc('bank_transactions', 'BTX-REC-5', { id: 'BTX-REC-5', reference: 'REF5', credit: 300, reconciled: false, status: 'pending' });
+    seedDoc('invoices', 'INV-REC-1', { id: 'INV-REC-1', totalAmount: 1000, paidAmount: 0, balanceDue: 1000, status: 'unpaid' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-REC-5/reconcile')
+      .set(authAs(FINANCE_UID))
+      .send({ targetRecordType: 'deposit', targetRecordId: 'INV-REC-1', classification: 'security_deposit' });
+    expect(res.status).toBe(200);
+    // Same id happens to collide with the invoice seeded above -- the fix
+    // means that invoice's paidAmount must stay untouched.
+    expect(adminMock.store.get('invoices')?.get('INV-REC-1').paidAmount).toBe(0);
+  });
+});
+
+describe('POST /api/bank-transactions/:id/reclassify', () => {
+  it('changes only the classification, never the settled amount', async () => {
+    seedDoc('bank_transactions', 'BTX-RCL-1', {
+      id: 'BTX-RCL-1', reference: 'REFRCL1', credit: 700, reconciled: true, status: 'approved',
+      receivedAmountClassification: 'settlement', classificationHistory: [{ classification: 'settlement', setBy: 'x', setByName: 'x', setAt: 'now' }]
+    });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-RCL-1/reclassify')
+      .set(authAs(FINANCE_UID))
+      .send({ classification: 'advance_payment', reason: 'Turned out there was no invoice yet.' });
+    expect(res.status).toBe(200);
+    const txn = adminMock.store.get('bank_transactions')?.get('BTX-RCL-1');
+    expect(txn.receivedAmountClassification).toBe('advance_payment');
+    expect(txn.classificationHistory).toHaveLength(2);
+    expect(txn.credit).toBe(700); // unchanged
+  });
+
+  it('rejects reclassification without a reason', async () => {
+    seedDoc('bank_transactions', 'BTX-RCL-2', { id: 'BTX-RCL-2', reference: 'REFRCL2', credit: 100, reconciled: true, status: 'approved', receivedAmountClassification: 'settlement' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-RCL-2/reclassify')
+      .set(authAs(FINANCE_UID))
+      .send({ classification: 'credit_balance' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects reclassifying a transaction that was never reconciled', async () => {
+    seedDoc('bank_transactions', 'BTX-RCL-3', { id: 'BTX-RCL-3', reference: 'REFRCL3', credit: 100, reconciled: false, status: 'pending' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-RCL-3/reclassify')
+      .set(authAs(FINANCE_UID))
+      .send({ classification: 'credit_balance', reason: 'test' });
     expect(res.status).toBe(409);
   });
 });

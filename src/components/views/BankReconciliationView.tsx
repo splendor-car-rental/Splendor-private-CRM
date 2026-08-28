@@ -2,25 +2,51 @@ import React, { useState } from 'react';
 import {
   Landmark, Sparkles, UploadCloud, CheckCircle2,
   AlertCircle, ArrowRight, RefreshCw, FileSpreadsheet,
-  HelpCircle, DollarSign, ShieldCheck
+  HelpCircle, DollarSign, ShieldCheck, Tag, History
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { Modal } from '../common/Modal';
+import { RECEIVED_AMOUNT_CLASSIFICATIONS, type ReceivedAmountClassification, type BankTransaction } from '../../types';
+
+// FIN-002 labels -- every classification must be a real, human choice, so
+// the dropdown never has a pre-selected value; 'unclassified' is listed
+// like any other option, not hidden as an implicit default.
+const CLASSIFICATION_LABELS: Record<ReceivedAmountClassification, { en: string; ar: string }> = {
+  settlement: { en: 'Settlement (pays down an existing invoice)', ar: 'تسوية (سداد فاتورة قائمة)' },
+  advance_payment: { en: 'Advance payment (no invoice yet)', ar: 'دفعة مقدمة (لا توجد فاتورة بعد)' },
+  security_deposit: { en: 'Security deposit', ar: 'وديعة تأمين' },
+  credit_balance: { en: 'Credit balance for the customer', ar: 'رصيد دائن للعميل' },
+  settlement_adjustment: { en: 'Settlement adjustment / correction', ar: 'تسوية تصحيحية' },
+  other_approved: { en: 'Other (approved)', ar: 'أخرى (معتمدة)' },
+  unclassified: { en: 'Unclassified -- genuinely unknown', ar: 'غير مصنّف -- غير معروف فعلياً' }
+};
 
 export const BankReconciliationView: React.FC = () => {
   const { language, t } = useLanguage();
   const {
     bankTransactions, bankBatches, runAutoReconciliation,
-    reconcileBankTransaction, uploadBankBatch
+    reconcileBankTransaction, reclassifyBankTransaction, uploadBankBatch
   } = useCRM();
 
   const [filter, setFilter] = useState<'all' | 'reconciled' | 'unmatched'>('all');
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+
+  // FIN-002: reconciling now requires an explicit classification choice --
+  // a confirmation modal, not a one-click action, so nothing gets silently
+  // guessed.
+  const [confirmTxn, setConfirmTxn] = useState<BankTransaction | null>(null);
+  const [confirmClassification, setConfirmClassification] = useState<ReceivedAmountClassification | ''>('');
+  const [isConfirming, setIsConfirming] = useState(false);
+
+  const [reclassifyTxn, setReclassifyTxn] = useState<BankTransaction | null>(null);
+  const [reclassifyClassification, setReclassifyClassification] = useState<ReceivedAmountClassification | ''>('');
+  const [reclassifyReason, setReclassifyReason] = useState('');
+  const [isReclassifying, setIsReclassifying] = useState(false);
 
   // Which bank account this import is for -- previously hardcoded to
   // "Emirates NBD" everywhere with no way to say otherwise. The server
@@ -57,17 +83,44 @@ export const BankReconciliationView: React.FC = () => {
     }
   };
 
-  const handleConfirmMatch = async (txnId: string, invoiceId?: string) => {
-    await reconcileBankTransaction(txnId, 'invoice', invoiceId || '');
+  const handleSubmitConfirm = async () => {
+    if (!confirmTxn || !confirmClassification) return;
+    setIsConfirming(true);
+    try {
+      await reconcileBankTransaction(confirmTxn.id, 'invoice', confirmTxn.suggestedMatch?.invoiceId || '', confirmClassification);
+      setConfirmTxn(null);
+      setConfirmClassification('');
+    } finally {
+      setIsConfirming(false);
+    }
   };
 
+  const handleSubmitReclassify = async () => {
+    if (!reclassifyTxn || !reclassifyClassification || !reclassifyReason.trim()) return;
+    setIsReclassifying(true);
+    try {
+      await reclassifyBankTransaction(reclassifyTxn.id, reclassifyClassification, reclassifyReason.trim());
+      setReclassifyTxn(null);
+      setReclassifyClassification('');
+      setReclassifyReason('');
+    } finally {
+      setIsReclassifying(false);
+    }
+  };
+
+  // The backend's authoritative "is this done" signal is the `reconciled`
+  // boolean -- it sets status to 'approved' on a successful reconcile, never
+  // the literal string 'reconciled'. These checks previously compared
+  // against that literal, so a transaction that WAS reconciled never
+  // stopped showing "Confirm & Post" or counted toward "Reconciled" here.
+  // Found via real-browser verification while wiring FIN-002 in.
   const filteredTxns = bankTransactions.filter(t => {
-    if (filter === 'reconciled') return t.status === 'reconciled';
-    if (filter === 'unmatched') return t.status !== 'reconciled';
+    if (filter === 'reconciled') return t.reconciled;
+    if (filter === 'unmatched') return !t.reconciled;
     return true;
   });
 
-  const reconciledCount = bankTransactions.filter(t => t.status === 'reconciled').length;
+  const reconciledCount = bankTransactions.filter(t => t.reconciled).length;
   const matchRate = bankTransactions.length > 0
     ? Math.round((reconciledCount / bankTransactions.length) * 100)
     : 100;
@@ -213,23 +266,43 @@ export const BankReconciliationView: React.FC = () => {
                       )}
                     </td>
                     <td className="p-4 text-center">
-                      <Badge variant={txn.status === 'reconciled' ? 'emerald' : txn.status === 'matched' ? 'amber' : 'zinc'} size="sm">
-                        {(txn.status || '').toUpperCase()}
-                      </Badge>
+                      <div className="flex flex-col items-center gap-1">
+                        <Badge variant={txn.reconciled ? 'emerald' : txn.status === 'matched' ? 'amber' : 'zinc'} size="sm">
+                          {(txn.status || '').toUpperCase()}
+                        </Badge>
+                        {txn.reconciled && txn.receivedAmountClassification && (
+                          <span
+                            title={CLASSIFICATION_LABELS[txn.receivedAmountClassification][language === 'ar' ? 'ar' : 'en']}
+                            className="inline-flex items-center gap-1 text-[9px] uppercase tracking-wide text-zinc-400 font-mono"
+                          >
+                            <Tag className="w-2.5 h-2.5" />
+                            {txn.receivedAmountClassification.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-4 text-end">
-                      {txn.status !== 'reconciled' ? (
+                      {!txn.reconciled ? (
                         <button
-                          onClick={() => handleConfirmMatch(txn.id, txn.suggestedMatch?.invoiceId)}
+                          onClick={() => { setConfirmTxn(txn); setConfirmClassification(''); }}
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-semibold transition-all shadow-sm"
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           <span>{language === 'ar' ? 'تأكيد وترحيل' : 'Confirm & Post'}</span>
                         </button>
                       ) : (
-                        <span className="text-[11px] text-zinc-500 flex items-center justify-end gap-1 font-mono">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> {language === 'ar' ? 'مسوّى' : 'Settled'}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-[11px] text-zinc-500 flex items-center justify-end gap-1 font-mono">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> {language === 'ar' ? 'مسوّى' : 'Settled'}
+                          </span>
+                          <button
+                            onClick={() => { setReclassifyTxn(txn); setReclassifyClassification(txn.receivedAmountClassification || ''); setReclassifyReason(''); }}
+                            className="inline-flex items-center gap-1 text-[10px] text-zinc-500 hover:text-[#f5d97f] transition-colors"
+                          >
+                            <History className="w-3 h-3" />
+                            <span>{language === 'ar' ? 'إعادة تصنيف' : 'Reclassify'}</span>
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -298,6 +371,137 @@ export const BankReconciliationView: React.FC = () => {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* FIN-002: Confirm & Post now requires an explicit classification --
+          no default is pre-selected, so a reconciler must actually choose. */}
+      <Modal
+        isOpen={!!confirmTxn}
+        onClose={() => { setConfirmTxn(null); setConfirmClassification(''); }}
+        title={language === 'ar' ? 'تأكيد المعاملة وتصنيفها' : 'Confirm & Classify Transaction'}
+        subtitle={language === 'ar' ? 'كل مبلغ مستلم يجب أن يُصنَّف قبل ترحيله.' : 'Every received amount must be classified before it is posted.'}
+        maxWidth="sm"
+      >
+        {confirmTxn && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 space-y-1">
+              <p className="font-mono text-zinc-200">{confirmTxn.reference} &middot; +{confirmTxn.credit.toLocaleString()} AED</p>
+              <p className="text-zinc-500">{confirmTxn.description}</p>
+              {confirmTxn.suggestedMatch?.customerName && (
+                <p className="text-zinc-400">{language === 'ar' ? 'العميل المقترح:' : 'Suggested customer:'} {confirmTxn.suggestedMatch.customerName}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
+                {language === 'ar' ? 'ما طبيعة هذا المبلغ المستلم؟ *' : 'What is this received amount? *'}
+              </label>
+              <select
+                required
+                value={confirmClassification}
+                onChange={e => setConfirmClassification(e.target.value as ReceivedAmountClassification)}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:outline-none focus:border-[#D4AF37]/60"
+              >
+                <option value="" disabled>{language === 'ar' ? '-- اختر تصنيفاً --' : '-- Select a classification --'}</option>
+                {RECEIVED_AMOUNT_CLASSIFICATIONS.map(c => (
+                  <option key={c} value={c}>{CLASSIFICATION_LABELS[c][language === 'ar' ? 'ar' : 'en']}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-zinc-500 mt-1">
+                {language === 'ar' ? 'إذا كنت لا تعرف طبيعة المبلغ فعلياً، اختر "غير مصنّف" بدلاً من التخمين.' : 'If you genuinely don’t know what this is, choose "Unclassified" rather than guessing.'}
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setConfirmTxn(null); setConfirmClassification(''); }}
+                className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
+              >
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                disabled={!confirmClassification || isConfirming}
+                onClick={handleSubmitConfirm}
+                className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50"
+              >
+                {isConfirming ? (language === 'ar' ? 'جارٍ الترحيل...' : 'Posting...') : (language === 'ar' ? 'تأكيد وترحيل' : 'Confirm & Post')}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* FIN-002 reclassification: changes only the classification metadata,
+          never the amount -- mandatory reason, visible history preserved
+          server-side via classificationHistory. */}
+      <Modal
+        isOpen={!!reclassifyTxn}
+        onClose={() => { setReclassifyTxn(null); setReclassifyClassification(''); setReclassifyReason(''); }}
+        title={language === 'ar' ? 'إعادة تصنيف المبلغ المستلم' : 'Reclassify Received Amount'}
+        subtitle={language === 'ar' ? 'لا يغيّر هذا المبلغ المسدد أو رصيد الفاتورة -- تصنيف فقط.' : 'This never changes the settled amount or invoice balance -- classification only.'}
+        maxWidth="sm"
+      >
+        {reclassifyTxn && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 space-y-1">
+              <p className="font-mono text-zinc-200">{reclassifyTxn.reference} &middot; +{reclassifyTxn.credit.toLocaleString()} AED</p>
+              <p className="text-zinc-400">
+                {language === 'ar' ? 'التصنيف الحالي:' : 'Current classification:'}{' '}
+                <span className="font-mono">{(reclassifyTxn.receivedAmountClassification || 'unclassified').replace(/_/g, ' ')}</span>
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
+                {language === 'ar' ? 'التصنيف الجديد *' : 'New classification *'}
+              </label>
+              <select
+                required
+                value={reclassifyClassification}
+                onChange={e => setReclassifyClassification(e.target.value as ReceivedAmountClassification)}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:outline-none focus:border-[#D4AF37]/60"
+              >
+                {RECEIVED_AMOUNT_CLASSIFICATIONS.map(c => (
+                  <option key={c} value={c}>{CLASSIFICATION_LABELS[c][language === 'ar' ? 'ar' : 'en']}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
+                {language === 'ar' ? 'سبب إعادة التصنيف *' : 'Reason for reclassification *'}
+              </label>
+              <textarea
+                required
+                value={reclassifyReason}
+                onChange={e => setReclassifyReason(e.target.value)}
+                rows={3}
+                placeholder={language === 'ar' ? 'مثال: تبيّن أن المبلغ دفعة مقدمة وليس تسوية فاتورة.' : 'e.g. Turned out to be an advance payment, not an invoice settlement.'}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:outline-none focus:border-[#D4AF37]/60"
+              />
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setReclassifyTxn(null); setReclassifyClassification(''); setReclassifyReason(''); }}
+                className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
+              >
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                disabled={!reclassifyClassification || !reclassifyReason.trim() || isReclassifying}
+                onClick={handleSubmitReclassify}
+                className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50"
+              >
+                {isReclassifying ? (language === 'ar' ? 'جارٍ الحفظ...' : 'Saving...') : (language === 'ar' ? 'حفظ إعادة التصنيف' : 'Save Reclassification')}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

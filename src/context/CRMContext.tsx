@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { 
   Customer, Lead, Opportunity, Vehicle, Quotation, 
   Reservation, Contract, AdditionalCharge, Deposit, 
-  Payment, Invoice, BankImportBatch, BankTransaction,
+  Payment, Invoice, BankImportBatch, BankTransaction, ReceivedAmountClassification,
   CRMTask, Communication, CRMDocument, AuditLog,
   CustomFieldDefinition, NumberingConfig, NotificationItem,
   TollTransaction, TollImportBatch, TollPricingConfig,
@@ -141,7 +141,8 @@ interface CRMContextType {
   refundDeposit: (depositId: string, amount: number) => Promise<Deposit>;
   
   uploadBankBatch: (batchData: any) => Promise<void>;
-  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string) => Promise<void>;
+  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification) => Promise<void>;
+  reclassifyBankTransaction: (txnId: string, classification: ReceivedAmountClassification, reason: string) => Promise<void>;
   runAutoReconciliation: () => Promise<void>;
 
   addManualToll: (data: any) => Promise<TollTransaction>;
@@ -1017,11 +1018,12 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Statement Imported', `Imported ${data.batch.totalTransactions} transactions from ${data.batch.bankName}.`);
   };
 
-  const reconcileBankTransaction = async (txnId: string, targetRecordType: string, targetRecordId: string) => {
+  const reconcileBankTransaction = async (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification) => {
+    const idempotencyKey = crypto.randomUUID();
     const res = await fetch(`/api/bank-transactions/${txnId}/reconcile`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetRecordType, targetRecordId })
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ targetRecordType, targetRecordId, classification })
     });
     let data: { transaction: BankTransaction };
     try {
@@ -1032,6 +1034,24 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     await fetchData();
     showToast('Transaction Reconciled', `Reconciled ${data.transaction.reference} successfully.`);
+  };
+
+  const reclassifyBankTransaction = async (txnId: string, classification: ReceivedAmountClassification, reason: string) => {
+    const idempotencyKey = crypto.randomUUID();
+    const res = await fetch(`/api/bank-transactions/${txnId}/reclassify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ classification, reason })
+    });
+    let data: { transaction: BankTransaction };
+    try {
+      data = await parseApiResponse<{ transaction: BankTransaction }>(res, 'Failed to reclassify transaction.');
+    } catch (err: any) {
+      showToast('Reclassification Failed', err.message, 'error');
+      throw err;
+    }
+    await fetchData();
+    showToast('Transaction Reclassified', `${data.transaction.reference} reclassified to ${classification.replace(/_/g, ' ')}.`);
   };
 
   /**
@@ -1049,7 +1069,13 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let count = 0;
     for (const txn of candidates) {
       try {
-        await reconcileBankTransaction(txn.id, 'invoice', txn.suggestedMatch!.invoiceId!);
+        // 'settlement' is not a guess here: this path only ever fires for a
+        // transaction the AI matched to a SPECIFIC existing invoiceId at
+        // >=90% confidence, so the one classification actually implied by
+        // that match is "this settles that invoice." A human reconciling
+        // manually still has to pick explicitly -- see handleConfirmMatch
+        // in BankReconciliationView.tsx.
+        await reconcileBankTransaction(txn.id, 'invoice', txn.suggestedMatch!.invoiceId!, 'settlement');
         count += 1;
       } catch (e) {
         console.warn(`Auto-reconciliation skipped ${txn.id}:`, e);
@@ -1428,7 +1454,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
-      uploadBankBatch, reconcileBankTransaction, runAutoReconciliation,
+      uploadBankBatch, reconcileBankTransaction, reclassifyBankTransaction, runAutoReconciliation,
       addManualToll, updateTollTransaction, deleteTollTransaction,
       previewTollImport, confirmTollImport, updateTollPricingConfig,
       updateNotificationConfig, updateCustomerNotificationConfig,

@@ -732,6 +732,13 @@ export interface BankTransaction {
   status: BankTransactionStatus;
   reconciled: boolean;
   notes?: string;
+  // FIN-002: what this received amount actually represents. Required at
+  // reconcile time (never guessed); reclassifiable afterward via
+  // POST /api/bank-transactions/:id/reclassify, which never touches
+  // paidAmount/balanceDue -- classification is metadata about the money,
+  // not a change to the money itself.
+  receivedAmountClassification?: ReceivedAmountClassification;
+  classificationHistory?: ReceivedAmountClassificationEvent[];
 }
 
 export interface BankImportBatch {
@@ -832,7 +839,7 @@ export interface AuditLog {
   userRole: string;
   entityType: string;
   entityId: string;
-  action: 'create' | 'update' | 'delete' | 'status_change' | 'approval' | 'refund' | 'reconcile' | 'merge' | 'rule_change' | 'kill_switch' | 'approval_decision';
+  action: 'create' | 'update' | 'delete' | 'status_change' | 'approval' | 'refund' | 'reconcile' | 'reclassify' | 'merge' | 'rule_change' | 'kill_switch' | 'approval_decision';
   previousValue?: string;
   newValue?: string;
   reason?: string;
@@ -1561,6 +1568,25 @@ export interface CustomerRefundRequest {
 export type ReceivedAmountClassification =
   | 'settlement' | 'advance_payment' | 'security_deposit' | 'credit_balance'
   | 'settlement_adjustment' | 'other_approved' | 'unclassified';
+
+// FIN-002: the runtime-checkable form of the type above -- used by the
+// server to validate an incoming classification value (never guessed;
+// 'unclassified' is a real, explicit choice a reconciler makes, not a
+// silent default for a missing field) and by the UI to render the
+// dropdown. Wired into POST /api/bank-transactions/:id/reconcile and
+// /reclassify -- see server.ts.
+export const RECEIVED_AMOUNT_CLASSIFICATIONS: ReceivedAmountClassification[] = [
+  'settlement', 'advance_payment', 'security_deposit', 'credit_balance',
+  'settlement_adjustment', 'other_approved', 'unclassified'
+];
+
+export interface ReceivedAmountClassificationEvent {
+  classification: ReceivedAmountClassification;
+  setBy: string;
+  setByName: string;
+  setAt: string;
+  reason?: string; // required for a reclassification, not for the initial classification at reconcile time
+}
 
 // ---- Debts / charges (the spec's own fixed list -- distinct from the existing ChargeType) ----
 export type DebtType =

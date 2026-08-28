@@ -4,7 +4,8 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation, TollType } from './src/types';
+import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification } from './src/types';
+import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { vatPortion, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
@@ -2787,40 +2788,94 @@ app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOpe
 // Guards against double-reconcile (the audit's finding: reconciling twice
 // would double-credit the matched invoice) by checking txn.reconciled
 // inside the same transaction that writes the reconciliation.
+//
+// FIN-002 (Received Amount Classification): every reconciled credit must
+// say what it actually is -- settlement / advance_payment /
+// security_deposit / credit_balance / settlement_adjustment /
+// other_approved / unclassified. This is REQUIRED and never guessed:
+// 'unclassified' is a real, explicit choice a reconciler makes when they
+// genuinely don't know, not a silent default for an omitted field.
+// Classification is metadata about the money and never changes any
+// monetary amount -- the paidAmount/balanceDue math below is unchanged
+// from before FIN-002 existed.
+//
+// Also fixes a latent correctness gap found while wiring this in: the
+// invoice-balance update below used to run whenever targetRecordId was
+// present, regardless of targetRecordType -- so reconciling a credit
+// against a non-invoice record (e.g. a future 'deposit' target) would
+// still probe the invoices collection for that id. Now gated explicitly
+// on targetRecordType === 'invoice'.
+//
+// Actor identity (who reconciled this) is now taken from the verified
+// request token via getRequesterActor(), not from client-supplied
+// actorId/actorName -- the previous version trusted the client's own
+// claim of who it was for the audit trail, which any authorized finance
+// user could spoof to attribute a reconciliation to someone else.
 app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
-  const { targetRecordType, targetRecordId, actorId, actorName } = req.body;
+  const { targetRecordType, targetRecordId, classification } = req.body || {};
+  if (!classification || !RECEIVED_AMOUNT_CLASSIFICATIONS.includes(classification)) {
+    return res.status(400).json({ error: `classification is required and must be one of: ${RECEIVED_AMOUNT_CLASSIFICATIONS.join(', ')}.` });
+  }
+  const actor = await getRequesterActor(req);
+  const resolvedType = targetRecordType || 'invoice';
   const now = new Date().toISOString();
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
   const txnRef = admin.firestore().collection('bank_transactions').doc(req.params.id);
 
   let updatedTxn: any;
+  let replayed = false;
   try {
-    updatedTxn = await runDurableTransaction(async (tx, db) => {
+    const outcome = await runIdempotent('bank-reconcile', idempotencyKey, async (tx, db) => {
+      // Real Firestore transactions require ALL reads before ANY writes --
+      // the mocked firebase-admin used by the automated suite doesn't
+      // enforce this ordering at all, so this exact bug (a pre-existing
+      // one, not introduced by FIN-002: the original code wrote the
+      // transaction doc, then conditionally read the invoice afterward)
+      // passed 100% of mocked tests while throwing on every real Firestore
+      // call. Found via real-emulator browser verification while wiring
+      // FIN-002 in. Fixed by doing the conditional invoice read FIRST.
       const snap = await tx.get(txnRef);
       if (!snap.exists) throw new PersistenceError('Bank transaction not found');
       const txn = snap.data() as any;
       if (txn.reconciled) throw new PersistenceError('This transaction has already been reconciled.');
 
+      const invRef = (resolvedType === 'invoice' && targetRecordId && txn.credit > 0)
+        ? db.collection('invoices').doc(targetRecordId)
+        : null;
+      const invSnap = invRef ? await tx.get(invRef) : null;
+
       const matchedRecord = {
-        type: targetRecordType || 'invoice',
+        type: resolvedType,
         id: targetRecordId || (txn.suggestedMatch ? txn.suggestedMatch.invoiceId || '' : ''),
-        matchedBy: actorName || 'Faisal Al-Hashimi',
+        matchedBy: actor?.name || 'Unknown',
         matchedAt: now
       };
-      const updated = { ...txn, status: 'approved', reconciled: true, matchedRecord };
+      const classificationEvent = {
+        classification: classification as ReceivedAmountClassification,
+        setBy: actor?.uid || 'USR-004',
+        setByName: actor?.name || 'Unknown',
+        setAt: now
+      };
+      const updated = {
+        ...txn,
+        status: 'approved',
+        reconciled: true,
+        matchedRecord,
+        receivedAmountClassification: classification,
+        classificationHistory: [classificationEvent]
+      };
       tx.set(txnRef, updated, { merge: true });
 
-      if (targetRecordId && txn.credit > 0) {
-        const invRef = db.collection('invoices').doc(targetRecordId);
-        const invSnap = await tx.get(invRef);
-        if (invSnap.exists) {
-          const inv = invSnap.data() as any;
-          const paidAmount = inv.paidAmount + txn.credit;
-          const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
-          tx.set(invRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
-        }
+      if (invRef && invSnap?.exists) {
+        const inv = invSnap.data() as any;
+        const paidAmount = inv.paidAmount + txn.credit;
+        const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
+        tx.set(invRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
       }
       return updated;
     });
+    updatedTxn = outcome.result;
+    replayed = outcome.replayed;
   } catch (err) {
     if (err instanceof PersistenceError && (err.message === 'Bank transaction not found' || err.message.startsWith('This transaction'))) {
       return res.status(err.message === 'Bank transaction not found' ? 404 : 409).json({ error: err.message });
@@ -2830,7 +2885,7 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
 
   const index = globalStore.bankTransactions.findIndex(t => t.id === req.params.id);
   if (index !== -1) globalStore.bankTransactions[index] = updatedTxn;
-  if (targetRecordId && updatedTxn.credit > 0) {
+  if (!replayed && updatedTxn.matchedRecord.type === 'invoice' && targetRecordId && updatedTxn.credit > 0) {
     const inv = globalStore.invoices.find(i => i.id === targetRecordId);
     if (inv) {
       inv.paidAmount += updatedTxn.credit;
@@ -2839,17 +2894,94 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
     }
   }
 
-  await recordAudit({
-    userId: actorId || 'USR-004',
-    userName: actorName || 'Faisal Al-Hashimi',
-    userRole: 'finance',
-    entityType: 'BankReconciliation',
-    entityId: updatedTxn.id,
-    action: 'reconcile',
-    previousValue: 'Status: Pending / Suggested',
-    newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}`,
-    reason: 'Approved by authorized financial reconciler'
-  });
+  if (!replayed) {
+    await recordAudit({
+      userId: actor?.uid || 'USR-004',
+      userName: actor?.name || 'Unknown',
+      userRole: actor?.role || 'finance',
+      entityType: 'BankReconciliation',
+      entityId: updatedTxn.id,
+      action: 'reconcile',
+      previousValue: 'Status: Pending / Suggested',
+      newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}. Classification: ${classification}.`,
+      reason: 'Approved by authorized financial reconciler'
+    });
+  }
+
+  res.json({ success: true, transaction: updatedTxn });
+}));
+
+// FIN-002 reclassification: changes ONLY receivedAmountClassification and
+// appends to classificationHistory -- never touches credit/debit,
+// paidAmount, or balanceDue. Requires a mandatory reason (this is a
+// correction to a prior human judgment call, not a routine action) and is
+// itself idempotent (a retried identical request replays, it doesn't
+// create a second history entry). The transaction must already be
+// reconciled -- there is nothing to reclassify before that.
+app.post('/api/bank-transactions/:id/reclassify', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
+  const { classification, reason } = req.body || {};
+  if (!classification || !RECEIVED_AMOUNT_CLASSIFICATIONS.includes(classification)) {
+    return res.status(400).json({ error: `classification is required and must be one of: ${RECEIVED_AMOUNT_CLASSIFICATIONS.join(', ')}.` });
+  }
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to reclassify a received amount.' });
+  }
+  const actor = await getRequesterActor(req);
+  const now = new Date().toISOString();
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  const txnRef = admin.firestore().collection('bank_transactions').doc(req.params.id);
+
+  let updatedTxn: any;
+  let previousClassification: string | undefined;
+  let replayed = false;
+  try {
+    const outcome = await runIdempotent('bank-reclassify', idempotencyKey, async (tx) => {
+      const snap = await tx.get(txnRef);
+      if (!snap.exists) throw new PersistenceError('Bank transaction not found');
+      const txn = snap.data() as any;
+      if (!txn.reconciled) throw new PersistenceError('Only a reconciled transaction can be reclassified.');
+      previousClassification = txn.receivedAmountClassification || 'unclassified';
+
+      const classificationEvent = {
+        classification: classification as ReceivedAmountClassification,
+        setBy: actor?.uid || 'USR-004',
+        setByName: actor?.name || 'Unknown',
+        setAt: now,
+        reason: String(reason).trim()
+      };
+      const updated = {
+        ...txn,
+        receivedAmountClassification: classification,
+        classificationHistory: [...(txn.classificationHistory || []), classificationEvent]
+      };
+      tx.set(txnRef, updated, { merge: true });
+      return updated;
+    });
+    updatedTxn = outcome.result;
+    replayed = outcome.replayed;
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Bank transaction not found' || err.message.startsWith('Only a reconciled'))) {
+      return res.status(err.message === 'Bank transaction not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.bankTransactions.findIndex(t => t.id === req.params.id);
+  if (index !== -1) globalStore.bankTransactions[index] = updatedTxn;
+
+  if (!replayed) {
+    await recordAudit({
+      userId: actor?.uid || 'USR-004',
+      userName: actor?.name || 'Unknown',
+      userRole: actor?.role || 'finance',
+      entityType: 'BankReconciliation',
+      entityId: updatedTxn.id,
+      action: 'reclassify',
+      previousValue: `Classification: ${previousClassification}`,
+      newValue: `Classification: ${classification}`,
+      reason: String(reason).trim()
+    });
+  }
 
   res.json({ success: true, transaction: updatedTxn });
 }));
