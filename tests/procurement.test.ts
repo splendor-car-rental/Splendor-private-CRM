@@ -1005,6 +1005,65 @@ describe('Balances: opening balances, offsetting (mandatory reason, never automa
     expect(balanceRes.body.netAmount).toBe(600);
   });
 
+  it('CONCURRENCY: a second offset that no longer fits the LIVE balance is rejected at approval time, not silently over-applied', async () => {
+    const supplier = await registerSupplier({ legalName: 'Race Offset Supplier LLC' });
+    const obRes = await request(app)
+      .post('/api/party-opening-balances')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, amount: 1000, direction: 'owed_to_us' });
+    await request(app)
+      .post(`/api/procurement/approvals/${obRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    // Two offset requests, each individually valid against the SAME 1000
+    // balance that existed when both were requested -- exactly the
+    // pre-fix condition that let both later get approved and together
+    // over-offset the party.
+    const offsetA = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, offsetAmount: 700, reason: 'Offset A' });
+    expect(offsetA.status).toBe(201);
+    expect(offsetA.body.offsetRequest.balanceBefore).toBe(1000);
+
+    const offsetB = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, offsetAmount: 700, reason: 'Offset B' });
+    expect(offsetB.status).toBe(201);
+    expect(offsetB.body.offsetRequest.balanceBefore).toBe(1000);
+
+    // Approve A first -- succeeds, live balance drops to 300.
+    const approveA = await request(app)
+      .post(`/api/procurement/approvals/${offsetA.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Approve A.' });
+    expect(approveA.status).toBe(200);
+    const balanceAfterA = await request(app).get(`/api/balances/supplier/${supplier.id}`).set(authAs(FINANCE_UID));
+    expect(balanceAfterA.body.netAmount).toBe(300);
+
+    // Approve B -- its own stale balanceBefore (1000) would still make this
+    // look valid, but the live balance is now only 300. Must be rejected
+    // outright rather than silently applied, which would otherwise leave
+    // the party appearing to owe -400 (over-offset).
+    const approveB = await request(app)
+      .post(`/api/procurement/approvals/${offsetB.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Approve B.' });
+    expect(approveB.status).toBe(400);
+    expect(approveB.body.error).toMatch(/no longer fits/i);
+
+    // The balance was never over-offset, and B is still pending (not
+    // silently marked approved or rejected -- a human decides what to do
+    // with it, e.g. re-request it at 300).
+    const finalBalance = await request(app).get(`/api/balances/supplier/${supplier.id}`).set(authAs(FINANCE_UID));
+    expect(finalBalance.body.netAmount).toBe(300);
+    const offsetsList = await request(app).get('/api/offset-requests').set(authAs(FINANCE_UID)).query({ partyType: 'supplier', partyId: supplier.id });
+    const stillPendingB = offsetsList.body.find((o: any) => o.id === offsetB.body.offsetRequest.id);
+    expect(stillPendingB?.status).toBe('pending_approval');
+  });
+
   it('blocks offsetting a customer balance while a dispute is open, and unblocks it once resolved', async () => {
     const customerId = 'CUS-TEST-DISPUTE-1';
     const obRes = await request(app)
@@ -1266,6 +1325,87 @@ describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective
 
     debtRes = await request(app).get(`/api/debts/${createRes.body.id}`).set(authAs(FINANCE_UID));
     expect(debtRes.body.status).toBe('cancelled');
+  });
+});
+
+describe('Procurement create-route idempotency (network retry / double-click protection)', () => {
+  it('POST /api/debts: same Idempotency-Key + identical body replays the SAME debt, never creates a second one', async () => {
+    const before = await request(app).get('/api/debts').set(authAs(OPS_UID));
+    const countBefore = before.body.length;
+    const key = 'debt-idem-key-1';
+    const body = { customerId: 'CUS-IDEM-1', customerName: 'Idempotency Test Customer', type: 'salik', description: 'Toll charge', originalAmount: 250 };
+
+    const first = await request(app).post('/api/debts').set(authAs(OPS_UID)).set('Idempotency-Key', key).send(body);
+    expect(first.status).toBe(201);
+
+    const second = await request(app).post('/api/debts').set(authAs(OPS_UID)).set('Idempotency-Key', key).send(body);
+    expect(second.status).toBe(201);
+    expect(second.body.id).toBe(first.body.id); // replayed the same record, not a new one
+
+    const after = await request(app).get('/api/debts').set(authAs(OPS_UID));
+    expect(after.body.length).toBe(countBefore + 1); // exactly one new debt, not two
+  });
+
+  it('POST /api/debts: reusing the same Idempotency-Key for a genuinely different request is rejected, not silently misapplied', async () => {
+    const key = 'debt-idem-key-2';
+    const first = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .set('Idempotency-Key', key)
+      .send({ customerId: 'CUS-IDEM-2', customerName: 'Idempotency Conflict Customer', type: 'salik', description: 'Toll charge', originalAmount: 250 });
+    expect(first.status).toBe(201);
+
+    const conflicting = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .set('Idempotency-Key', key)
+      .send({ customerId: 'CUS-IDEM-2', customerName: 'Idempotency Conflict Customer', type: 'salik', description: 'A DIFFERENT toll charge', originalAmount: 999 });
+    expect(conflicting.status).toBe(409);
+    expect(conflicting.body.error).toMatch(/already used for a different request/i);
+  });
+
+  it('POST /api/debts: two CONCURRENT identical requests with the same key still produce only one debt', async () => {
+    const key = 'debt-idem-key-concurrent-1';
+    const body = { customerId: 'CUS-IDEM-3', customerName: 'Concurrent Idempotency Customer', type: 'salik', description: 'Toll charge', originalAmount: 250 };
+
+    const [a, b] = await Promise.all([
+      request(app).post('/api/debts').set(authAs(OPS_UID)).set('Idempotency-Key', key).send(body),
+      request(app).post('/api/debts').set(authAs(OPS_UID)).set('Idempotency-Key', key).send(body)
+    ]);
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    expect(a.body.id).toBe(b.body.id); // one winner, one replay -- never two separate debts
+
+    const listRes = await request(app).get('/api/debts').set(authAs(OPS_UID));
+    expect(listRes.body.filter((d: any) => d.id === a.body.id)).toHaveLength(1);
+  });
+
+  it('POST /api/purchase-orders: same Idempotency-Key replays the same PO (proves the same protection on a different module)', async () => {
+    const supplier = await registerSupplier({ legalName: 'Idempotency PO Supplier LLC' });
+    const key = 'po-idem-key-1';
+    const body = { kind: 'regular', supplierId: supplier.id, reason: 'Idempotency test restock', lineItems: [{ operationType: 'spare_parts', description: 'Filters', quantity: 2, unitPrice: 50 }] };
+
+    const first = await request(app).post('/api/purchase-orders').set(authAs(OPS_UID)).set('Idempotency-Key', key).send(body);
+    expect(first.status).toBe(201);
+
+    const second = await request(app).post('/api/purchase-orders').set(authAs(OPS_UID)).set('Idempotency-Key', key).send(body);
+    expect(second.status).toBe(201);
+    expect(second.body.po.id).toBe(first.body.po.id);
+    expect(second.body.approvalRequestId).toBe(first.body.approvalRequestId);
+
+    // No duplicate approval request was created for the replayed PO either.
+    const approvalsRes = await request(app).get('/api/procurement/approvals').set(authAs(OPS_UID));
+    const matching = approvalsRes.body.filter((a: any) => a.entityId === first.body.po.id);
+    expect(matching).toHaveLength(1);
+  });
+
+  it('POST /api/debts: omitting the Idempotency-Key preserves prior behavior -- each call creates its own debt', async () => {
+    const body = { customerId: 'CUS-IDEM-NOKEY', customerName: 'No Key Customer', type: 'salik', description: 'Toll charge', originalAmount: 250 };
+    const first = await request(app).post('/api/debts').set(authAs(OPS_UID)).send(body);
+    const second = await request(app).post('/api/debts').set(authAs(OPS_UID)).send(body);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.id).not.toBe(second.body.id); // no key -- no dedup, exactly as before this fix
   });
 });
 

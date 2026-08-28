@@ -20,7 +20,7 @@ import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurabl
 import { asyncHandler } from './src/server/asyncHandler';
 import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
-import { runIdempotent } from './src/server/idempotency';
+import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
@@ -5433,9 +5433,10 @@ app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operati
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to submit this PO for approval.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { po, approvalRequestId } = await createPurchaseOrder({
+    const { result: { po, approvalRequestId }, replayed } = await runIdempotentCreate('po-create', idempotencyKey, fingerprintRequest(body), async () => createPurchaseOrder({
       kind: body.kind === 'retroactive' ? 'retroactive' : 'regular',
       retroactiveReason: body.retroactiveReason,
       retroactiveReasonOther: body.retroactiveReasonOther,
@@ -5447,11 +5448,12 @@ app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operati
       requestedByName: actor.name,
       requestedByRole: actor.role as any,
       reason: body.reason
-    }, recordAudit);
+    }, recordAudit));
 
-    globalStore.purchaseOrders.unshift(po);
+    if (!replayed) globalStore.purchaseOrders.unshift(po);
     res.status(201).json({ po, approvalRequestId, status: 'pending_approval' });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5599,9 +5601,10 @@ app.post('/api/supplier-quotes', requireRole('ceo', 'admin', 'finance', 'operati
   if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required -- a quote can only reference a registered supplier, never free text.' });
   const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
   if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const quote = await addSupplierQuote({
+    const { result: quote, replayed } = await runIdempotentCreate('supplier-quote-create', idempotencyKey, fingerprintRequest(body), async () => addSupplierQuote({
       purchaseOrderId: body.purchaseOrderId,
       supplierId: supplier.id,
       supplierName: supplier.legalName,
@@ -5616,10 +5619,11 @@ app.post('/api/supplier-quotes', requireRole('ceo', 'admin', 'finance', 'operati
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.supplierQuotes.unshift(quote);
+    }, recordAudit));
+    if (!replayed) globalStore.supplierQuotes.unshift(quote);
     res.status(201).json(quote);
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof SupplierQuoteError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5670,9 +5674,10 @@ app.post('/api/supplier-payment-requests', requireRole('ceo', 'admin', 'finance'
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to request this payment.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { paymentRequest, approvalRequestId } = await requestSupplierPayment({
+    const { result: { paymentRequest, approvalRequestId }, replayed } = await runIdempotentCreate('supplier-payment-request-create', idempotencyKey, fingerprintRequest(body), async () => requestSupplierPayment({
       purchaseOrderId: body.purchaseOrderId,
       operationId: body.operationId,
       track: body.track,
@@ -5684,10 +5689,11 @@ app.post('/api/supplier-payment-requests', requireRole('ceo', 'admin', 'finance'
       requestedByName: actor.name,
       requestedByRole: actor.role as any,
       reason: body.reason
-    }, recordAudit);
-    globalStore.supplierPaymentRequests.unshift(paymentRequest);
+    }, recordAudit));
+    if (!replayed) globalStore.supplierPaymentRequests.unshift(paymentRequest);
     res.status(201).json({ paymentRequest, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof SupplierPaymentError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5955,9 +5961,10 @@ app.post('/api/customer-refund-requests', requireRole('ceo', 'admin', 'finance')
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to request this refund.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { refundRequest, approvalRequestId } = await requestCustomerRefund({
+    const { result: { refundRequest, approvalRequestId }, replayed } = await runIdempotentCreate('customer-refund-request-create', idempotencyKey, fingerprintRequest(body), async () => requestCustomerRefund({
       customerId: body.customerId,
       creditBalanceId: body.creditBalanceId,
       amount: body.amount,
@@ -5965,10 +5972,11 @@ app.post('/api/customer-refund-requests', requireRole('ceo', 'admin', 'finance')
       requestedBy: actor.uid,
       requestedByName: actor.name,
       requestedByRole: actor.role as any
-    }, recordAudit);
-    globalStore.customerRefundRequests.unshift(refundRequest);
+    }, recordAudit));
+    if (!replayed) globalStore.customerRefundRequests.unshift(refundRequest);
     res.status(201).json({ refundRequest, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof CustomerRefundError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6012,9 +6020,10 @@ app.post('/api/debts', requireRole('ceo', 'admin', 'finance', 'operations'), asy
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const debt = await createDebt({
+    const { result: debt, replayed } = await runIdempotentCreate('debt-create', idempotencyKey, fingerprintRequest(body), async () => createDebt({
       customerId: body.customerId,
       customerName: body.customerName,
       type: body.type,
@@ -6027,10 +6036,11 @@ app.post('/api/debts', requireRole('ceo', 'admin', 'finance', 'operations'), asy
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.debts.unshift(debt);
+    }, recordAudit));
+    if (!replayed) globalStore.debts.unshift(debt);
     res.status(201).json(debt);
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof DebtError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6152,9 +6162,10 @@ app.post('/api/employee-custodies/issue', requireRole('ceo', 'admin', 'finance',
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to request this issuance.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { approvalRequestId } = await requestIssueCustodyFloat({
+    const { result: { approvalRequestId } } = await runIdempotentCreate('custody-issue-request-create', idempotencyKey, fingerprintRequest(body), async () => requestIssueCustodyFloat({
       employeeId: body.employeeId,
       employeeName: body.employeeName,
       amount: body.amount,
@@ -6162,9 +6173,10 @@ app.post('/api/employee-custodies/issue', requireRole('ceo', 'admin', 'finance',
       requestedBy: actor.uid,
       requestedByName: actor.name,
       requestedByRole: actor.role as any
-    }, recordAudit);
+    }, recordAudit));
     res.status(201).json({ approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6210,9 +6222,10 @@ app.post('/api/employee-expenses', requireRole('ceo', 'admin', 'finance', 'opera
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { expense, approvalRequestId } = await submitEmployeeExpense({
+    const { result: { expense, approvalRequestId }, replayed } = await runIdempotentCreate('employee-expense-create', idempotencyKey, fingerprintRequest(body), async () => submitEmployeeExpense({
       employeeId: body.employeeId,
       employeeName: body.employeeName,
       custodyId: body.custodyId,
@@ -6226,10 +6239,11 @@ app.post('/api/employee-expenses', requireRole('ceo', 'admin', 'finance', 'opera
       submittedBy: actor.uid,
       submittedByName: actor.name,
       submittedByRole: actor.role as any
-    }, recordAudit);
-    globalStore.employeeExpenses.unshift(expense);
+    }, recordAudit));
+    if (!replayed) globalStore.employeeExpenses.unshift(expense);
     res.status(201).json({ expense, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6282,9 +6296,10 @@ app.post('/api/supplier-invoices', requireRole('ceo', 'admin', 'finance', 'opera
   if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required.' });
   const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
   if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { invoice, approvalRequestId } = await submitSupplierInvoice({
+    const { result: { invoice, approvalRequestId }, replayed } = await runIdempotentCreate('supplier-invoice-create', idempotencyKey, fingerprintRequest(body), async () => submitSupplierInvoice({
       purchaseOrderId: body.purchaseOrderId,
       operationId: body.operationId,
       supplierId: supplier.id,
@@ -6298,17 +6313,20 @@ app.post('/api/supplier-invoices', requireRole('ceo', 'admin', 'finance', 'opera
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.supplierInvoices.unshift(invoice);
-    if (body.correctionOfInvoiceId) {
-      const origSnap = await admin.firestore().collection('supplier_invoices').doc(body.correctionOfInvoiceId).get();
-      if (origSnap.exists) {
-        const origIndex = globalStore.supplierInvoices.findIndex(i => i.id === body.correctionOfInvoiceId);
-        if (origIndex !== -1) globalStore.supplierInvoices[origIndex] = origSnap.data() as any;
+    }, recordAudit));
+    if (!replayed) {
+      globalStore.supplierInvoices.unshift(invoice);
+      if (body.correctionOfInvoiceId) {
+        const origSnap = await admin.firestore().collection('supplier_invoices').doc(body.correctionOfInvoiceId).get();
+        if (origSnap.exists) {
+          const origIndex = globalStore.supplierInvoices.findIndex(i => i.id === body.correctionOfInvoiceId);
+          if (origIndex !== -1) globalStore.supplierInvoices[origIndex] = origSnap.data() as any;
+        }
       }
     }
     res.status(201).json({ invoice, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof SupplierInvoiceError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6356,9 +6374,10 @@ app.post('/api/operational-expenses', requireRole('ceo', 'admin', 'finance', 'op
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { expense, approvalRequestId } = await submitOperationalExpense({
+    const { result: { expense, approvalRequestId }, replayed } = await runIdempotentCreate('operational-expense-create', idempotencyKey, fingerprintRequest(body), async () => submitOperationalExpense({
       operationId: body.operationId,
       documentationLevel: body.documentationLevel,
       category: body.category,
@@ -6375,10 +6394,11 @@ app.post('/api/operational-expenses', requireRole('ceo', 'admin', 'finance', 'op
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.operationalExpenses.unshift(expense);
+    }, recordAudit));
+    if (!replayed) globalStore.operationalExpenses.unshift(expense);
     res.status(201).json({ expense, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof OperationalExpenseError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6403,9 +6423,10 @@ app.post('/api/vehicle-receiving-records', requireRole('ceo', 'admin', 'operatio
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { record, approvalRequestId } = await recordVehicleReceiving({
+    const { result: { record, approvalRequestId }, replayed } = await runIdempotentCreate('vehicle-receiving-create', idempotencyKey, fingerprintRequest(body), async () => recordVehicleReceiving({
       operationId: body.operationId,
       purchaseOrderId: body.purchaseOrderId,
       supplierId: body.supplierId,
@@ -6419,10 +6440,11 @@ app.post('/api/vehicle-receiving-records', requireRole('ceo', 'admin', 'operatio
       receivedBy: actor.uid,
       receivedByName: actor.name,
       receivedByRole: actor.role as any
-    }, recordAudit);
-    globalStore.vehicleReceivingRecords.unshift(record);
+    }, recordAudit));
+    if (!replayed) globalStore.vehicleReceivingRecords.unshift(record);
     res.status(201).json({ record, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof VehicleReceivingError) return res.status(400).json({ error: error.message });
     throw error;
   }
