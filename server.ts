@@ -627,6 +627,21 @@ app.post('/api/customers/check-duplicate', (req, res) => {
 // already be durably saved and visible to every other user.
 const CUSTOMER_SERVER_OWNED_FIELDS = ['lifetimeValue', 'totalRentals', 'outstandingBalance', 'securityDepositsHeld'] as const;
 
+// Same idea for the general "edit vehicle details" route (PUT /api/fleet/:id):
+// financial rollups are only ever earned through contract/payment
+// operations, booking-state fields are only ever set by the transactional
+// reservation/contract/handover/return flows (Phase 3/5), and plate/
+// lifecycle/sale fields are only ever set by their own dedicated,
+// audited routes (assign-plate, /lifecycle). A generic vehicle-details
+// edit form has no legitimate reason to send any of these, so a client-
+// supplied value for one is always ignored, never merged in.
+const VEHICLE_SERVER_OWNED_FIELDS = [
+  'totalRevenue', 'totalExpenses', 'profitabilityScore',
+  'plateHistory', 'timeline', 'currentPlateAssignmentId',
+  'lifecycleStatus', 'saleRecord', 'archivedAt', 'archivedBy', 'archivedReason',
+  'currentCustomerId', 'currentContractId'
+] as const;
+
 app.post('/api/customers', asyncHandler(async (req, res) => {
   const data = req.body || {};
   const newId = await issueNextNumber('Customer');
@@ -684,6 +699,7 @@ app.put('/api/customers/:id', asyncHandler(async (req, res) => {
   const updated = {
     ...prev,
     ...body,
+    id: prev.id, // never let a client redirect this write to a different customer's document
     updatedAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString()
   };
@@ -838,6 +854,7 @@ app.put('/api/leads/:id', asyncHandler(async (req, res) => {
   const updated = {
     ...prev,
     ...req.body,
+    id: prev.id, // never let a client redirect this write to a different lead's document
     updatedAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString()
   };
@@ -955,7 +972,12 @@ app.post('/api/opportunities', asyncHandler(async (req, res) => {
 app.put('/api/opportunities/:id', asyncHandler(async (req, res) => {
   const index = globalStore.opportunities.findIndex(o => o.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Opportunity not found' });
-  const updated = { ...globalStore.opportunities[index], ...req.body, updatedAt: new Date().toISOString() };
+  const updated = {
+    ...globalStore.opportunities[index],
+    ...req.body,
+    id: globalStore.opportunities[index].id, // never let a client redirect this write to a different opportunity's document
+    updatedAt: new Date().toISOString()
+  };
   await updateDurable('opportunities', updated.id, updated);
   globalStore.opportunities[index] = updated;
   res.json(updated);
@@ -1372,7 +1394,15 @@ app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(asy
   const index = globalStore.vehicles.findIndex(v => v.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Vehicle not found' });
   const prev = globalStore.vehicles[index];
-  const updated = { ...prev, ...req.body, updatedAt: new Date().toISOString() };
+  const body: Record<string, any> = { ...(req.body || {}) };
+  for (const field of VEHICLE_SERVER_OWNED_FIELDS) delete body[field];
+
+  const updated = {
+    ...prev,
+    ...body,
+    id: prev.id, // never let a client redirect this write to a different vehicle's document
+    updatedAt: new Date().toISOString()
+  };
   await updateDurable('vehicles', updated.id, updated);
   globalStore.vehicles[index] = updated;
 
@@ -3335,7 +3365,12 @@ app.post('/api/tasks', asyncHandler(async (req, res) => {
 app.put('/api/tasks/:id', asyncHandler(async (req, res) => {
   const index = globalStore.tasks.findIndex(t => t.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Task not found' });
-  const updated = { ...globalStore.tasks[index], ...req.body, updatedAt: new Date().toISOString() };
+  const updated = {
+    ...globalStore.tasks[index],
+    ...req.body,
+    id: globalStore.tasks[index].id, // never let a client redirect this write to a different task's document
+    updatedAt: new Date().toISOString()
+  };
   await updateDurable('tasks', updated.id, updated);
   globalStore.tasks[index] = updated;
   res.json(updated);
