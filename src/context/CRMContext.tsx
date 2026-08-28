@@ -137,7 +137,7 @@ interface CRMContextType {
   processReturn: (contractId: string, returnData: any) => Promise<Contract>;
   
   recordPayment: (paymentData: any) => Promise<Payment>;
-  applyDeposit: (depositId: string, amount: number, reason: string) => Promise<Deposit>;
+  applyDeposit: (depositId: string, amount: number, reason: string, chargeId: string) => Promise<Deposit>;
   refundDeposit: (depositId: string, amount: number) => Promise<Deposit>;
   
   uploadBankBatch: (batchData: any) => Promise<void>;
@@ -964,11 +964,11 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return pay;
   };
 
-  const applyDeposit = async (depositId: string, amount: number, reason: string) => {
+  const applyDeposit = async (depositId: string, amount: number, reason: string, chargeId: string) => {
     const res = await fetch(`/api/deposits/${depositId}/apply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ applyAmount: amount, reason })
+      body: JSON.stringify({ applyAmount: amount, reason, chargeId })
     });
     let data: { deposit: Deposit };
     try {

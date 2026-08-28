@@ -12,9 +12,9 @@ import { formatDate } from '../../lib/dateFormat';
 
 export const FinanceLedgerView: React.FC = () => {
   const { language, t } = useLanguage();
-  const { 
-    invoices, deposits, payments, customers, 
-    recordPayment, applyDeposit, refundDeposit 
+  const {
+    invoices, deposits, payments, customers, charges,
+    recordPayment, applyDeposit, refundDeposit
   } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'invoices' | 'deposits' | 'payments'>('invoices');
@@ -27,6 +27,7 @@ export const FinanceLedgerView: React.FC = () => {
   const [depositActionType, setDepositActionType] = useState<'apply' | 'refund'>('refund');
   const [depositAmountInput, setDepositAmountInput] = useState<number>(0);
   const [depositReasonInput, setDepositReasonInput] = useState('');
+  const [depositChargeIdInput, setDepositChargeIdInput] = useState('');
 
   const [paymentForm, setPaymentForm] = useState({
     customerId: '',
@@ -64,10 +65,18 @@ export const FinanceLedgerView: React.FC = () => {
     if (depositActionType === 'refund') {
       await refundDeposit(selectedDeposit.id, depositAmountInput);
     } else {
-      await applyDeposit(selectedDeposit.id, depositAmountInput, depositReasonInput);
+      if (!depositChargeIdInput) return;
+      await applyDeposit(selectedDeposit.id, depositAmountInput, depositReasonInput, depositChargeIdInput);
     }
     setDepositActionModalOpen(false);
   };
+
+  // Rule: a deposit can only be deducted against an existing, approved
+  // charge/claim that hasn't already been used for a prior deduction --
+  // never a free-text reason alone.
+  const eligibleChargesForSelectedDeposit = (charges || []).filter(c =>
+    c.customerId === selectedDeposit?.customerId && c.approvalStatus === 'approved' && !c.deductedFromDepositId
+  );
 
   const totalInvoiced = (invoices || []).reduce((s, i) => s + (i?.totalAmount || 0), 0);
   const totalPaid = (payments || []).reduce((s, p) => s + (p?.amount || 0), 0);
@@ -251,6 +260,7 @@ export const FinanceLedgerView: React.FC = () => {
                               setSelectedDeposit(dep);
                               setDepositActionType('apply');
                               setDepositAmountInput(dep.balance || 0);
+                              setDepositChargeIdInput('');
                               setDepositActionModalOpen(true);
                             }}
                             className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25"
@@ -405,17 +415,39 @@ export const FinanceLedgerView: React.FC = () => {
           </div>
 
           {depositActionType === 'apply' && (
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Deduction Reason (Traffic fine / Salik / Damage) *</label>
-              <input
-                type="text"
-                required
-                value={depositReasonInput}
-                onChange={(e) => setDepositReasonInput(e.target.value)}
-                placeholder="e.g. Dubai Police Fine #892182 (Speeding on SZR)"
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
+            <>
+              <div>
+                <label className="block text-zinc-400 font-medium mb-1">Charge / Claim *</label>
+                <select
+                  required
+                  value={depositChargeIdInput}
+                  onChange={(e) => setDepositChargeIdInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+                >
+                  <option value="">Select an approved charge to deduct against...</option>
+                  {eligibleChargesForSelectedDeposit.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.id} -- {c.type} -- {c.totalAmount.toLocaleString()} AED -- {c.description}
+                    </option>
+                  ))}
+                </select>
+                {eligibleChargesForSelectedDeposit.length === 0 && (
+                  <p className="text-amber-400 text-[11px] mt-1">
+                    No approved, undeducted charges on this customer's account. A deposit can never be deducted directly -- raise and approve a charge first.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-zinc-400 font-medium mb-1">Notes (optional)</label>
+                <input
+                  type="text"
+                  value={depositReasonInput}
+                  onChange={(e) => setDepositReasonInput(e.target.value)}
+                  placeholder="Additional context for this deduction"
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+                />
+              </div>
+            </>
           )}
 
           <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">

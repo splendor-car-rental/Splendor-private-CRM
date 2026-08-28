@@ -314,15 +314,17 @@ describe('POST /api/payments -- idempotent payment recording', () => {
 });
 
 describe('POST /api/deposits/:id/apply and /refund', () => {
-  it('applies part of a held deposit against outstanding charges', async () => {
-    seedDoc('deposits', 'DEP-APPLY-1', { id: 'DEP-APPLY-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
+  it('applies part of a held deposit against an existing, approved charge -- and marks that charge consumed', async () => {
+    seedDoc('deposits', 'DEP-APPLY-1', { id: 'DEP-APPLY-1', customerId: 'CUS-DEP-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
+    seedDoc('charges', 'CHG-DEP-1', { id: 'CHG-DEP-1', customerId: 'CUS-DEP-1', type: 'fuel', totalAmount: 300, description: 'Fuel shortfall', approvalStatus: 'approved' });
     const res = await request(app)
       .post('/api/deposits/DEP-APPLY-1/apply')
       .set(authAs(FINANCE_UID))
-      .send({ applyAmount: 300, reason: 'Fuel shortfall' });
+      .send({ applyAmount: 300, chargeId: 'CHG-DEP-1' });
     expect(res.status).toBe(200);
     expect(res.body.deposit.appliedAmount).toBe(300);
     expect(res.body.deposit.balance).toBe(700);
+    expect(adminMock.store.get('charges')?.get('CHG-DEP-1').deductedFromDepositId).toBe('DEP-APPLY-1');
   });
 
   it('refunds a held deposit', async () => {
@@ -336,12 +338,42 @@ describe('POST /api/deposits/:id/apply and /refund', () => {
   });
 
   it('rejects applying more than the remaining deposit balance', async () => {
-    seedDoc('deposits', 'DEP-OVERAPPLY-1', { id: 'DEP-OVERAPPLY-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedDoc('deposits', 'DEP-OVERAPPLY-1', { id: 'DEP-OVERAPPLY-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedDoc('charges', 'CHG-DEP-2', { id: 'CHG-DEP-2', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 5000, description: 'Too much', approvalStatus: 'approved' });
     const res = await request(app)
       .post('/api/deposits/DEP-OVERAPPLY-1/apply')
       .set(authAs(FINANCE_UID))
-      .send({ applyAmount: 5000, reason: 'Too much' });
+      .send({ applyAmount: 5000, chargeId: 'CHG-DEP-2' });
     expect(res.status).not.toBe(200);
+  });
+
+  it('rejects a deposit deduction with no chargeId -- never a direct deduction without a backing charge/claim', async () => {
+    seedDoc('deposits', 'DEP-NOCHG-1', { id: 'DEP-NOCHG-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    const res = await request(app)
+      .post('/api/deposits/DEP-NOCHG-1/apply')
+      .set(authAs(FINANCE_UID))
+      .send({ applyAmount: 100, reason: 'No charge attached' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects deducting against a charge that is not yet approved', async () => {
+    seedDoc('deposits', 'DEP-PENDCHG-1', { id: 'DEP-PENDCHG-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedDoc('charges', 'CHG-DEP-3', { id: 'CHG-DEP-3', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, description: 'Pending review', approvalStatus: 'pending_approval' });
+    const res = await request(app)
+      .post('/api/deposits/DEP-PENDCHG-1/apply')
+      .set(authAs(FINANCE_UID))
+      .send({ applyAmount: 100, chargeId: 'CHG-DEP-3' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects deducting against a charge that was already deducted from a deposit', async () => {
+    seedDoc('deposits', 'DEP-REUSED-1', { id: 'DEP-REUSED-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedDoc('charges', 'CHG-DEP-4', { id: 'CHG-DEP-4', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, description: 'Already used', approvalStatus: 'approved', deductedFromDepositId: 'DEP-SOME-OTHER' });
+    const res = await request(app)
+      .post('/api/deposits/DEP-REUSED-1/apply')
+      .set(authAs(FINANCE_UID))
+      .send({ applyAmount: 100, chargeId: 'CHG-DEP-4' });
+    expect(res.status).toBe(400);
   });
 });
 

@@ -2365,12 +2365,24 @@ app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', '
   res.status(201).json(deposit);
 }));
 
+// Rule: no direct deduction from a security deposit -- a charge/claim must
+// already exist and already be approved before any amount can be taken
+// from the deposit against it. A chargeId is mandatory; the referenced
+// AdditionalCharge is validated (belongs to the same customer, approved,
+// not already used to justify a prior deduction, and the amount taken
+// can't exceed what the charge itself is for) and marked consumed in the
+// same transaction, so it can never be deducted twice.
 app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
-  const { applyAmount, reason, actorId, actorName } = req.body;
+  const { applyAmount, reason, chargeId, actorId, actorName } = req.body;
   const amt = Number(applyAmount);
   const now = new Date().toISOString();
 
+  if (!chargeId) {
+    return res.status(400).json({ error: 'chargeId is required -- a deposit can only be deducted against an existing, approved charge/claim, never a free-text reason alone.' });
+  }
+
   const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
+  const chargeRef = admin.firestore().collection('charges').doc(chargeId);
   let updatedDeposit: any;
   try {
     updatedDeposit = await runDurableTransaction(async (tx, db) => {
@@ -2379,15 +2391,24 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
       const deposit = snap.data() as any;
       if (amt > deposit.balance) throw new PersistenceError('Apply amount exceeds held balance');
 
+      const chargeSnap = await tx.get(chargeRef);
+      if (!chargeSnap.exists) throw new PersistenceError('Charge not found');
+      const charge = chargeSnap.data() as any;
+      if (charge.customerId !== deposit.customerId) throw new PersistenceError('Charge does not belong to this deposit\'s customer');
+      if (charge.approvalStatus !== 'approved') throw new PersistenceError('Charge must be approved before it can justify a deposit deduction');
+      if (charge.deductedFromDepositId) throw new PersistenceError('Charge has already been deducted from a deposit');
+      if (amt > charge.totalAmount) throw new PersistenceError('Apply amount exceeds the charge\'s own total amount');
+
       const updated = {
         ...deposit,
         appliedAmount: deposit.appliedAmount + amt,
         balance: deposit.balance - amt,
-        appliedReason: reason,
+        appliedReason: reason || `${charge.type}: ${charge.description}`,
         status: deposit.balance - amt === 0 ? 'applied' : 'held',
         updatedAt: now
       };
       tx.set(depositRef, updated, { merge: true });
+      tx.set(chargeRef, { deductedFromDepositId: deposit.id }, { merge: true });
 
       if (deposit.customerId) {
         const customerRef = db.collection('customers').doc(deposit.customerId);
@@ -2400,8 +2421,9 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
       return updated;
     });
   } catch (err) {
-    if (err instanceof PersistenceError && (err.message === 'Deposit not found' || err.message === 'Apply amount exceeds held balance')) {
-      return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
+    if (err instanceof PersistenceError) {
+      const notFound = err.message === 'Deposit not found' || err.message === 'Charge not found';
+      return res.status(notFound ? 404 : 400).json({ error: err.message });
     }
     throw err;
   }
@@ -2410,6 +2432,8 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
   if (index !== -1) globalStore.deposits[index] = updatedDeposit;
   const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
   if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
+  const chargeIndex = globalStore.charges.findIndex(c => c.id === chargeId);
+  if (chargeIndex !== -1) globalStore.charges[chargeIndex] = { ...globalStore.charges[chargeIndex], deductedFromDepositId: updatedDeposit.id };
 
   await recordAudit({
     userId: actorId || 'USR-004',
@@ -2418,8 +2442,8 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
     entityType: 'Deposit',
     entityId: updatedDeposit.id,
     action: 'update',
-    newValue: `Applied ${amt} AED from deposit against charges: ${reason}`,
-    reason
+    newValue: `Applied ${amt} AED from deposit against charge ${chargeId}: ${reason || ''}`,
+    reason: reason || `Deducted against charge ${chargeId}`
   });
 
   res.json({ success: true, deposit: updatedDeposit });

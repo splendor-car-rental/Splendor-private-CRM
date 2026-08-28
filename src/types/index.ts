@@ -592,6 +592,8 @@ export interface AdditionalCharge {
   approvedBy?: string;
   createdBy: string;
   timestamp: string;
+  /** Set once this charge has been used to justify a deposit deduction (Splendor Procurement rule: no direct deduction from a deposit -- a charge/claim must exist and be approved first). Prevents the same charge from being deducted twice. */
+  deductedFromDepositId?: string;
 }
 
 export type DepositStatus = 'collected' | 'held' | 'applied' | 'partially_refunded' | 'refunded';
