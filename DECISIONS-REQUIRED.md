@@ -88,6 +88,23 @@ Neither is a data or security risk either way.
 Classification is still wanted, and if so, the actual classification rule
 per settlement route.
 
+**Update (2026-08-28): implemented per explicit approval.** The user
+stated this classification is "an approved business decision" and asked
+for it to be made real. `POST /api/bank-transactions/:id/reconcile` now
+requires an explicit `classification` (one of the 7 values; `unclassified`
+is a deliberate choice, never a silent default), and a new
+`POST /api/bank-transactions/:id/reclassify` route allows changing it later
+with a mandatory reason, recorded in an auditable `classificationHistory`
+array on the transaction — reclassification never touches the transaction's
+credit/debit/paidAmount/balanceDue. Both routes are idempotency-key
+protected and require an authenticated actor (no more trusting a client-
+supplied actor id). `BankReconciliationView.tsx` now requires an explicit
+classification choice before confirming a match (no pre-selected default)
+and exposes a reclassify flow. Verified via automated tests (added to
+`tests/coreWorkflows.test.ts`) and real-browser verification against a
+Firestore/Auth emulator. This item is now IMPLEMENTED and VERIFIED, not yet
+APPROVED as production behavior — that determination is the user's alone.
+
 ---
 
 ## 3. RTA integration — feasibility only, no implementation
@@ -121,3 +138,114 @@ officially permitted.
 **What's needed to close this:** a decision on whether to pursue an
 official RTA channel at all, made after a business-side inquiry to RTA —
 not something this audit can resolve alone.
+
+---
+
+## 4. Balance-offset approval-time re-validation race (found, not fixed)
+
+**The problem.** `src/server/balances.ts`'s `computePartyBalance()` is
+fully event-sourced — it recomputes a party's live net balance from scratch
+by summing opening balances and every *approved* offset each time it's
+called, clamping at zero (`Math.max(0, net - offset.offsetAmount)`). Two
+offset requests can both be validated at request time against the same
+unoffset balance (each individually valid), then both approved. Because
+each `OffsetRequest` document is independent and the clamp prevents a
+negative balance, no data is corrupted and no document overwrites another
+— but the two offsets together can exceed what the party actually owed,
+silently over-crediting one side against a balance that no longer existed
+by the time the second approval landed.
+
+**Why this was not fixed in this session.** Unlike the lost-update races
+fixed elsewhere in this audit (debts.ts, customerRefunds.ts,
+employeeCustody.ts, supplierPayments.ts — all a same-document
+read-then-overwrite, closed with a Firestore transaction), this is a
+different failure mode: a validation race across multiple independent
+documents and a live aggregate query. Closing it safely requires deciding
+*behavior*, not just adding a transaction: should the second approval be
+auto-rejected, auto-reduced to whatever balance remains, or require the
+approver to see a live-recomputed balance before deciding? That is a
+business/UX judgment call, not a mechanical fix, and picking wrong risks
+either under-crediting a legitimate offset or building a false sense of
+protection.
+
+**Impact today.** Low-probability (needs two pending offset requests
+against the same party, both approved within the same short window) and
+bounded (never goes negative), but real. No known occurrence in production
+data — this was found by code reading, not from an incident.
+
+**Options:**
+1. **Re-validate the live balance inside the approval transaction** and
+   reject the second approval outright if it would now exceed the
+   remaining balance, forcing the approver to re-request at the correct
+   amount.
+2. **Auto-clamp the second approval** to whatever balance actually remains
+   at decision time, recording the clamped amount plainly on the record.
+3. **Accept the current bounded risk** and document it, given its low
+   probability and that it can never produce an actual negative balance.
+
+**What's needed to close this:** a decision on which of the three
+behaviors is correct, since options 1 and 2 both change what an approver
+sees/is allowed to do compared to today.
+
+---
+
+## 5. Systemic idempotency gap across Procurement Phase 1 create-routes
+
+**The problem.** `runIdempotent()` (`src/server/idempotency.ts`) is the
+established idempotency-key pattern already used for `/api/payments` and
+(as of this session) the bank-reconciliation and reclassify routes. A
+repo-wide survey during this session's concurrency audit found it is used
+in **zero** of the Procurement Phase 1 create-routes (purchase orders,
+supplier payments, customer refunds, debts, employee custody/expenses,
+supplier invoices, operational expenses, vehicle receiving, supplier
+quotes). This is a different risk from the lost-update races fixed in this
+session: a network retry or an impatient double-click on a *create* call
+(e.g. "record this settlement," "submit this expense") can create two
+separate records for what was meant to be one action, rather than one
+write silently overwriting another.
+
+**Why this was not fixed in this session.** Retrofitting idempotency keys
+across ~9 modules' create-routes (client header generation, server-side
+wrapping, and a test per route) is a large, mechanical but non-trivial
+change that touches every Procurement create endpoint — judged as
+Phase-2-sized rather than a "safe, obviously-in-scope" localized fix
+alongside the lost-update fixes this session prioritized instead.
+
+**Impact today.** Genuine duplicate-submission risk exists on every
+Procurement create-route, but requires an actual retry or double-submit to
+trigger — no known production occurrence.
+
+**What's needed to close this:** either explicit prioritization to do the
+retrofit as its own tracked piece of work, or an accepted-risk decision
+that this is deferred until a specific route shows a real duplicate.
+
+---
+
+## 6. Eight Procurement Phase 1 workflows have zero frontend UI
+
+**The problem.** Of the ~15 Procurement Phase 1 backend workflows
+(`src/server/*.ts`), only Suppliers, Purchase Orders (+ amendment), the
+universal Approvals inbox, TARS, Late Fees, and (as of this session) Debts
+have any UI in `ProcurementView.tsx`. Supplier Quotes, Supplier Payments,
+Balances/Offsetting, Customer Refunds, Employee Custody/Expenses, Supplier
+Invoices, Operational Expenses, and Vehicle Receiving are backend-complete
+(each with its own HTTP test coverage in `tests/procurement.test.ts`) but
+have zero context-layer wiring and zero screen — confirmed by a
+repository-wide search finding no reference to any of their API paths
+outside `server.ts` itself.
+
+**Why this was not built in this session.** Each of the workflows already
+built to full depth this session (PO Amendment, TARS, Late Fees, Debts)
+required substantial per-feature UI work — new modals, an approval-context
+resolver, real-browser verification — on the order of what building all
+eight remaining ones properly would multiply eight-fold. Building all
+eight in the time remaining would have meant shipping shallow,
+under-verified screens, which the mission's own instructions explicitly
+warned against ("use engineering judgment... rather than shipping 8
+shallow/disconnected screens").
+
+**What's needed to close this:** a decision on priority order for the
+remaining eight (which ones the business actually needs operators to use
+day-to-day vs. which can stay API-only for now), then each one built to
+the same depth (context wiring, modals, approval-context resolution, real
+browser verification) as PO Amendment/TARS/Late Fees/Debts.
