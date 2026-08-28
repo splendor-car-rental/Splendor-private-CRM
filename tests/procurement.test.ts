@@ -722,3 +722,165 @@ describe('Supplier quotes/offers: every offer documented, known source, staff re
     expect(second.status).toBe(400);
   });
 });
+
+describe('Supplier payments: post_verification vs advance tracks, mandatory Segregation of Duties', () => {
+  it('rejects a post_verification payment when nothing on the PO has been received yet', async () => {
+    const po = await createApprovedPO();
+    const res = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({
+        purchaseOrderId: po.id, track: 'post_verification', amount: 200,
+        paymentMethod: 'bank_transfer', reason: 'Paying for brake pads'
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('allows a post_verification payment once a line item is received, and a different approver must decide it', async () => {
+    const po = await createApprovedPO();
+    const line = po.lineItems[0];
+    await request(app).post(`/api/purchase-orders/${po.id}/line-items/${line.id}/receive`).set(authAs(OPS_UID));
+
+    const res = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({
+        purchaseOrderId: po.id, operationId: line.operationId, track: 'post_verification', amount: 200,
+        paymentMethod: 'bank_transfer', reason: 'Paying for received brake pads'
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.paymentRequest.status).toBe('pending_approval');
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    const decideRes = await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Verified and approved.' });
+    expect(decideRes.status).toBe(200);
+
+    const paymentRes = await request(app).get(`/api/supplier-payment-requests/${res.body.paymentRequest.id}`).set(authAs(OPS_UID));
+    expect(paymentRes.body.status).toBe('approved');
+
+    // Marking paid is a separate, later step recording that funds actually moved.
+    const markPaid = await request(app)
+      .post(`/api/supplier-payment-requests/${res.body.paymentRequest.id}/mark-paid`)
+      .set(authAs(FINANCE_UID));
+    expect(markPaid.status).toBe(200);
+    expect(markPaid.body.status).toBe('paid');
+    expect(markPaid.body.paidAt).toBeTruthy();
+
+    // The Operation now shows this payment linked to it.
+    const opRes = await request(app).get(`/api/procurement/operations/${line.operationId}`).set(authAs(OPS_UID));
+    expect(opRes.body.supplierPaymentIds).toContain(res.body.paymentRequest.id);
+  });
+
+  it('allows an advance payment with nothing received yet, and an advance can be increased as a new independent movement', async () => {
+    const po = await createApprovedPO();
+
+    const advanceRes = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, track: 'advance', amount: 100, paymentMethod: 'bank_transfer', reason: 'Advance to secure the order' });
+    expect(advanceRes.status).toBe(201);
+    await request(app)
+      .post(`/api/procurement/approvals/${advanceRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Advance approved.' });
+
+    // A further advance is a brand-new, independent request, not an edit.
+    const increaseRes = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({
+        purchaseOrderId: po.id, track: 'advance', amount: 50, paymentMethod: 'bank_transfer',
+        isIncreaseOfRequestId: advanceRes.body.paymentRequest.id, reason: 'Supplier requested more upfront'
+      });
+    expect(increaseRes.status).toBe(201);
+    expect(increaseRes.body.paymentRequest.id).not.toBe(advanceRes.body.paymentRequest.id);
+    expect(increaseRes.body.paymentRequest.isIncreaseOfRequestId).toBe(advanceRes.body.paymentRequest.id);
+
+    // Rejects increasing a non-advance (post_verification) track.
+    const badTrack = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({
+        purchaseOrderId: po.id, track: 'post_verification', amount: 50, paymentMethod: 'bank_transfer',
+        isIncreaseOfRequestId: advanceRes.body.paymentRequest.id, reason: 'bad'
+      });
+    expect(badTrack.status).toBe(400);
+  });
+
+  it('creates an advance settlement when a PO is cancelled after an advance was paid, approval-gated, human-supplied terms', async () => {
+    const po = await createApprovedPO();
+    const advanceRes = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, track: 'advance', amount: 300, paymentMethod: 'bank_transfer', reason: 'Advance paid' });
+    await request(app)
+      .post(`/api/procurement/approvals/${advanceRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const cancelRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Order no longer needed' });
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Cancellation approved.' });
+
+    const settlementRes = await request(app)
+      .post('/api/advance-settlements')
+      .set(authAs(FINANCE_UID))
+      .send({
+        purchaseOrderId: po.id, originalAdvanceAmount: 300,
+        amountDueToSupplierPerCancellationTerms: 50, deductionsOrFees: 10,
+        reason: 'Supplier cancellation terms allow them to retain 50 AED'
+      });
+    expect(settlementRes.status).toBe(201);
+    expect(settlementRes.body.settlement.amountToBeRefunded).toBe(250);
+    expect(settlementRes.body.settlement.netRefund).toBe(240);
+    expect(settlementRes.body.settlement.refundStatus).toBe('pending');
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${settlementRes.body.approvalRequestId}/decide`)
+      .set(authAs(FINANCE_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${settlementRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Settlement approved.' });
+
+    const settlementsRes = await request(app).get(`/api/advance-settlements?purchaseOrderId=${po.id}`).set(authAs(FINANCE_UID));
+    expect(settlementsRes.body[0].refundStatus).toBe('in_progress');
+
+    const completeRes = await request(app)
+      .post(`/api/advance-settlements/${settlementRes.body.settlement.id}/mark-completed`)
+      .set(authAs(FINANCE_UID));
+    expect(completeRes.status).toBe(200);
+    expect(completeRes.body.refundStatus).toBe('completed');
+  });
+
+  it('rejects a payment request with a zero amount, and rejects "other" payment method without a description', async () => {
+    const po = await createApprovedPO();
+    const zeroAmount = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, track: 'advance', amount: 0, paymentMethod: 'cash', reason: 'test' });
+    expect(zeroAmount.status).toBe(400);
+
+    const missingOther = await request(app)
+      .post('/api/supplier-payment-requests')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, track: 'advance', amount: 100, paymentMethod: 'other', reason: 'test' });
+    expect(missingOther.status).toBe(400);
+  });
+});

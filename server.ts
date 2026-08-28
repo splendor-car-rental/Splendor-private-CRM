@@ -36,6 +36,10 @@ import {
 } from './src/server/purchaseOrders';
 import { addSupplierQuote, requestSupplierQuoteSelection, SupplierQuoteError } from './src/server/supplierQuotes';
 import {
+  requestSupplierPayment, markSupplierPaymentPaid, requestAdvanceSettlement,
+  markAdvanceSettlementCompleted, SupplierPaymentError
+} from './src/server/supplierPayments';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -5384,6 +5388,123 @@ app.post('/api/supplier-quotes/:id/select', requireRole('ceo', 'admin', 'finance
   }
 }));
 
+// ---- Supplier payments: post_verification vs advance tracks, mandatory Segregation of Duties ----
+app.get('/api/supplier-payment-requests', (req, res) => {
+  const { purchaseOrderId, supplierId } = req.query;
+  let payments = globalStore.supplierPaymentRequests;
+  if (purchaseOrderId) payments = payments.filter(p => p.purchaseOrderId === purchaseOrderId);
+  if (supplierId) payments = payments.filter(p => p.supplierId === supplierId);
+  res.json(payments);
+});
+
+app.get('/api/supplier-payment-requests/:id', (req, res) => {
+  const payment = globalStore.supplierPaymentRequests.find(p => p.id === req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment request not found.' });
+  res.json(payment);
+});
+
+app.post('/api/supplier-payment-requests', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this payment.' });
+  }
+
+  try {
+    const { paymentRequest, approvalRequestId } = await requestSupplierPayment({
+      purchaseOrderId: body.purchaseOrderId,
+      operationId: body.operationId,
+      track: body.track,
+      amount: body.amount,
+      paymentMethod: body.paymentMethod,
+      paymentMethodOther: body.paymentMethodOther,
+      isIncreaseOfRequestId: body.isIncreaseOfRequestId,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any,
+      reason: body.reason
+    }, recordAudit);
+    globalStore.supplierPaymentRequests.unshift(paymentRequest);
+    res.status(201).json({ paymentRequest, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof SupplierPaymentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/supplier-payment-requests/:id/mark-paid', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const paymentRequest = await markSupplierPaymentPaid({
+      paymentRequestId: req.params.id,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.supplierPaymentRequests.findIndex(p => p.id === paymentRequest.id);
+    if (index !== -1) globalStore.supplierPaymentRequests[index] = paymentRequest;
+    res.json(paymentRequest);
+  } catch (error: any) {
+    if (error instanceof SupplierPaymentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Advance settlements: created when a PO/operation is cancelled after an advance was paid ----
+app.get('/api/advance-settlements', (req, res) => {
+  const { purchaseOrderId } = req.query;
+  let settlements = globalStore.advanceSettlements;
+  if (purchaseOrderId) settlements = settlements.filter(s => s.purchaseOrderId === purchaseOrderId);
+  res.json(settlements);
+});
+
+app.post('/api/advance-settlements', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this settlement.' });
+  }
+
+  try {
+    const { settlement, approvalRequestId } = await requestAdvanceSettlement({
+      purchaseOrderId: body.purchaseOrderId,
+      operationId: body.operationId,
+      originalAdvanceAmount: body.originalAdvanceAmount,
+      amountDueToSupplierPerCancellationTerms: body.amountDueToSupplierPerCancellationTerms,
+      deductionsOrFees: body.deductionsOrFees,
+      reason: body.reason,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    globalStore.advanceSettlements.unshift(settlement);
+    res.status(201).json({ settlement, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof SupplierPaymentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/advance-settlements/:id/mark-completed', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const settlement = await markAdvanceSettlementCompleted({
+      settlementId: req.params.id,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.advanceSettlements.findIndex(s => s.id === settlement.id);
+    if (index !== -1) globalStore.advanceSettlements[index] = settlement;
+    res.json(settlement);
+  } catch (error: any) {
+    if (error instanceof SupplierPaymentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -5443,6 +5564,36 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
           globalStore.supplierQuotes[index] = d.data() as any;
         }
       });
+    }
+
+    if (decided.entityType === 'SupplierPaymentRequest' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('supplier_payment_requests').doc(decided.entityId).get();
+      if (snap.exists) {
+        const paymentData = snap.data() as any;
+        const index = globalStore.supplierPaymentRequests.findIndex(p => p.id === decided.entityId);
+        if (index !== -1) globalStore.supplierPaymentRequests[index] = paymentData;
+        else globalStore.supplierPaymentRequests.unshift(paymentData);
+
+        if (paymentData.operationId) {
+          const opSnap = await admin2.firestore().collection('procurement_operations').doc(paymentData.operationId).get();
+          if (opSnap.exists) {
+            const opIndex = globalStore.procurementOperations.findIndex(o => o.id === paymentData.operationId);
+            if (opIndex !== -1) globalStore.procurementOperations[opIndex] = opSnap.data() as any;
+            else globalStore.procurementOperations.unshift(opSnap.data() as any);
+          }
+        }
+      }
+    }
+
+    if (decided.entityType === 'AdvanceSettlement' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('advance_settlements').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.advanceSettlements.findIndex(s => s.id === decided.entityId);
+        if (index !== -1) globalStore.advanceSettlements[index] = snap.data() as any;
+        else globalStore.advanceSettlements.unshift(snap.data() as any);
+      }
     }
 
     res.json(decided);
