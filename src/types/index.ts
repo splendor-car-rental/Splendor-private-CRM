@@ -929,6 +929,48 @@ export interface ApprovalRequest {
   createdAt: string;
 }
 
+// ----------------------------------------------------
+// OPERATIONAL MONITORING & DEAD-LETTER QUEUE (Phase 23.7)
+// ----------------------------------------------------
+export interface HealthCheckResult {
+  checkedAt: string;
+  overallStatus: 'healthy' | 'degraded' | 'unhealthy';
+  checks: {
+    api: { status: 'healthy'; uptimeSeconds: number; nodeVersion: string; memoryUsedMb: number; runtime: 'vercel' | 'node' };
+    firestore: { status: 'healthy' | 'unhealthy'; latencyMs?: number; error?: string };
+    whatsapp: { status: 'configured' | 'not_configured' | 'degraded'; recentFailureCount: number };
+    ai: { status: 'configured' | 'not_configured' };
+    backgroundJobs: { status: 'healthy' | 'stale' | 'never_run'; lastRunAt?: string; alertsFired?: number; staleSinceHours?: number };
+    deadLetterQueue: { status: 'healthy' | 'has_unresolved'; unresolvedCount: number };
+  };
+}
+
+/**
+ * A background operation (currently: a WhatsApp send) that failed and
+ * needs a human or a retry to resolve it, instead of disappearing into a
+ * log line no one is watching. Lifecycle: created already-failed and
+ * -recorded (a dead-letter entry only ever exists because something
+ * failed) -> alertedAt is set the first time the operational-health sweep
+ * notices a non-empty queue and successfully raises it -> retryable is
+ * implicit (true whenever status !== 'resolved') -> resolved either by a
+ * successful retry or a human explicitly closing it out with a note.
+ */
+export interface FailedJob {
+  id: string;
+  jobType: 'whatsapp_send';
+  status: 'failed' | 'alerted' | 'resolved';
+  payload: Record<string, unknown>;
+  error: string;
+  attempts: number;
+  createdAt: string;
+  lastAttemptAt?: string;
+  alertedAt?: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  resolvedByName?: string;
+  resolutionNote?: string;
+}
+
 export interface CustomFieldDefinition {
   id: string;
   entityType: 'customer' | 'lead' | 'vehicle' | 'contract' | 'reservation';

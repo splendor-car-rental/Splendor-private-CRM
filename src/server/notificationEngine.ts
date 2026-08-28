@@ -17,6 +17,8 @@
 import { globalStore } from './dataStore';
 import { sendWhatsAppMessage, getWhatsAppGroupRecipients } from './whatsapp';
 import { getRuleValue } from './businessRules';
+import { recordFailedJob, markAllAlerted, getDeadLetterCache, retryFailedJob } from './deadLetterQueue';
+import { checkOperationalHealth, recordBackgroundJobRun } from './operationalHealth';
 
 /** True when the Phase 23.4 emergency kill switch for WhatsApp outbound messaging is tripped. */
 function whatsappOutboundSuspended(): boolean {
@@ -70,6 +72,9 @@ export async function dispatchNotificationEvent(eventKey: string, messageEn: str
       errorMessage: result.error,
       createdAt: new Date().toISOString()
     });
+    if (result.status === 'failed') {
+      await recordFailedJob('whatsapp_send', { phone: r.phone, message: text, eventKey, recipientLabel: r.label }, result.error || 'Unknown WhatsApp send failure.');
+    }
   }
 
   // Cap the in-memory log so a chatty event can't grow this unboundedly
@@ -120,6 +125,9 @@ export async function dispatchCustomReminder(reminderId: string, title: string, 
       errorMessage: result.error,
       createdAt: new Date().toISOString()
     });
+    if (result.status === 'failed') {
+      await recordFailedJob('whatsapp_send', { phone: r.phone, message: text, reminderId, recipientLabel: r.label }, result.error || 'Unknown WhatsApp send failure.');
+    }
   }
 
   if (notConfiguredCount === recipients.length) return 'not_configured';
@@ -161,6 +169,13 @@ export async function dispatchCustomerNotification(eventKey: string, customerId:
     errorMessage: result.error,
     createdAt: new Date().toISOString()
   });
+
+  // Only a real send attempt that failed is retryable -- "no phone on
+  // file" has nothing a retry could fix, so it stays a log line, not a
+  // dead-letter entry someone would retry into an identical failure.
+  if (result.status === 'failed' && customerPhone) {
+    await recordFailedJob('whatsapp_send', { phone: customerPhone, message: text, eventKey, recipientLabel: customerName }, result.error || 'Unknown WhatsApp send failure.');
+  }
 
   if (globalStore.whatsappMessageLog.length > 500) {
     globalStore.whatsappMessageLog.length = 500;
@@ -360,5 +375,34 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
       `تنبيه: ${staleUnreconciled.length} معاملة بنكية غير مطابقة -- برجاء المراجعة.`);
   }
 
-  return { ranAt: new Date().toISOString(), alertsFired, details };
+  // Dead-letter queue: automatic retry on the same 6h cadence as the rest
+  // of this sweep. Capped at 5 attempts per job so a genuinely broken
+  // WhatsApp integration doesn't get hammered forever -- past that, a
+  // human has to look at it (POST /api/dead-letter-queue/:id/resolve).
+  for (const job of getDeadLetterCache()) {
+    if (job.status === 'resolved' || job.attempts >= 5) continue;
+    try {
+      await retryFailedJob(job.id);
+    } catch (err) {
+      console.error(`[notificationEngine] Dead-letter retry failed for ${job.id}:`, err);
+    }
+  }
+
+  // Operational health: reads whatever the PREVIOUS sweep persisted (see
+  // recordBackgroundJobRun below), so "have I gone stale" is judged against
+  // the last time this actually ran, not this run itself.
+  const health = await checkOperationalHealth();
+  if (health.overallStatus !== 'healthy') {
+    const summary = JSON.stringify(health.checks);
+    await fireIfNew('system_health_alert', 'system_health_alert:batch', standardCooldownHours,
+      `Operational health check reported "${health.overallStatus}": ${summary}`,
+      `فحص الصحة التشغيلية أبلغ عن حالة "${health.overallStatus}": ${summary}`);
+    if (health.checks.deadLetterQueue.unresolvedCount > 0) {
+      await markAllAlerted();
+    }
+  }
+
+  const result = { ranAt: new Date().toISOString(), alertsFired, details };
+  await recordBackgroundJobRun({ lastRunAt: result.ranAt, alertsFired: result.alertsFired, details: result.details });
+  return result;
 }

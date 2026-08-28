@@ -27,6 +27,8 @@ import {
 } from './src/server/businessRules';
 import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
 import { detectAnomalies } from './src/server/anomalyDetection';
+import { checkOperationalHealth } from './src/server/operationalHealth';
+import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -3708,6 +3710,47 @@ app.get('/api/anomalies', requireRole('ceo', 'admin'), (req, res) => {
   res.json(detectAnomalies(globalStore.auditLogs));
 });
 
+// Phase 23.7 Operational Monitoring: live probes across every external
+// dependency this app actually has (Firestore, WhatsApp, Gemini, the
+// background sweep, the dead-letter queue) -- see
+// src/server/operationalHealth.ts for exactly what is and isn't checked,
+// and why "Vercel platform health" specifically isn't claimed.
+app.get('/api/health/detailed', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  res.json(await checkOperationalHealth());
+}));
+
+// Phase 23.7 Dead-Letter Queue: failed background WhatsApp sends that need
+// a human or a retry to resolve, instead of a silent log line no one is
+// watching. Automatic retry also runs on the same 6h cadence as the
+// notification sweep (see runNotificationChecks in notificationEngine.ts).
+app.get('/api/dead-letter-queue', requireRole('ceo', 'admin', 'operations'), (req, res) => {
+  res.json(getDeadLetterCache());
+});
+
+app.post('/api/dead-letter-queue/:id/retry', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  try {
+    const job = await retryFailedJob(req.params.id);
+    res.json(job);
+  } catch (error: any) {
+    if (error instanceof DeadLetterError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/dead-letter-queue/:id/resolve', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const { note } = req.body || {};
+
+  try {
+    const job = await resolveFailedJob(req.params.id, note, { uid: actor.uid, name: actor.name });
+    res.json(job);
+  } catch (error: any) {
+    if (error instanceof DeadLetterError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ----------------------------------------------------
 // GOVERNANCE & APPROVAL ENGINE (Phase 23.1-23.4)
 // ----------------------------------------------------
@@ -5134,6 +5177,16 @@ async function hydrateStoreFromFirestore() {
     await hydrateBusinessRules();
   } catch (error) {
     console.error('[hydrate] Failed to load business rules from Firestore:', error);
+  }
+
+  // Dead-Letter Queue (Phase 23.7): failed background WhatsApp sends,
+  // hydrated the same way toll_pricing_config is -- a single collection
+  // this module owns directly rather than through globalStore.
+  try {
+    const dlqSnap = await admin.firestore().collection('dead_letter_queue').get();
+    setDeadLetterCache(dlqSnap.docs.map(d => d.data() as any));
+  } catch (error) {
+    console.error('[hydrate] Failed to load dead-letter queue from Firestore:', error);
   }
 
   console.log(`[hydrate] Restored ${totalDocs} record(s) across ${hydratedCollections} collection(s) from Firestore.`);

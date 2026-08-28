@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { ShieldAlert, ShieldCheck, History, Check, X, RotateCcw, Loader2, Radar } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, History, Check, X, RotateCcw, Loader2, Radar, Activity, Mail } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -13,6 +13,22 @@ interface AnomalyFlag {
   summaryAr: string;
   detectedAt: string;
   supportingAuditLogIds: string[];
+}
+
+interface HealthCheckResult {
+  checkedAt: string;
+  overallStatus: 'healthy' | 'degraded' | 'unhealthy';
+  checks: Record<string, { status: string; [key: string]: unknown }>;
+}
+
+interface FailedJob {
+  id: string;
+  jobType: string;
+  status: 'failed' | 'alerted' | 'resolved';
+  error: string;
+  attempts: number;
+  createdAt: string;
+  payload: { recipientLabel?: string; eventKey?: string };
 }
 
 const TIER_LABEL: Record<string, { en: string; ar: string }> = {
@@ -41,20 +57,26 @@ export const GovernanceView: React.FC = () => {
   const [rules, setRules] = useState<BusinessRule[]>([]);
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [anomalies, setAnomalies] = useState<AnomalyFlag[]>([]);
+  const [health, setHealth] = useState<HealthCheckResult | null>(null);
+  const [failedJobs, setFailedJobs] = useState<FailedJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [rulesRes, requestsRes, anomaliesRes] = await Promise.all([
+      const [rulesRes, requestsRes, anomaliesRes, healthRes, dlqRes] = await Promise.all([
         apiFetch('/api/business-rules'),
         apiFetch('/api/approval-requests'),
-        isDecider ? apiFetch('/api/anomalies') : Promise.resolve(null)
+        isDecider ? apiFetch('/api/anomalies') : Promise.resolve(null),
+        isDecider ? apiFetch('/api/health/detailed') : Promise.resolve(null),
+        apiFetch('/api/dead-letter-queue')
       ]);
       if (rulesRes.ok) setRules(await rulesRes.json());
       if (requestsRes.ok) setRequests(await requestsRes.json());
       if (anomaliesRes && anomaliesRes.ok) setAnomalies(await anomaliesRes.json());
+      if (healthRes && healthRes.ok) setHealth(await healthRes.json());
+      if (dlqRes.ok) setFailedJobs(await dlqRes.json());
     } catch (e) {
       console.error('Failed to load governance data:', e);
     } finally {
@@ -124,6 +146,45 @@ export const GovernanceView: React.FC = () => {
     }
   };
 
+  const retryJob = async (job: FailedJob) => {
+    setBusyKey(job.id);
+    try {
+      const res = await apiFetch(`/api/dead-letter-queue/${encodeURIComponent(job.id)}/retry`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Retry failed.');
+      showToast(
+        data.status === 'resolved' ? (language === 'ar' ? 'نجحت إعادة المحاولة' : 'Retry succeeded') : (language === 'ar' ? 'فشلت إعادة المحاولة مجدداً' : 'Retry failed again'),
+        job.payload.recipientLabel || job.id
+      );
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل' : 'Failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const resolveJob = async (job: FailedJob) => {
+    const note = window.prompt(language === 'ar' ? 'ملاحظة الحل مطلوبة:' : 'A resolution note is required:');
+    if (!note || !note.trim()) return;
+    setBusyKey(job.id);
+    try {
+      const res = await apiFetch(`/api/dead-letter-queue/${encodeURIComponent(job.id)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to resolve.');
+      showToast(language === 'ar' ? 'تم الحل' : 'Resolved', job.payload.recipientLabel || job.id);
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل' : 'Failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-zinc-500 text-sm gap-2">
@@ -137,8 +198,71 @@ export const GovernanceView: React.FC = () => {
   const decidedRequests = requests.filter(r => r.status !== 'pending').slice(0, 20);
   const byTier = TIER_ORDER.map(tier => ({ tier, items: rules.filter(r => r.tier === tier) })).filter(g => g.items.length > 0);
 
+  const openJobs = failedJobs.filter(j => j.status !== 'resolved');
+
   return (
     <div className="space-y-8 text-xs">
+      {/* Operational Health (Phase 23.7) */}
+      {isDecider && health && (
+        <div>
+          <h3 className="text-sm font-bold text-zinc-100 mb-2 flex items-center gap-2">
+            <Activity className={`w-4 h-4 ${health.overallStatus === 'healthy' ? 'text-emerald-400' : health.overallStatus === 'degraded' ? 'text-amber-400' : 'text-rose-400'}`} />
+            {language === 'ar' ? 'الصحة التشغيلية' : 'Operational health'}
+            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
+              health.overallStatus === 'healthy' ? 'bg-emerald-500/15 text-emerald-400' : health.overallStatus === 'degraded' ? 'bg-amber-500/15 text-amber-400' : 'bg-rose-500/15 text-rose-400'
+            }`}>{health.overallStatus}</span>
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {Object.entries(health.checks).map(([key, check]) => (
+              <div key={key} className="p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800">
+                <p className="text-zinc-500 uppercase tracking-wide text-[10px]">{key}</p>
+                <p className="text-zinc-200 font-mono mt-0.5">{String(check.status)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Dead-Letter Queue (Phase 23.7) -- failed WhatsApp sends needing review/retry */}
+      <div>
+        <h3 className="text-sm font-bold text-zinc-100 mb-2 flex items-center gap-2">
+          <Mail className="w-4 h-4 text-[#D4AF37]" />
+          {language === 'ar' ? `عمليات إرسال فاشلة (${openJobs.length})` : `Failed sends needing review (${openJobs.length})`}
+        </h3>
+        {openJobs.length === 0 ? (
+          <p className="text-zinc-500">{language === 'ar' ? 'لا توجد عمليات معلّقة.' : 'Nothing pending.'}</p>
+        ) : (
+          <div className="space-y-1.5">
+            {openJobs.map(job => (
+              <div key={job.id} className="p-2.5 rounded-lg bg-zinc-900/60 border border-rose-500/20 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-zinc-200 truncate">{job.payload.recipientLabel || job.payload.eventKey || job.id} — {job.error}</p>
+                  <p className="text-zinc-500 mt-0.5">{language === 'ar' ? 'المحاولات' : 'attempts'}: {job.attempts} · {job.status}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    disabled={busyKey === job.id}
+                    onClick={() => retryJob(job)}
+                    className="p-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors disabled:opacity-50"
+                    title={language === 'ar' ? 'إعادة المحاولة' : 'Retry'}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    disabled={busyKey === job.id}
+                    onClick={() => resolveJob(job)}
+                    className="p-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+                    title={language === 'ar' ? 'وضع علامة كمحلول' : 'Mark resolved'}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Anomaly Detection (Phase 23.6) -- review-only, never blocks anything */}
       {isDecider && (
         <div>

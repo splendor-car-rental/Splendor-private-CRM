@@ -53,7 +53,8 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
   { key: 'staff_account_created', category: 'system', labelEn: 'New staff account created', labelAr: 'إنشاء حساب موظف جديد' },
   { key: 'staff_role_changed', category: 'system', labelEn: 'Staff role/permissions changed', labelAr: 'تغيير دور أو صلاحيات موظف' },
   { key: 'bank_statement_imported', category: 'system', labelEn: 'Bank statement imported', labelAr: 'استيراد كشف حساب بنكي' },
-  { key: 'bank_discrepancy_found', category: 'system', labelEn: 'Bank reconciliation discrepancy needs review', labelAr: 'وجود اختلاف في المطابقة البنكية يحتاج مراجعة', automated: true }
+  { key: 'bank_discrepancy_found', category: 'system', labelEn: 'Bank reconciliation discrepancy needs review', labelAr: 'وجود اختلاف في المطابقة البنكية يحتاج مراجعة', automated: true },
+  { key: 'system_health_alert', category: 'system', labelEn: 'Operational health check failed (Firestore / WhatsApp / background jobs / dead-letter queue)', labelAr: 'فشل فحص الصحة التشغيلية (قاعدة البيانات / واتساب / المهام الخلفية / قائمة العمليات الفاشلة)', automated: true }
 ];
 
 export function getNotificationEventDef(key: string): NotificationEventDef | undefined {
