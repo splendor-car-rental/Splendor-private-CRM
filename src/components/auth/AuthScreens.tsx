@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Lock, Mail, AlertCircle, LogOut, Loader2 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { SplendorLogo } from '../common/SplendorLogo';
-import scrGoldLogo from '../../assets/scr-gold-logo.jpg';
+import splendorLogoImage from '../../assets/splendor-logo.png';
 
 /**
  * Full-screen splash shown while Firebase Auth is resolving the current session.
@@ -51,13 +51,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, errorKey }) =
       <div className="w-full max-w-md">
         <div className="flex flex-col items-center mb-8">
           <img
-            src={scrGoldLogo}
+            src={splendorLogoImage}
             alt="Splendor Car Rental"
             referrerPolicy="no-referrer"
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = '/scr-gold-logo.jpg';
+              (e.currentTarget as HTMLImageElement).src = '/splendor-logo.png';
             }}
-            className="w-full max-w-[320px] rounded-2xl shadow-2xl shadow-[#D4AF37]/10 select-none"
+            className="w-full max-w-[240px] drop-shadow-[0_8px_24px_rgba(212,175,55,0.25)] select-none"
           />
         </div>
 

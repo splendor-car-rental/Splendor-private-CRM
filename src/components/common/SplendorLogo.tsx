@@ -1,5 +1,5 @@
 import React from 'react';
-import splendorLogoImage from '../../assets/splendor-logo.jpg';
+import splendorLogoImage from '../../assets/splendor-logo.png';
 
 interface SplendorLogoProps {
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl' | number;
@@ -46,7 +46,7 @@ export const SplendorLogo: React.FC<SplendorLogoProps> = ({ size = 'md', classNa
         style={{ width: dimension, height: dimension }}
         referrerPolicy="no-referrer"
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src = '/splendor-logo.jpg';
+          (e.currentTarget as HTMLImageElement).src = '/splendor-logo.png';
         }}
         className="rounded-full object-cover border border-[#D4AF37]/50 drop-shadow-[0_4px_12px_rgba(212,175,55,0.35)] select-none"
       />

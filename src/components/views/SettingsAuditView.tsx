@@ -7,6 +7,7 @@ import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
+import { AuthenticatedImage } from '../common/AuthenticatedImage';
 import { AddStaffModal } from '../auth/AddStaffModal';
 import { EditStaffModal } from '../auth/EditStaffModal';
 import { ROLE_RANK } from '../../config/permissions';
@@ -342,13 +343,10 @@ export const SettingsAuditView: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-2.5">
-                    <img
-                      src={usr.avatar || '/splendor-logo.jpg'}
+                    <AuthenticatedImage
+                      src={usr.avatar}
+                      fallbackSrc="/splendor-logo.png"
                       alt={usr.name}
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = '/splendor-logo.jpg';
-                      }}
                       className="w-9 h-9 rounded-xl object-cover border border-zinc-800 shrink-0"
                     />
                     <div className="min-w-0">

@@ -556,29 +556,20 @@ app.post('/api/upload', async (req, res) => {
     const file = bucket.file(storagePath);
     await file.save(buffer, { metadata: { contentType: fileType || 'application/octet-stream' } });
 
-    let url: string;
-    if (folder === 'customer-documents') {
-      // Customer KYC documents (Emirates ID / passport / driving license
-      // scans) previously got a Firebase Storage signed URL expiring
-      // "01-01-2500" -- a de-facto permanent, unauthenticated public link:
-      // anyone who ever obtained it (browser history, a leaked log line, a
-      // screenshot, a database export) could read the document forever,
-      // completely bypassing this app's login system. This now points at
-      // GET /api/documents/file below instead, which requires a valid
-      // session on every single access and streams the file from Storage
-      // itself rather than ever handing out a Storage credential. No
-      // Storage-level URL is generated or logged anywhere in this flow.
-      url = `/api/documents/file?path=${encodeURIComponent(storagePath)}`;
-    } else {
-      // Avatars are low-sensitivity (a staff profile photo, not PII/KYC
-      // data) and are rendered via plain <img src> across the app, which
-      // cannot attach the Bearer auth header the proxy route above
-      // requires -- routing them through it would just break every avatar
-      // image. Left on a Storage signed URL for that reason; the security
-      // directive this phase addresses is specifically about customer
-      // documents.
-      [url] = await file.getSignedUrl({ action: 'read', expires: '01-01-2500' });
-    }
+    // Every uploaded file (avatars included) previously got a Firebase
+    // Storage signed URL expiring "01-01-2500" -- a de-facto permanent,
+    // unauthenticated public link: anyone who ever obtained it (browser
+    // history, a leaked log line, a screenshot, a database export) could
+    // read the file forever, completely bypassing this app's login system.
+    // Both folders now point at GET /api/documents/file below instead,
+    // which requires a valid session on every single access and streams
+    // the file from Storage itself rather than ever handing out a Storage
+    // credential. No Storage-level URL is generated or logged anywhere in
+    // this flow. The frontend renders avatars via <AuthenticatedImage>
+    // (src/components/common/AuthenticatedImage.tsx), which fetches this
+    // relative proxy path with the Bearer auth header a plain <img src>
+    // can't attach.
+    const url = `/api/documents/file?path=${encodeURIComponent(storagePath)}`;
 
     res.json({ url, path: storagePath });
   } catch (error: any) {

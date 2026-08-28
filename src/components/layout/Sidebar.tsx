@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { SplendorLogo } from '../common/SplendorLogo';
+import { AuthenticatedImage } from '../common/AuthenticatedImage';
 import { ChangePasswordModal } from '../auth/ChangePasswordModal';
 import { canAccessView } from '../../config/permissions';
 import { uploadFile } from '../../lib/upload';
@@ -270,13 +271,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
               title={language === 'ar' ? 'تغيير الصورة الشخصية' : 'Change profile photo'}
               className="relative w-8 h-8 rounded-lg shrink-0 group/avatar overflow-hidden"
             >
-              <img
-                src={currentUser.avatar || '/splendor-logo.jpg'}
+              <AuthenticatedImage
+                src={currentUser.avatar}
+                fallbackSrc="/splendor-logo.png"
                 alt={currentUser.name}
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = '/splendor-logo.jpg';
-                }}
                 className="w-8 h-8 rounded-lg object-cover border border-zinc-700"
               />
               <span className="absolute inset-0 bg-black/60 opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center transition-opacity">

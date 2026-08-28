@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { Modal } from '../common/Modal';
+import { AuthenticatedImage } from '../common/AuthenticatedImage';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../lib/apiFetch';
@@ -115,13 +116,10 @@ export const EditStaffModal: React.FC<EditStaffModalProps> = ({ isOpen, onClose,
             disabled={avatarUploading}
             className="relative w-16 h-16 rounded-2xl shrink-0 group/avatar"
           >
-            <img
-              src={avatar || '/splendor-logo.jpg'}
+            <AuthenticatedImage
+              src={avatar}
+              fallbackSrc="/splendor-logo.png"
               alt={name}
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).src = '/splendor-logo.jpg';
-              }}
               className="w-16 h-16 rounded-2xl object-cover border border-[#D4AF37]/40"
             />
             <span className="absolute inset-0 rounded-2xl bg-black/60 opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center transition-opacity">
