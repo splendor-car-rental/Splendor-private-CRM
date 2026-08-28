@@ -47,12 +47,51 @@ vi.mock('firebase-admin', () => {
       const data = collectionOf(collectionName).get(id);
       return { exists: data !== undefined, data: () => data, id };
     },
-    set: async () => {},
-    create: async () => {},
-    delete: async () => {}
+    set: async (data: any, opts?: { merge?: boolean }) => {
+      const col = collectionOf(collectionName);
+      const existing = col.get(id);
+      col.set(id, opts?.merge && existing ? { ...existing, ...data } : data);
+    },
+    create: async (data: any) => {
+      const col = collectionOf(collectionName);
+      if (col.has(id)) {
+        const err: any = new Error('ALREADY_EXISTS');
+        err.code = 6;
+        throw err;
+      }
+      col.set(id, data);
+    },
+    delete: async () => { collectionOf(collectionName).delete(id); }
   });
   const firestoreObj: any = {
-    collection: (name: string) => ({ doc: (id: string) => makeDocRef(name, id), where: () => firestoreObj.collection(name) })
+    collection: (name: string) => ({ doc: (id: string) => makeDocRef(name, id), where: () => firestoreObj.collection(name) }),
+    // Needed because POST /api/upload now writes an audit_logs entry
+    // (Phase 23.5 — every mutation logs to the immutable audit trail, not
+    // just financial routes), which goes through issueNextNumber() ->
+    // db.runTransaction(). This suite's original scope (Phase 13) never
+    // needed transactions, so this mock never implemented it.
+    runTransaction: async (fn: any) => {
+      const applySet = (ref: any, data: any, opts?: { merge?: boolean }) => {
+        const col = collectionOf(ref.__collection);
+        const existing = col.get(ref.id);
+        col.set(ref.id, opts?.merge && existing ? { ...existing, ...data } : data);
+      };
+      const tx = {
+        get: async (refOrQuery: any) => refOrQuery.get(),
+        set: (ref: any, data: any, opts?: any) => applySet(ref, data, opts),
+        create: (ref: any, data: any) => {
+          const col = collectionOf(ref.__collection);
+          if (col.has(ref.id)) {
+            const err: any = new Error('ALREADY_EXISTS');
+            err.code = 6;
+            throw err;
+          }
+          col.set(ref.id, data);
+        },
+        delete: (ref: any) => collectionOf(ref.__collection).delete(ref.id)
+      };
+      return fn(tx, firestoreObj);
+    }
   };
 
   // Minimal in-memory Storage bucket: object name -> { buffer, contentType }.

@@ -613,6 +613,17 @@ app.post('/api/upload', async (req, res) => {
     // can't attach.
     const url = `/api/documents/file?path=${encodeURIComponent(storagePath)}`;
 
+    const uploaderActor = await getRequesterActor(req);
+    await recordAudit({
+      userId: requesterUid,
+      userName: uploaderActor?.name || requesterUid,
+      userRole: uploaderActor?.role || 'operations',
+      entityType: folder === 'avatars' ? 'Avatar' : 'CustomerDocument',
+      entityId: storagePath,
+      action: 'create',
+      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}.`
+    });
+
     res.json({ url, path: storagePath });
   } catch (error: any) {
     console.error('Failed to upload file:', error);
@@ -955,6 +966,17 @@ app.put('/api/leads/:id', asyncHandler(async (req, res) => {
   await updateDurable('leads', updated.id, updated);
   globalStore.leads[index] = updated;
 
+  await recordAudit({
+    userId: req.body.actorId || 'USR-003',
+    userName: req.body.actorName || 'Sales Executive',
+    userRole: 'sales',
+    entityType: 'Lead',
+    entityId: updated.id,
+    action: 'update',
+    previousValue: JSON.stringify({ status: prev.status, estimatedValue: prev.estimatedValue }),
+    newValue: JSON.stringify({ status: updated.status, estimatedValue: updated.estimatedValue })
+  });
+
   res.json(updated);
 }));
 
@@ -1060,20 +1082,44 @@ app.post('/api/opportunities', asyncHandler(async (req, res) => {
   };
   await createDurable('opportunities', opp);
   globalStore.opportunities.unshift(opp);
+
+  await recordAudit({
+    userId: req.body.ownerId || req.body.actorId || 'USR-003',
+    userName: req.body.ownerName || req.body.actorName || 'Sales Executive',
+    userRole: 'sales',
+    entityType: 'Opportunity',
+    entityId: newId,
+    action: 'create',
+    newValue: `Created opportunity ${opp.title || newId} for ${opp.estimatedValue ? `${opp.estimatedValue} AED` : 'an unspecified value'}.`
+  });
+
   res.status(201).json(opp);
 }));
 
 app.put('/api/opportunities/:id', asyncHandler(async (req, res) => {
   const index = globalStore.opportunities.findIndex(o => o.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Opportunity not found' });
+  const prev = globalStore.opportunities[index];
   const updated = {
-    ...globalStore.opportunities[index],
+    ...prev,
     ...req.body,
-    id: globalStore.opportunities[index].id, // never let a client redirect this write to a different opportunity's document
+    id: prev.id, // never let a client redirect this write to a different opportunity's document
     updatedAt: new Date().toISOString()
   };
   await updateDurable('opportunities', updated.id, updated);
   globalStore.opportunities[index] = updated;
+
+  await recordAudit({
+    userId: req.body.actorId || updated.ownerId || 'USR-003',
+    userName: req.body.actorName || updated.ownerName || 'Sales Executive',
+    userRole: 'sales',
+    entityType: 'Opportunity',
+    entityId: updated.id,
+    action: 'update',
+    previousValue: JSON.stringify({ stage: prev.stage, estimatedValue: prev.estimatedValue }),
+    newValue: JSON.stringify({ stage: updated.stage, estimatedValue: updated.estimatedValue })
+  });
+
   res.json(updated);
 }));
 
@@ -1481,6 +1527,17 @@ app.post('/api/fleet', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async 
   };
   await createDurable('vehicles', newVehicle);
   globalStore.vehicles.unshift(newVehicle);
+
+  await recordAudit({
+    userId: req.body.actorId || 'USR-002',
+    userName: req.body.actorName || 'Fleet Manager',
+    userRole: 'fleet',
+    entityType: 'Vehicle',
+    entityId: newId,
+    action: 'create',
+    newValue: `Registered vehicle ${newVehicle.make} ${newVehicle.model} (${newVehicle.plateCity || ''} ${newVehicle.plateNumber || 'no plate yet'}).`
+  });
+
   res.status(201).json(newVehicle);
 }));
 
@@ -1500,19 +1557,18 @@ app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(asy
   await updateDurable('vehicles', updated.id, updated);
   globalStore.vehicles[index] = updated;
 
-  if (prev.status !== updated.status) {
-    await recordAudit({
-      userId: req.body.actorId || 'USR-002',
-      userName: req.body.actorName || 'Fleet Manager',
-      userRole: 'fleet',
-      entityType: 'Vehicle',
-      entityId: updated.id,
-      action: 'status_change',
-      previousValue: `Status: ${prev.status}`,
-      newValue: `Status: ${updated.status}`,
-      reason: req.body.statusReason || 'Fleet operational status change'
-    });
-  }
+  const statusChanged = prev.status !== updated.status;
+  await recordAudit({
+    userId: req.body.actorId || 'USR-002',
+    userName: req.body.actorName || 'Fleet Manager',
+    userRole: 'fleet',
+    entityType: 'Vehicle',
+    entityId: updated.id,
+    action: statusChanged ? 'status_change' : 'update',
+    previousValue: statusChanged ? `Status: ${prev.status}` : JSON.stringify({ dailyRate: prev.dailyRate, make: prev.make, model: prev.model }),
+    newValue: statusChanged ? `Status: ${updated.status}` : JSON.stringify({ dailyRate: updated.dailyRate, make: updated.make, model: updated.model }),
+    reason: statusChanged ? (req.body.statusReason || 'Fleet operational status change') : (req.body.auditReason || 'Vehicle profile update')
+  });
 
   res.json(updated);
 }));
@@ -1711,6 +1767,16 @@ app.post('/api/reservations', requireOperationEnabled('reservationsBooking'), as
       vehicle.status = 'reserved';
       await updateDurable('vehicles', vehicle.id, { status: 'reserved' });
     }
+
+    await recordAudit({
+      userId: data.actorId || 'USR-001',
+      userName: data.actorName || 'Staff',
+      userRole: data.actorRole || 'sales',
+      entityType: 'Reservation',
+      entityId: newId,
+      action: 'create',
+      newValue: `Reserved ${data.vehicleId} for ${data.customerName || data.customerId || 'a customer'} (${data.pickupDateTime} - ${data.returnDateTime}).`
+    });
   }
 
   res.status(201).json(resObj);
@@ -1806,6 +1872,22 @@ app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'o
   globalStore.contracts.unshift(contract);
   const index = globalStore.reservations.findIndex(r => r.id === req.params.id);
   if (index !== -1) globalStore.reservations[index] = reservation;
+
+  // Phase 23.0 audit finding: this route created a legally significant
+  // Contract with zero audit trail, while its sibling POST /api/contracts
+  // (the other way to create one) was fully audited -- an inconsistency,
+  // not a deliberate design choice.
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: actor?.role || 'operations',
+    entityType: 'Contract',
+    entityId: contract.id,
+    action: 'create',
+    newValue: `Issued contract ${contract.id} for ${contract.customerName} from reservation ${reservation.id} (${contract.grandTotal.toLocaleString()} AED).`,
+    reason: 'Contract created from an existing reservation'
+  });
 
   res.json({ success: true, contract, reservation });
 }));
@@ -2183,6 +2265,16 @@ app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), r
   await createDurable('charges', charge);
   globalStore.charges.unshift(charge);
 
+  await recordAudit({
+    userId: req.body.actorId || 'USR-004',
+    userName: req.body.actorName || 'Finance Manager',
+    userRole: 'finance',
+    entityType: 'Charge',
+    entityId: newId,
+    action: 'create',
+    newValue: `Added ${charge.type || 'charge'} of ${charge.totalAmount.toLocaleString()} AED${charge.customerId ? ` to customer ${charge.customerId}` : ''}.`
+  });
+
   if ((charge.type === 'salik' || charge.type === 'traffic_fine') && charge.customerId) {
     try {
       const customer = globalStore.customers.find(c => c.id === charge.customerId);
@@ -2233,6 +2325,16 @@ app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', '
   globalStore.deposits.unshift(deposit);
   const customer = globalStore.customers.find(c => c.id === deposit.customerId);
   if (customer) customer.securityDepositsHeld += amount;
+
+  await recordAudit({
+    userId: req.body.actorId || 'USR-004',
+    userName: req.body.actorName || 'Finance Manager',
+    userRole: 'finance',
+    entityType: 'Deposit',
+    entityId: newId,
+    action: 'create',
+    newValue: `Took a ${amount.toLocaleString()} AED security deposit${deposit.customerId ? ` from customer ${deposit.customerId}` : ''}.`
+  });
 
   res.status(201).json(deposit);
 }));
@@ -2554,6 +2656,16 @@ app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOpe
 
   globalStore.bankImportBatches.unshift(batch);
   globalStore.bankTransactions.unshift(...parsedTxns);
+
+  await recordAudit({
+    userId: req.body.actorId || 'USR-004',
+    userName: uploadedBy || req.body.actorName || 'Finance Team',
+    userRole: 'finance',
+    entityType: 'BankImportBatch',
+    entityId: batch.id,
+    action: 'create',
+    newValue: `Imported bank statement ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched).`
+  });
 
   try {
     await dispatchNotificationEvent('bank_statement_imported',
@@ -3187,6 +3299,16 @@ app.patch('/api/notification-configs/:eventKey', requireRole('ceo', 'admin'), as
   // that was never actually saved.
   await updateDurable('notification_event_configs', config.eventKey, config as unknown as Record<string, unknown>);
 
+  await recordAudit({
+    userId: actorId || 'USR-001',
+    userName: actorName || 'Admin',
+    userRole: 'admin',
+    entityType: 'NotificationConfig',
+    entityId: config.eventKey,
+    action: 'update',
+    newValue: `enabled=${config.enabled}, broadcastToGroup=${config.broadcastToGroup}, staffRecipients=${(config.staffRecipientIds || []).length}`
+  });
+
   res.json(config);
 }));
 
@@ -3205,6 +3327,16 @@ app.patch('/api/customer-notification-configs/:eventKey', requireRole('ceo', 'ad
   config.updatedAt = new Date().toISOString();
 
   await updateDurable('customer_notification_configs', config.eventKey, config as unknown as Record<string, unknown>);
+
+  await recordAudit({
+    userId: actorId || 'USR-001',
+    userName: actorName || 'Admin',
+    userRole: 'admin',
+    entityType: 'CustomerNotificationConfig',
+    entityId: config.eventKey,
+    action: 'update',
+    newValue: `enabled=${config.enabled}`
+  });
 
   res.json(config);
 }));
@@ -3470,20 +3602,44 @@ app.post('/api/tasks', asyncHandler(async (req, res) => {
   };
   await createDurable('tasks', task);
   globalStore.tasks.unshift(task);
+
+  await recordAudit({
+    userId: req.body.actorId || req.body.assignedTo || 'USR-001',
+    userName: req.body.actorName || req.body.assignedToName || 'Staff',
+    userRole: 'operations',
+    entityType: 'Task',
+    entityId: newId,
+    action: 'create',
+    newValue: `Created task "${task.title || newId}".`
+  });
+
   res.status(201).json(task);
 }));
 
 app.put('/api/tasks/:id', asyncHandler(async (req, res) => {
   const index = globalStore.tasks.findIndex(t => t.id === req.params.id);
   if (index === -1) return res.status(404).json({ error: 'Task not found' });
+  const prev = globalStore.tasks[index];
   const updated = {
-    ...globalStore.tasks[index],
+    ...prev,
     ...req.body,
-    id: globalStore.tasks[index].id, // never let a client redirect this write to a different task's document
+    id: prev.id, // never let a client redirect this write to a different task's document
     updatedAt: new Date().toISOString()
   };
   await updateDurable('tasks', updated.id, updated);
   globalStore.tasks[index] = updated;
+
+  await recordAudit({
+    userId: req.body.actorId || 'USR-001',
+    userName: req.body.actorName || 'Staff',
+    userRole: 'operations',
+    entityType: 'Task',
+    entityId: updated.id,
+    action: 'update',
+    previousValue: JSON.stringify({ status: prev.status }),
+    newValue: JSON.stringify({ status: updated.status })
+  });
+
   res.json(updated);
 }));
 
@@ -3496,6 +3652,17 @@ app.post('/api/communications', asyncHandler(async (req, res) => {
   const comm = { ...req.body, id: newId, timestamp: new Date().toISOString() };
   await createDurable('communications', comm);
   globalStore.communications.unshift(comm);
+
+  await recordAudit({
+    userId: req.body.actorId || 'USR-001',
+    userName: req.body.actorName || 'Staff',
+    userRole: 'operations',
+    entityType: 'Communication',
+    entityId: newId,
+    action: 'create',
+    newValue: `Logged ${comm.type || 'a'} communication${comm.customerId ? ` with customer ${comm.customerId}` : ''}.`
+  });
+
   res.status(201).json(comm);
 }));
 
@@ -3508,6 +3675,17 @@ app.post('/api/documents', asyncHandler(async (req, res) => {
   const doc = { ...req.body, id: newId, uploadedAt: new Date().toISOString() };
   await createDurable('documents', doc);
   globalStore.documents.unshift(doc);
+
+  await recordAudit({
+    userId: req.body.actorId || 'USR-001',
+    userName: req.body.actorName || 'Staff',
+    userRole: 'operations',
+    entityType: 'Document',
+    entityId: newId,
+    action: 'create',
+    newValue: `Logged document "${doc.name || newId}"${doc.customerId ? ` for customer ${doc.customerId}` : ''}.`
+  });
+
   res.status(201).json(doc);
 }));
 
@@ -3686,6 +3864,18 @@ app.post('/api/settings/custom-fields', requireRole('ceo', 'admin'), asyncHandle
   const field = { ...req.body, id: newId };
   await createDurable('custom_fields', field);
   globalStore.customFields.push(field);
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Admin',
+    userRole: actor?.role || 'admin',
+    entityType: 'CustomField',
+    entityId: newId,
+    action: 'create',
+    newValue: `Added custom field "${field.label || newId}" on ${field.entityType || 'an entity'}.`
+  });
+
   res.status(201).json(field);
 }));
 
@@ -3704,10 +3894,24 @@ app.put('/api/settings/numbering', requireRole('ceo', 'admin'), asyncHandler(asy
   const config = globalStore.numberingConfigs.find(c => c.entity.toLowerCase() === (entity || '').toLowerCase());
   if (!config) return res.status(404).json({ error: `Unknown numbering entity "${entity}".` });
 
+  const previousPrefix = config.prefix;
+  const previousDigits = config.digits;
   config.prefix = prefix;
   config.digits = digits;
   config.sample = `${prefix}${String(config.nextNumber).padStart(digits, '0')}`;
   await updateDurable('numbering_configs', config.entity.toLowerCase(), { prefix, digits, sample: config.sample, entity: config.entity });
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Admin',
+    userRole: actor?.role || 'admin',
+    entityType: 'NumberingConfig',
+    entityId: config.entity,
+    action: 'update',
+    previousValue: `${previousPrefix} / ${previousDigits} digits`,
+    newValue: `${prefix} / ${digits} digits`
+  });
 
   res.json(globalStore.numberingConfigs);
 }));
