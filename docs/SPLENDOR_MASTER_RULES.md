@@ -133,7 +133,7 @@ states its real current status honestly.
 
 ### RULE-B04 — Segregation of Duties on unblocking
 **REQUIREMENT**: The staff member who did not create a block may request its removal; a different, higher-ranked approver must authorize it, with a mandatory reason, using the same universal Segregation-of-Duties primitive already in the codebase.
-**STATUS**: **IMPLEMENTED (this session)** — reuses `approvals.ts`, the existing non-Procurement SoD engine (chosen deliberately over `procurementApprovals.ts`, since blocklisting is a customer/security concern, not a procurement one).
+**STATUS**: **IMPLEMENTED (this session)** — reuses `procurementApprovals.ts`'s generic Segregation-of-Duties engine (`registerApprovalHandler('BlocklistEntry', 'unblock', ...)`, enforcing `requestedBy !== decider.uid`). Despite its "procurement" module name, that engine is the actual entity-agnostic SoD primitive already reused this session for Debt/CustomerRefund/EmployeeCustody/OffsetRequest approvals; `approvals.ts` is a narrower engine scoped specifically to Business-Rule-value-change Four-Eyes approvals and does not fit a BlocklistEntry action. Surfaced to staff as its own inbox on the Security & Blocklist screen rather than requiring them to find it under Procurement & Suppliers.
 
 ### RULE-B05 — Full audit trail on every block/unblock decision
 **STATUS**: **IMPLEMENTED (this session)** — every block, unblock request, and unblock decision calls `recordAudit`.

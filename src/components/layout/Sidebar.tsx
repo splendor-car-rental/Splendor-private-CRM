@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
-  Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
+  Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
   TicketCheck, BellRing, Truck
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
@@ -152,6 +152,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'procurement',
           label: language === 'ar' ? 'المشتريات والموردون' : 'Procurement & Suppliers',
           icon: <Truck className="w-4 h-4" />
+        },
+        {
+          id: 'security',
+          label: language === 'ar' ? 'الأمن والقائمة المحظورة' : 'Security & Blocklist',
+          icon: <ShieldAlert className="w-4 h-4" />
         }
       ]
     },

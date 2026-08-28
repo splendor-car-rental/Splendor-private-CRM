@@ -22,6 +22,7 @@ import { reserveVehicleSlot, AvailabilityConflictError, placeTemporaryHold, rele
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
 import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
 import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
+import { createBlocklistEntry, checkBlocklist, listBlocklistEntries, requestUnblock, BlocklistError } from './src/server/blocklist';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
@@ -838,6 +839,25 @@ const VEHICLE_SERVER_OWNED_FIELDS = [
 
 app.post('/api/customers', asyncHandler(async (req, res) => {
   const data = req.body || {};
+
+  // RULE-B01/B03 (Splendor Master Rule Set): the proactive blocklist check
+  // fires the moment a passport or Emirates ID is entered for a NEW
+  // customer -- matched only by the exact identifier pair, never by name.
+  // A 'full' block rejects the record outright; a 'conditional' block lets
+  // it through with a warning the caller must act on (raised deposit /
+  // manager sign-off, per the block's own note) rather than silently
+  // proceeding as if nothing was flagged.
+  let blocklistWarning: string | undefined;
+  if (data.idType === 'emirates_id' || data.idType === 'passport') {
+    const match = await checkBlocklist(data.idType, data.idNumber, data.idType === 'passport' ? data.nationality : undefined);
+    if (match) {
+      if (match.tier === 'full') {
+        return res.status(403).json({ error: 'This customer cannot be registered at this time.' });
+      }
+      blocklistWarning = `Conditional block on file (${match.id}): ${match.conditionalNote}`;
+    }
+  }
+
   const newId = await issueNextNumber('Customer');
   const newCustomer = {
     ...data,
@@ -879,7 +899,7 @@ app.post('/api/customers', asyncHandler(async (req, res) => {
     console.error('WhatsApp dispatch failed (customer_created):', err);
   }
 
-  res.status(201).json(newCustomer);
+  res.status(201).json({ ...newCustomer, blocklistWarning });
 }));
 
 app.put('/api/customers/:id', asyncHandler(async (req, res) => {
@@ -4057,6 +4077,68 @@ app.post('/api/dead-letter-queue/:id/resolve', requireRole('ceo', 'admin', 'oper
 app.get('/api/audit-integrity/verify', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const report = await verifyAuditChainIntegrity();
   res.json(report);
+}));
+
+// ----------------------------------------------------
+// SECURITY BLOCKLIST / WATCHLIST (Splendor Master Rule Set, Module 03)
+// ----------------------------------------------------
+app.get('/api/blocklist', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'), asyncHandler(async (req, res) => {
+  res.json(await listBlocklistEntries());
+}));
+
+app.post('/api/blocklist/check', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'), asyncHandler(async (req, res) => {
+  const { identifierType, identifierValue, identifierCountry } = req.body || {};
+  if (!identifierType || !identifierValue) {
+    return res.status(400).json({ error: 'identifierType and identifierValue are required.' });
+  }
+  const match = await checkBlocklist(identifierType, identifierValue, identifierCountry);
+  res.json({ blocked: !!match, entry: match || null });
+}));
+
+app.post('/api/blocklist', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  try {
+    const entry = await createBlocklistEntry({
+      identifierType: body.identifierType,
+      identifierValue: body.identifierValue,
+      identifierCountry: body.identifierCountry,
+      customerName: body.customerName,
+      tier: body.tier,
+      reason: body.reason,
+      conditionalNote: body.conditionalNote,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json(entry);
+  } catch (error: any) {
+    if (error instanceof BlocklistError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/blocklist/:id/unblock-requests', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request removal of this block.' });
+  }
+  try {
+    const { approvalRequestId } = await requestUnblock({
+      entryId: req.params.id,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof BlocklistError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
 }));
 
 /** Every rule the caller's role is allowed to see, tier-filtered -- system_configuration entries are hidden from non-CEO/Admin roles even in this read-only list. */

@@ -161,6 +161,8 @@ let adminMock: {
 
 const FINANCE_UID = 'finance-uid';
 const OPS_UID = 'ops-uid';
+const CEO_UID = 'ceo-uid';
+const SALES_UID = 'sales-uid';
 
 beforeAll(async () => {
   process.env.VERCEL = '1';
@@ -170,6 +172,8 @@ beforeAll(async () => {
   adminMock = (adminModule.default as any).__test;
   adminMock.usersDb.set(FINANCE_UID, { role: 'finance', name: 'Test Finance' });
   adminMock.usersDb.set(OPS_UID, { role: 'operations', name: 'Test Ops' });
+  adminMock.usersDb.set(CEO_UID, { role: 'ceo', name: 'Test CEO' });
+  adminMock.usersDb.set(SALES_UID, { role: 'sales', name: 'Test Sales' });
 
   const serverModule = await import('../server');
   app = serverModule.default;
@@ -551,5 +555,113 @@ describe('Public vehicle DTO sanitization (data leakage prevention)', () => {
       website: { enabled: false, visibility: 'INTERNAL_ONLY' }
     };
     expect(SplendorConnectEngine.toPublicVehicleDTO(vehicle)).toBeNull();
+  });
+});
+
+describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set)', () => {
+  it('rejects a passport-based block that is missing the issuing country -- passport number alone is not a unique enough match', async () => {
+    const res = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'P1234567', tier: 'full', reason: 'Reckless driving on a prior rental' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/issuing country/i);
+  });
+
+  it('creates a full block and rejects a new-customer registration matching the exact identifier pair', async () => {
+    const create = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', tier: 'full', reason: 'Fraud attempt on a prior booking' });
+    expect(create.status).toBe(201);
+    expect(create.body.identifierValue).toBe('P9988776'); // normalized uppercase
+
+    const blocked = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Blocked Person', email: 'blocked@example.com', phone: '+971500000001', idType: 'passport', idNumber: 'P9988776', nationality: 'United Kingdom' });
+    expect(blocked.status).toBe(403);
+  });
+
+  it('never matches by name alone -- a different passport number with the same name is NOT blocked', async () => {
+    await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'P1111111', identifierCountry: 'France', customerName: 'Jean Dupont', tier: 'full', reason: 'Damage dispute' });
+
+    const differentPassport = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Jean Dupont', email: 'jean2@example.com', phone: '+971500000002', idType: 'passport', idNumber: 'P2222222', nationality: 'France' });
+    expect(differentPassport.status).toBe(201); // same name, different passport -- not a match
+  });
+
+  it('never matches a passport number alone without the correct issuing country', async () => {
+    await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'P3333333', identifierCountry: 'Germany', tier: 'full', reason: 'Unpaid fines' });
+
+    const sameNumberDifferentCountry = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Someone Else', email: 'someone@example.com', phone: '+971500000003', idType: 'passport', idNumber: 'P3333333', nationality: 'Spain' });
+    expect(sameNumberDifferentCountry.status).toBe(201); // same passport number, different country -- correctly NOT a match
+  });
+
+  it('a conditional block allows the customer through with a warning, not a rejection', async () => {
+    await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-1111-1111111-1', tier: 'conditional', conditionalNote: 'Requires a 5,000 AED raised deposit and operations-manager sign-off.', reason: 'Minor prior damage dispute, resolved' });
+
+    const res = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Conditional Customer', email: 'conditional@example.com', phone: '+971500000004', idType: 'emirates_id', idNumber: '784-1111-1111111-1' });
+    expect(res.status).toBe(201);
+    expect(res.body.blocklistWarning).toMatch(/raised deposit/i);
+  });
+
+  it('RULE-B04: unblocking requires a DIFFERENT, authorized approver -- the requester cannot decide their own request', async () => {
+    const create = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-2222-2222222-2', tier: 'full', reason: 'Reckless driving' });
+
+    const unblockReq = await request(app)
+      .post(`/api/blocklist/${create.body.id}/unblock-requests`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Customer provided evidence disputing the original claim.' });
+    expect(unblockReq.status).toBe(201);
+
+    // Same requester attempting to decide their own request is rejected.
+    const selfDecide = await request(app)
+      .post(`/api/procurement/approvals/${unblockReq.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self-approving' });
+    expect(selfDecide.status).toBe(403); // operations isn't a decider role either, blocked before the SoD check even runs
+
+    // A different, authorized decider (CEO) approves it.
+    const decide = await request(app)
+      .post(`/api/procurement/approvals/${unblockReq.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Evidence reviewed and accepted.' });
+    expect(decide.status).toBe(200);
+
+    // The customer can now be registered -- the block was actually removed.
+    const afterUnblock = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Unblocked Customer', email: 'unblocked@example.com', phone: '+971500000005', idType: 'emirates_id', idNumber: '784-2222-2222222-2' });
+    expect(afterUnblock.status).toBe(201);
+  });
+
+  it('a role without blocklist-management permission cannot create a block', async () => {
+    const res = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(SALES_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-9999-9999999-9', tier: 'full', reason: 'Attempted' });
+    expect(res.status).toBe(403);
   });
 });

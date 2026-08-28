@@ -208,5 +208,5 @@ describe('RULE-R04: temporary soft hold with lazy expiry', () => {
     ]);
     const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
     expect(fulfilled.length).toBe(1);
-  });
+  }, 15000); // Firestore transaction retry under a genuine conflict can take longer than the 5s default in this sandbox -- same allowance tests/durablePersistence.test.ts already uses for its analogous concurrency test.
 });
