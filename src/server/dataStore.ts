@@ -7,10 +7,20 @@ import {
   TollTransaction, TollImportBatch, TollPricingConfig,
   PlateAssignmentHistory, VehicleTimelineEvent, PublicVehicleDTO,
   WebsiteVehiclePublication, WebsiteReconciliationItem,
-  NotificationEventConfig, CustomReminder, WhatsAppMessageLogEntry, CustomerNotificationConfig
+  NotificationEventConfig, CustomReminder, WhatsAppMessageLogEntry, CustomerNotificationConfig,
+  Supplier, SupplierQuote, PurchaseOrder, PurchaseOrderAmendmentRequest, ProcurementOperation,
+  SupplierPaymentRequest, AdvanceSettlement, PartyOpeningBalance, OffsetRequest,
+  CustomerDisputedAmount, CustomerCreditBalance, CustomerRefundRequest, Debt,
+  EmployeeCustody, EmployeeExpense, SupplierInvoice, OperationalExpense,
+  VehicleReceivingRecord, NewDamageAtReturn, TarsRecord, LateFeeWaiver,
+  SupplierOperationTypeDef
 } from '../types';
 import { DEFAULT_TOLL_PRICING } from '../lib/tollCalculations';
 import { NOTIFICATION_EVENTS, CUSTOMER_NOTIFICATION_EVENTS } from '../config/notificationEvents';
+import {
+  DEFAULT_SUPPLIER_OPERATION_TYPES, DEFAULT_RETROACTIVE_PO_REASONS, DEFAULT_EXPENSE_CATEGORIES,
+  type RetroactivePOReasonDef, type ExpenseCategoryDef
+} from '../config/procurement';
 
 export class DataStore {
   public users: User[] = [
@@ -94,6 +104,32 @@ export class DataStore {
   public websitePublications: WebsiteVehiclePublication[] = [];
   public reconciliationItems: WebsiteReconciliationItem[] = [];
   public auditLogs: AuditLog[] = [];
+
+  // Procurement & Supplier Management (Splendor Procurement, Phase 1).
+  public suppliers: Supplier[] = [];
+  public supplierQuotes: SupplierQuote[] = [];
+  public purchaseOrders: PurchaseOrder[] = [];
+  public purchaseOrderAmendmentRequests: PurchaseOrderAmendmentRequest[] = [];
+  public procurementOperations: ProcurementOperation[] = [];
+  public supplierPaymentRequests: SupplierPaymentRequest[] = [];
+  public advanceSettlements: AdvanceSettlement[] = [];
+  public partyOpeningBalances: PartyOpeningBalance[] = [];
+  public offsetRequests: OffsetRequest[] = [];
+  public customerDisputedAmounts: CustomerDisputedAmount[] = [];
+  public customerCreditBalances: CustomerCreditBalance[] = [];
+  public customerRefundRequests: CustomerRefundRequest[] = [];
+  public debts: Debt[] = [];
+  public employeeCustodies: EmployeeCustody[] = [];
+  public employeeExpenses: EmployeeExpense[] = [];
+  public supplierInvoices: SupplierInvoice[] = [];
+  public operationalExpenses: OperationalExpense[] = [];
+  public vehicleReceivingRecords: VehicleReceivingRecord[] = [];
+  public newDamageAtReturnRecords: NewDamageAtReturn[] = [];
+  public tarsRecords: TarsRecord[] = [];
+  public lateFeeWaivers: LateFeeWaiver[] = [];
+  public supplierOperationTypes: SupplierOperationTypeDef[] = [...DEFAULT_SUPPLIER_OPERATION_TYPES];
+  public retroactivePOReasons: RetroactivePOReasonDef[] = [...DEFAULT_RETROACTIVE_PO_REASONS];
+  public expenseCategories: ExpenseCategoryDef[] = [...DEFAULT_EXPENSE_CATEGORIES];
 
   // Live default Salik/Darb/Parking rates -- starts equal to the fixed
   // defaults the owner confirmed, but is editable at runtime (Settings >

@@ -1175,3 +1175,642 @@ export interface CustomerNotificationConfig {
   updatedByName?: string;
   updatedAt?: string;
 }
+
+// ============================================================================
+// PROCUREMENT & SUPPLIER MANAGEMENT -- Splendor Procurement, Phase 1
+// ============================================================================
+// One closed-scope build covering: Supplier -> Purchase Order -> Quotes ->
+// Approval -> Payment -> Receiving -> Invoice -> Settlement -> Vehicle/
+// Operation -> Customer (where applicable) -> TARS (where applicable) ->
+// Expenses -> Balances -> Audit Trail. Every fixed dropdown list below that
+// the spec gave verbatim is implemented as given; a short number of lists
+// the spec required to be "fixed" without enumerating every value are a
+// clearly-labeled configurable starter set, not a final business decision --
+// see the Phase 1 closure report's "decisions needing approval" section.
+
+// ---- Supplier operation types (configurable from Settings) ----
+export type SupplierOperationTypeKey =
+  | 'vehicle_supply_rental' | 'spare_parts' | 'maintenance_repair' | 'tires'
+  | 'operating_materials' | 'equipment' | 'services' | 'other_purchases' | 'other';
+
+export interface SupplierOperationTypeDef {
+  key: SupplierOperationTypeKey;
+  labelEn: string;
+  labelAr: string;
+  active: boolean;
+}
+
+// ---- Suppliers ----
+export type SupplierFieldTier = 'core_mandatory' | 'required_to_complete' | 'optional';
+export type SupplierStatus = 'active' | 'pending_completion' | 'inactive';
+
+export interface SupplierBankDetails {
+  bankName?: string;
+  accountName?: string;
+  iban?: string;
+  swiftCode?: string;
+}
+
+export interface Supplier {
+  id: string; // SUP-000001
+  legalName: string;
+  tradeName?: string;
+  tradeLicenseNumber?: string;
+  taxRegistrationNumber?: string;
+  contactPersonName?: string;
+  contactPersonTitle?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  bankDetails?: SupplierBankDetails;
+  documentIds?: string[];
+  agreementDocumentIds?: string[];
+  policiesNotes?: string;
+  status: SupplierStatus;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  customFields?: Record<string, any>;
+}
+
+export type SupplierFieldKey =
+  | 'legalName' | 'tradeLicenseNumber' | 'phone' | 'taxRegistrationNumber' | 'bankDetails'
+  | 'email' | 'address' | 'tradeName' | 'documentIds' | 'agreementDocumentIds' | 'policiesNotes';
+
+export interface SupplierEligibilityResult {
+  supplierId: string;
+  operationType: SupplierOperationTypeKey;
+  status: 'met' | 'non_blocking_gap' | 'blocking_gap';
+  missingFields: SupplierFieldKey[];
+}
+
+export interface SupplierCompletenessSummary {
+  supplierId: string;
+  supplierName: string;
+  completionPercent: number;
+  missingRequiredToComplete: SupplierFieldKey[];
+  presentFields: SupplierFieldKey[];
+}
+
+// ---- Supplier quotes / offers ----
+export type QuoteSource = 'official_quote' | 'whatsapp' | 'email' | 'phone_call' | 'prior_agreement' | 'other';
+
+export interface SupplierQuote {
+  id: string; // QTV-000001
+  purchaseOrderId?: string;
+  supplierId: string;
+  supplierName: string;
+  source: QuoteSource;
+  sourceOther?: string;
+  contactInfo?: string;
+  price: number;
+  terms?: string;
+  documentIds?: string[];
+  isSelected: boolean;
+  selectedBy?: string;
+  selectedByName?: string;
+  selectedAt?: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Purchase Orders ----
+export type PurchaseOrderKind = 'regular' | 'retroactive';
+export type PurchaseOrderStatus =
+  | 'draft' | 'pending_approval' | 'approved'
+  | 'partially_fulfilled' | 'fulfilled'
+  | 'partially_cancelled' | 'cancelled';
+
+// The spec requires "a fixed list" of retroactive-PO reasons but names only
+// "emergency purchase" explicitly -- the rest is a sensible configurable
+// starter set (Settings-editable, same pattern as SupplierOperationTypeDef),
+// not a final business decision. See the closure report.
+export type RetroactivePOReason =
+  | 'emergency_purchase' | 'invoice_received_before_po' | 'price_confirmed_after_delivery'
+  | 'verbal_agreement_formalized_late' | 'other';
+
+export interface PurchaseOrderLineItemCancellation {
+  reason: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  financialImpact?: string;
+  status: 'pending_approval' | 'approved' | 'rejected';
+}
+
+export interface PurchaseOrderLineItem {
+  id: string;
+  operationType: SupplierOperationTypeKey;
+  operationTypeOther?: string;
+  description: string;
+  vehicleDescription?: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  status: 'pending' | 'received' | 'partially_cancelled' | 'cancelled';
+  operationId?: string;
+  cancellation?: PurchaseOrderLineItemCancellation;
+}
+
+export interface PurchaseOrderAmendmentRequest {
+  id: string; // POAR-000001
+  purchaseOrderId: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  reason: string;
+  proposedLineItems: PurchaseOrderLineItem[];
+  proposedTotalValue: number;
+  status: 'pending_approval' | 'approved' | 'rejected';
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  resultingVersion?: number;
+}
+
+export interface PurchaseOrderVersionSnapshot {
+  version: number;
+  lineItems: PurchaseOrderLineItem[];
+  totalValue: number;
+  requiredApprovalTier: string;
+  changedBy: string;
+  changedByName: string;
+  changedAt: string;
+  reason: string;
+  amendmentRequestId?: string;
+}
+
+export interface PurchaseOrderCancellation {
+  reason: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  financialImpact?: string;
+  status: 'pending_approval' | 'approved' | 'rejected';
+}
+
+export interface PurchaseOrder {
+  id: string; // PO-SCR-100, PO-SCR-101, ...
+  kind: PurchaseOrderKind;
+  retroactiveReason?: RetroactivePOReason;
+  retroactiveReasonOther?: string;
+  actualOperationDate?: string;
+  supplierId: string;
+  supplierName: string;
+  lineItems: PurchaseOrderLineItem[];
+  totalValue: number;
+  requiredApprovalTier: string;
+  status: PurchaseOrderStatus;
+  requestedBy: string;
+  requestedByName: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  version: number;
+  history: PurchaseOrderVersionSnapshot[];
+  amendmentRequestIds?: string[];
+  cancellation?: PurchaseOrderCancellation;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Per-line "Operation" -- the unified reference id everything auto-links to ----
+export type ProcurementOperationStatus = 'open' | 'in_progress' | 'closed' | 'cancelled';
+
+export interface ProcurementOperation {
+  id: string; // OPS-000001
+  purchaseOrderId: string;
+  lineItemId: string;
+  supplierId: string;
+  supplierName: string;
+  operationType: SupplierOperationTypeKey;
+  description: string;
+  status: ProcurementOperationStatus;
+  vehicleId?: string;
+  supplierInvoiceIds: string[];
+  supplierPaymentIds: string[];
+  supplierAgreementDocumentIds: string[];
+  customerContractId?: string;
+  documentIds: string[];
+  tarsRecordId?: string;
+  receivingRecordId?: string;
+  totalCost: number;
+  totalRevenue: number;
+  profitLoss: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Procurement payment methods (spec's own fixed list, separate from the existing customer-facing PaymentMethod) ----
+export type ProcurementPaymentMethod =
+  | 'cash' | 'bank_card' | 'bank_transfer' | 'cheque' | 'electronic_payment' | 'employee_custody' | 'other';
+
+// ---- Supplier payments: post-verification vs advance ----
+export type SupplierPaymentTrack = 'post_verification' | 'advance';
+export type SupplierPaymentStatus = 'pending_approval' | 'approved' | 'paid' | 'rejected';
+
+export interface SupplierPaymentRequest {
+  id: string; // SPR-000001
+  purchaseOrderId: string;
+  operationId?: string;
+  supplierId: string;
+  supplierName: string;
+  track: SupplierPaymentTrack;
+  amount: number;
+  paymentMethod: ProcurementPaymentMethod;
+  paymentMethodOther?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  reason?: string;
+  status: SupplierPaymentStatus;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  paidAt?: string;
+  isIncreaseOfRequestId?: string;
+}
+
+export interface AdvanceSettlement {
+  id: string; // ADVS-000001
+  purchaseOrderId: string;
+  operationId?: string;
+  supplierId: string;
+  originalAdvanceAmount: number;
+  amountDueToSupplierPerCancellationTerms: number;
+  amountToBeRefunded: number;
+  deductionsOrFees: number;
+  netRefund: number;
+  refundStatus: 'pending' | 'in_progress' | 'completed';
+  reason: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+}
+
+// ---- Balances: opening balances, offsetting, non-offsettable states ----
+export type BalanceDirection = 'owed_to_us' | 'owed_by_us' | 'zero';
+export type BalanceOffsetEligibility =
+  | 'offsettable' | 'not_offsettable_dispute' | 'not_offsettable_investigation' | 'not_offsettable_unsettled';
+
+export interface PartyOpeningBalance {
+  id: string; // OBAL-000001
+  partyType: 'supplier' | 'customer';
+  partyId: string;
+  amount: number;
+  direction: BalanceDirection;
+  offsetEligibility: BalanceOffsetEligibility;
+  notes?: string;
+  recordedBy: string;
+  recordedByName: string;
+  recordedAt: string;
+}
+
+export interface OffsetRequest {
+  id: string; // OFS-000001
+  partyType: 'supplier' | 'customer';
+  partyId: string;
+  balanceBefore: number;
+  offsetAmount: number;
+  linkedOperationIds: string[];
+  reason: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  status: 'pending_approval' | 'approved' | 'rejected';
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  balanceAfter?: number;
+}
+
+// ---- Customer disputed amounts / credit balances / refunds ----
+export interface CustomerDisputedAmount {
+  id: string; // DISP-000001
+  customerId: string;
+  amount: number;
+  relatedChargeId?: string;
+  relatedContractId?: string;
+  status: 'open' | 'under_review' | 'resolved_upheld' | 'resolved_waived' | 'resolved_partial';
+  objectionReason: string;
+  raisedAt: string;
+  resolution?: string;
+  resolvedBy?: string;
+  resolvedByName?: string;
+  resolvedAt?: string;
+}
+
+export type CustomerCreditBalanceSource = 'cancellation_refund_due' | 'overpayment' | 'goodwill_adjustment' | 'other';
+
+export interface CustomerCreditBalance {
+  id: string; // CCB-000001
+  customerId: string;
+  amount: number;
+  originalAmount: number;
+  source: CustomerCreditBalanceSource;
+  sourceOther?: string;
+  relatedContractId?: string;
+  status: 'open' | 'partially_used' | 'refunded' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerRefundRequest {
+  id: string; // CREF-000001
+  customerId: string;
+  creditBalanceId?: string;
+  amount: number;
+  reason: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  status: 'pending_approval' | 'approved' | 'rejected' | 'executed';
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  executedBy?: string;
+  executedByName?: string;
+  executedAt?: string;
+  paymentMethod?: ProcurementPaymentMethod;
+}
+
+export type ReceivedAmountClassification =
+  | 'settlement' | 'advance_payment' | 'security_deposit' | 'credit_balance'
+  | 'settlement_adjustment' | 'other_approved' | 'unclassified';
+
+// ---- Debts / charges (the spec's own fixed list -- distinct from the existing ChargeType) ----
+export type DebtType =
+  | 'late_fee' | 'traffic_fine' | 'salik' | 'damage' | 'fuel_shortage'
+  | 'cleaning' | 'delivery_collection' | 'other_approved' | 'other';
+
+export interface DebtSettlementMovement {
+  id: string;
+  method: ProcurementPaymentMethod;
+  methodOther?: string;
+  amount: number;
+  recordedBy: string;
+  recordedByName: string;
+  recordedAt: string;
+  correctedFromMovementId?: string;
+  reversedMovementId?: string;
+  isReversal?: boolean;
+}
+
+export interface DebtCorrection {
+  reason: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  amountBefore: number;
+  amountAfter: number;
+  status: 'pending_approval' | 'approved' | 'rejected';
+}
+
+export interface DebtCancellation {
+  reason: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  status: 'pending_approval' | 'approved' | 'rejected';
+}
+
+export interface Debt {
+  id: string; // DBT-000001
+  customerId: string;
+  customerName: string;
+  type: DebtType;
+  typeOther?: string;
+  description: string;
+  evidenceDocumentIds?: string[];
+  originalAmount: number;
+  settlements: DebtSettlementMovement[];
+  paidAmount: number;
+  remainingAmount: number;
+  status: 'open' | 'partially_paid' | 'paid' | 'cancelled';
+  corrections?: DebtCorrection[];
+  cancellation?: DebtCancellation;
+  relatedContractId?: string;
+  relatedOperationId?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Employee custody / float ----
+export interface EmployeeCustodyMovement {
+  id: string;
+  type: 'opening_balance' | 'amount_issued' | 'expense' | 'amount_returned' | 'settlement';
+  amount: number;
+  relatedExpenseId?: string;
+  recordedBy: string;
+  recordedByName: string;
+  recordedAt: string;
+  note?: string;
+}
+
+export interface EmployeeCustody {
+  id: string; // FLOAT-000001
+  employeeId: string;
+  employeeName: string;
+  movements: EmployeeCustodyMovement[];
+  currentBalance: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EmployeeExpenseStatus = 'pending_review' | 'approved' | 'rejected';
+export type EmployeeExpenseFundingSource = 'custody_float' | 'employee_own_money';
+
+export interface EmployeeExpenseRejection {
+  reason: string;
+  rejectedBy: string;
+  rejectedByName: string;
+  rejectedAt: string;
+}
+
+export interface EmployeeExpense {
+  id: string; // EEXP-000001
+  employeeId: string;
+  employeeName: string;
+  custodyId?: string;
+  fundingSource: EmployeeExpenseFundingSource;
+  category: string;
+  categoryOther?: string;
+  amount: number;
+  date: string;
+  vendorOrPartyName?: string;
+  documentIds?: string[];
+  status: EmployeeExpenseStatus;
+  amountOwedToEmployee?: number;
+  rejectionHistory?: EmployeeExpenseRejection[];
+  resubmittedAt?: string;
+  duplicateWarning?: { possibleDuplicateOfExpenseId: string; acknowledgedReason?: string };
+  createdAt: string;
+  updatedAt: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+}
+
+// ---- Supplier invoices ----
+export interface SupplierInvoiceCancellation {
+  reason: string;
+  cancelledBy: string;
+  cancelledByName: string;
+  cancelledAt: string;
+  replacementInvoiceId?: string;
+}
+
+export interface SupplierInvoice {
+  id: string; // SINV-000001
+  purchaseOrderId?: string;
+  operationId?: string;
+  supplierId: string;
+  supplierName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  amount: number;
+  documentIds: string[];
+  status: 'pending_review' | 'approved' | 'cancelled';
+  correctionOfInvoiceId?: string;
+  correctionReason?: string;
+  cancellation?: SupplierInvoiceCancellation;
+  duplicateWarning?: { possibleDuplicateOfInvoiceId: string; acknowledgedReason?: string };
+  poVarianceAmount?: number;
+  varianceApprovalRequestId?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Expense without invoice / undocumented expense ----
+export type ExpenseDocumentationLevel = 'has_invoice' | 'no_invoice_has_alternate_document' | 'undocumented';
+
+export interface OperationalExpense {
+  id: string; // OPEXP-000001
+  operationId?: string;
+  documentationLevel: ExpenseDocumentationLevel;
+  category: string;
+  categoryOther?: string;
+  amount: number;
+  date: string;
+  vendorOrPartyName?: string;
+  reasonForNoInvoice?: string;
+  alternateDocumentIds?: string[];
+  paymentMethod: ProcurementPaymentMethod;
+  paymentMethodOther?: string;
+  detailedDescription?: string;
+  evidenceIds?: string[];
+  status: 'pending_approval' | 'approved' | 'rejected';
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+}
+
+// ---- Vehicle receiving from supplier ----
+export type ReceivingResult = 'matching' | 'with_reservation' | 'rejected';
+export type ReservationSeverity = 'simple' | 'impactful' | 'dangerous_safety';
+
+export interface VehicleReceivingRecord {
+  id: string; // RCV-000001
+  operationId: string;
+  purchaseOrderId: string;
+  supplierId: string;
+  vehicleId?: string;
+  result: ReceivingResult;
+  reservationSeverity?: ReservationSeverity;
+  reservationReason?: string;
+  description: string;
+  mediaDocumentIds: string[];
+  receivedBy: string;
+  receivedByName: string;
+  receivedAt: string;
+  decision: 'proceed' | 'requires_approval_before_handover' | 'blocked';
+  approvedForHandoverBy?: string;
+  approvedForHandoverByName?: string;
+  approvedForHandoverAt?: string;
+  financialImpact?: string;
+  createdAt: string;
+}
+
+export interface NewDamageAtReturn {
+  id: string; // DMGR-000001
+  operationId?: string;
+  vehicleId?: string;
+  contractId: string;
+  description: string;
+  mediaDocumentIds: string[];
+  comparedToReceivingRecordId?: string;
+  responsibilityDetermination?: 'customer' | 'supplier' | 'splendor' | 'undetermined';
+  financialSettlementStatus: 'pending_determination' | 'settled';
+  recordedBy: string;
+  recordedByName: string;
+  recordedAt: string;
+}
+
+// ---- TARS ----
+export interface TarsRecord {
+  id: string; // TARS-000001
+  operationId?: string;
+  contractId: string;
+  vehicleId?: string;
+  contractSignedAt: string;
+  deadlineAt: string;
+  executedAt?: string;
+  executedBy?: string;
+  executedByName?: string;
+  proofDocumentIds?: string[];
+  isDelayed?: boolean;
+  delayMinutes?: number;
+  fineAmount?: number;
+  fineResponsibility?: 'supplier' | 'splendor';
+  supplierListingDelay?: boolean;
+  returnedToSupplierAt?: string;
+  returnClosedAt?: string;
+  closingDelayed?: boolean;
+  escalationLevel?: 'none' | 'normal' | 'urgent';
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Customer delay / late-fee waiver ----
+export interface LateFeeWaiver {
+  id: string; // LFW-000001
+  contractId: string;
+  originalLateFeeAmount: number;
+  waivedAmount: number;
+  reason: string;
+  waivedBy: string;
+  waivedByName: string;
+  waivedAt: string;
+}

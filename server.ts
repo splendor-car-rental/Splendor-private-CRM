@@ -28,6 +28,13 @@ import {
 import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
 import { detectAnomalies } from './src/server/anomalyDetection';
 import { checkOperationalHealth } from './src/server/operationalHealth';
+import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers';
+import { PROCUREMENT_PAYMENT_METHOD_DEFS, DEBT_TYPE_DEFS } from './src/config/procurement';
+import { createPurchaseOrder, PurchaseOrderError } from './src/server/purchaseOrders';
+import {
+  createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
+  ProcurementApprovalError
+} from './src/server/procurementApprovals';
 import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
@@ -5010,6 +5017,264 @@ app.post('/api/tests/run-all', (req, res) => {
 });
 
 // ----------------------------------------------------
+// 13. PROCUREMENT & SUPPLIER MANAGEMENT (Splendor Procurement, Phase 1)
+// ----------------------------------------------------
+// Supplier -> Purchase Order -> Quotes -> Approval -> Payment -> Receiving
+// -> Invoice -> Settlement -> Vehicle/Operation -> Customer (where
+// applicable) -> TARS (where applicable) -> Expenses -> Balances -> Audit
+// Trail. See src/server/{suppliers,purchaseOrders,procurementApprovals}.ts.
+
+// ---- Supplier operation types (rule 2 -- configurable from Settings) ----
+app.get('/api/procurement/supplier-operation-types', (req, res) => {
+  res.json(globalStore.supplierOperationTypes);
+});
+
+app.post('/api/procurement/supplier-operation-types', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const { key, labelEn, labelAr } = req.body || {};
+  if (!key || !labelEn || !labelAr) {
+    return res.status(400).json({ error: 'key, labelEn, and labelAr are required.' });
+  }
+  if (globalStore.supplierOperationTypes.some(t => t.key === key)) {
+    return res.status(409).json({ error: `Operation type "${key}" already exists.` });
+  }
+  const def = { key, labelEn, labelAr, active: true };
+  await updateDurable('settings', 'supplier_operation_types', { types: [...globalStore.supplierOperationTypes, def] });
+  globalStore.supplierOperationTypes.push(def as any);
+  res.status(201).json(def);
+}));
+
+// ---- Retroactive PO reasons (rule 57 -- starter set, Settings-editable) ----
+app.get('/api/procurement/retroactive-po-reasons', (req, res) => {
+  res.json(globalStore.retroactivePOReasons);
+});
+
+// ---- Procurement payment methods (rule 67 -- fixed, from spec) ----
+app.get('/api/procurement/payment-methods', (req, res) => {
+  res.json(PROCUREMENT_PAYMENT_METHOD_DEFS);
+});
+
+// ---- Debt/charge types (rule 34 -- fixed, from spec) ----
+app.get('/api/procurement/debt-types', (req, res) => {
+  res.json(DEBT_TYPE_DEFS);
+});
+
+// ---- Expense categories (rules 43-51, 64 -- starter set, Settings-editable) ----
+app.get('/api/procurement/expense-categories', (req, res) => {
+  res.json(globalStore.expenseCategories);
+});
+
+// ---- Suppliers (rules 4-7) ----
+app.get('/api/suppliers', (req, res) => {
+  res.json(globalStore.suppliers);
+});
+
+app.get('/api/suppliers/completeness', requireRole('ceo', 'admin', 'finance'), (req, res) => {
+  // Rule 7: a standing follow-up list of every supplier missing
+  // required-to-complete data, so incomplete files don't just sit silently
+  // until someone happens to need that supplier for a specific PO.
+  res.json(globalStore.suppliers.map(computeSupplierCompleteness));
+});
+
+app.get('/api/suppliers/:id', (req, res) => {
+  const supplier = globalStore.suppliers.find(s => s.id === req.params.id);
+  if (!supplier) return res.status(404).json({ error: 'Supplier not found.' });
+  res.json(supplier);
+});
+
+app.get('/api/suppliers/:id/eligibility', (req, res) => {
+  const supplier = globalStore.suppliers.find(s => s.id === req.params.id);
+  if (!supplier) return res.status(404).json({ error: 'Supplier not found.' });
+  const operationType = req.query.operationType as any;
+  if (!operationType) return res.status(400).json({ error: 'operationType query parameter is required.' });
+  res.json(checkSupplierEligibility(supplier, operationType));
+});
+
+app.post('/api/suppliers', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('Supplier');
+  const now = new Date().toISOString();
+  const actor = await getRequesterActor(req);
+  const body = req.body || {};
+
+  const supplier = {
+    legalName: body.legalName,
+    tradeName: body.tradeName,
+    tradeLicenseNumber: body.tradeLicenseNumber,
+    taxRegistrationNumber: body.taxRegistrationNumber,
+    contactPersonName: body.contactPersonName,
+    contactPersonTitle: body.contactPersonTitle,
+    phone: body.phone,
+    email: body.email,
+    address: body.address,
+    bankDetails: body.bankDetails,
+    documentIds: body.documentIds || [],
+    agreementDocumentIds: body.agreementDocumentIds || [],
+    policiesNotes: body.policiesNotes,
+    id: newId,
+    status: 'pending_completion' as const,
+    createdBy: actor?.uid || 'USR-001',
+    createdByName: actor?.name || 'Staff',
+    createdAt: now,
+    updatedAt: now
+  };
+
+  if (!supplier.legalName) {
+    return res.status(400).json({ error: 'legalName is required.' });
+  }
+
+  // Rule 6: a supplier can be activated the moment its core-mandatory
+  // fields exist -- it is never blocked by data an operation doesn't need yet.
+  (supplier as any).status = canActivateSupplier(supplier as any) ? 'active' : 'pending_completion';
+
+  await createDurable('suppliers', supplier);
+  globalStore.suppliers.unshift(supplier as any);
+
+  await recordAudit({
+    userId: supplier.createdBy,
+    userName: supplier.createdByName,
+    userRole: actor?.role || 'operations',
+    entityType: 'Supplier',
+    entityId: newId,
+    action: 'create',
+    newValue: `Registered supplier "${supplier.legalName}" (status: ${supplier.status}).`
+  });
+
+  res.status(201).json(supplier);
+}));
+
+app.put('/api/suppliers/:id', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const index = globalStore.suppliers.findIndex(s => s.id === req.params.id);
+  if (index === -1) return res.status(404).json({ error: 'Supplier not found.' });
+  const prev = globalStore.suppliers[index];
+  const actor = await getRequesterActor(req);
+
+  const updated = { ...prev, ...req.body, id: prev.id, updatedAt: new Date().toISOString() };
+  updated.status = canActivateSupplier(updated) ? (prev.status === 'inactive' ? 'inactive' : 'active') : 'pending_completion';
+
+  await updateDurable('suppliers', updated.id, updated as unknown as Record<string, unknown>);
+  globalStore.suppliers[index] = updated;
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: actor?.role || 'operations',
+    entityType: 'Supplier',
+    entityId: updated.id,
+    action: 'update',
+    previousValue: JSON.stringify({ status: prev.status }),
+    newValue: JSON.stringify({ status: updated.status })
+  });
+
+  res.json(updated);
+}));
+
+// ---- Purchase Orders (rules 1-3, 9-13, 54-63) ----
+app.get('/api/purchase-orders', (req, res) => {
+  res.json(globalStore.purchaseOrders);
+});
+
+app.get('/api/purchase-orders/:id', (req, res) => {
+  const po = globalStore.purchaseOrders.find(p => p.id === req.params.id);
+  if (!po) return res.status(404).json({ error: 'Purchase order not found.' });
+  res.json(po);
+});
+
+app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required -- a PO can only reference a registered supplier, never free text.' });
+  const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
+  if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to submit this PO for approval.' });
+  }
+
+  try {
+    const { po, approvalRequestId } = await createPurchaseOrder({
+      kind: body.kind === 'retroactive' ? 'retroactive' : 'regular',
+      retroactiveReason: body.retroactiveReason,
+      retroactiveReasonOther: body.retroactiveReasonOther,
+      actualOperationDate: body.actualOperationDate,
+      supplierId: supplier.id,
+      supplierName: supplier.legalName,
+      lineItems: body.lineItems || [],
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any,
+      reason: body.reason
+    }, recordAudit);
+
+    globalStore.purchaseOrders.unshift(po);
+    res.status(201).json({ po, approvalRequestId, status: 'pending_approval' });
+  } catch (error: any) {
+    if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
+app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
+  const entityType = req.query.entityType as string | undefined;
+  res.json(await listProcurementApprovals(status, entityType));
+}));
+
+app.get('/api/procurement/approvals/:id', asyncHandler(async (req, res) => {
+  const request = await getProcurementApproval(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Approval request not found.' });
+  res.json(request);
+}));
+
+app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') {
+    return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  }
+
+  try {
+    const decided = await decideProcurementApproval(
+      req.params.id, decision, note, { uid: actor.uid, name: actor.name, role: actor.role as any }, recordAudit
+    );
+
+    // Reflect the decision into the in-memory PO cache so GET /api/purchase-orders
+    // is immediately consistent, since the handler wrote straight to Firestore.
+    if (decided.entityType === 'PurchaseOrder' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('purchase_orders').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.purchaseOrders.findIndex(p => p.id === decided.entityId);
+        if (index !== -1) globalStore.purchaseOrders[index] = snap.data() as any;
+        const opsSnap = await admin2.firestore().collection('procurement_operations').where('purchaseOrderId', '==', decided.entityId).get();
+        opsSnap.docs.forEach(d => {
+          if (!globalStore.procurementOperations.some(o => o.id === d.id)) {
+            globalStore.procurementOperations.unshift(d.data() as any);
+          }
+        });
+      }
+    }
+
+    res.json(decided);
+  } catch (error: any) {
+    if (error instanceof ProcurementApprovalError) return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Procurement Operations (rule 9-10) ----
+app.get('/api/procurement/operations', (req, res) => {
+  res.json(globalStore.procurementOperations);
+});
+
+app.get('/api/procurement/operations/:id', (req, res) => {
+  const operation = globalStore.procurementOperations.find(o => o.id === req.params.id);
+  if (!operation) return res.status(404).json({ error: 'Operation not found.' });
+  res.json(operation);
+});
+
+// ----------------------------------------------------
 // 12b. HYDRATE IN-MEMORY STORE FROM FIRESTORE ON BOOT
 // ----------------------------------------------------
 // `globalStore` (src/server/dataStore.ts) is a plain in-memory object -- it
@@ -5100,7 +5365,30 @@ const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   notificationEventConfigs: 'notification_event_configs',
   customReminders: 'custom_reminders',
   whatsappMessageLog: 'whatsapp_message_log',
-  customerNotificationConfigs: 'customer_notification_configs'
+  customerNotificationConfigs: 'customer_notification_configs',
+
+  // Procurement & Supplier Management (Splendor Procurement, Phase 1)
+  suppliers: 'suppliers',
+  supplierQuotes: 'supplier_quotes',
+  purchaseOrders: 'purchase_orders',
+  purchaseOrderAmendmentRequests: 'purchase_order_amendment_requests',
+  procurementOperations: 'procurement_operations',
+  supplierPaymentRequests: 'supplier_payment_requests',
+  advanceSettlements: 'advance_settlements',
+  partyOpeningBalances: 'party_opening_balances',
+  offsetRequests: 'offset_requests',
+  customerDisputedAmounts: 'customer_disputed_amounts',
+  customerCreditBalances: 'customer_credit_balances',
+  customerRefundRequests: 'customer_refund_requests',
+  debts: 'debts',
+  employeeCustodies: 'employee_custodies',
+  employeeExpenses: 'employee_expenses',
+  supplierInvoices: 'supplier_invoices',
+  operationalExpenses: 'operational_expenses',
+  vehicleReceivingRecords: 'vehicle_receiving_records',
+  newDamageAtReturnRecords: 'new_damage_at_return_records',
+  tarsRecords: 'tars_records',
+  lateFeeWaivers: 'late_fee_waivers'
 };
 
 async function hydrateStoreFromFirestore() {

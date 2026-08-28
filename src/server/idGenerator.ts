@@ -20,6 +20,8 @@ import admin from 'firebase-admin';
 interface NumberingDefaults {
   prefix: string;
   digits: number;
+  /** First number ever issued for this entity. Omit for the normal start-at-1 behavior. */
+  startAt?: number;
 }
 
 // Mirrors DataStore.numberingConfigs' original seed values (dataStore.ts)
@@ -51,7 +53,33 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   auditlog: { prefix: 'AUD-', digits: 6 },
   bankbatch: { prefix: '', digits: 2 },
   customreminder: { prefix: 'REM-', digits: 6 },
-  customfield: { prefix: 'CF-', digits: 2 }
+  customfield: { prefix: 'CF-', digits: 2 },
+
+  // Procurement & Supplier Management (Splendor Procurement, Phase 1).
+  // purchaseorder starts at 100 per the spec ("PO-SCR-100, PO-SCR-101, ...")
+  // -- every other new entity here follows the normal start-at-1 behavior.
+  supplier: { prefix: 'SUP-', digits: 6 },
+  supplierquote: { prefix: 'QTV-', digits: 6 },
+  purchaseorder: { prefix: 'PO-SCR-', digits: 3, startAt: 100 },
+  purchaseorderamendmentrequest: { prefix: 'POAR-', digits: 6 },
+  procurementoperation: { prefix: 'OPS-', digits: 6 },
+  supplierpaymentrequest: { prefix: 'SPR-', digits: 6 },
+  advancesettlement: { prefix: 'ADVS-', digits: 6 },
+  partyopeningbalance: { prefix: 'OBAL-', digits: 6 },
+  offsetrequest: { prefix: 'OFS-', digits: 6 },
+  customerdisputedamount: { prefix: 'DISP-', digits: 6 },
+  customercreditbalance: { prefix: 'CCB-', digits: 6 },
+  customerrefundrequest: { prefix: 'CREF-', digits: 6 },
+  debt: { prefix: 'DBT-', digits: 6 },
+  employeecustody: { prefix: 'FLOAT-', digits: 6 },
+  employeeexpense: { prefix: 'EEXP-', digits: 6 },
+  supplierinvoice: { prefix: 'SINV-', digits: 6 },
+  operationalexpense: { prefix: 'OPEXP-', digits: 6 },
+  vehiclereceivingrecord: { prefix: 'RCV-', digits: 6 },
+  newdamageatreturn: { prefix: 'DMGR-', digits: 6 },
+  tarsrecord: { prefix: 'TARS-', digits: 6 },
+  latefeewaiver: { prefix: 'LFW-', digits: 6 },
+  procurementapproval: { prefix: 'PAPR-', digits: 6 }
 };
 
 export class IdGenerationError extends Error {
@@ -90,9 +118,12 @@ export async function issueNextNumber(entityName: string): Promise<string> {
 
       const prefix: string = data?.prefix ?? defaults?.prefix ?? `${entityName.toUpperCase().slice(0, 3)}-`;
       const digits: number = data?.digits ?? defaults?.digits ?? 6;
+      const startAt: number = defaults?.startAt ?? 1;
       // nextNumber here means "the number about to be issued" -- matches
-      // the original DataStore.numberingConfigs seed semantics (starts at 1).
-      const current: number = typeof data?.nextNumber === 'number' && data.nextNumber >= 1 ? data.nextNumber : 1;
+      // the original DataStore.numberingConfigs seed semantics (starts at 1,
+      // or at `startAt` for an entity whose sequence must begin somewhere
+      // else -- e.g. Purchase Orders start at 100 per the procurement spec).
+      const current: number = typeof data?.nextNumber === 'number' && data.nextNumber >= startAt ? data.nextNumber : startAt;
       const next = current + 1;
       const formatted = `${prefix}${String(current).padStart(digits, '0')}`;
 
