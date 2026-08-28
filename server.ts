@@ -5458,6 +5458,16 @@ app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operati
 }));
 
 // ---- PO Amendment (rules 10-11): request -> review -> approval -> new version ----
+// GET was missing entirely -- the amendment-request POST route and the
+// approval engine both existed, but nothing ever let the frontend read an
+// amendment request back, so there was no way to show an approver the
+// actual before/after line items they're deciding on, or to list a PO's
+// amendment history. globalStore.purchaseOrderAmendmentRequests was
+// already hydrated at boot; it just had no route reading from it.
+app.get('/api/purchase-orders/:id/amendment-requests', (req, res) => {
+  res.json(globalStore.purchaseOrderAmendmentRequests.filter(ar => ar.purchaseOrderId === req.params.id));
+});
+
 app.post('/api/purchase-orders/:id/amendment-requests', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
@@ -5475,6 +5485,20 @@ app.post('/api/purchase-orders/:id/amendment-requests', requireRole('ceo', 'admi
       requestedByRole: actor.role as any,
       reason: body.reason
     }, recordAudit);
+    // requestPurchaseOrderAmendment() only writes to Firestore -- syncing
+    // globalStore here is this route handler's job, same as every other
+    // create route in this file (e.g. POST /api/purchase-orders itself).
+    // Both the new amendment request AND the PO's own amendmentRequestIds
+    // array need this (the PO doc was updated in Firestore too, by the
+    // same call, but globalStore.purchaseOrders was never told).
+    globalStore.purchaseOrderAmendmentRequests.unshift(amendmentRequest);
+    const poIndex = globalStore.purchaseOrders.findIndex(p => p.id === req.params.id);
+    if (poIndex !== -1) {
+      globalStore.purchaseOrders[poIndex] = {
+        ...globalStore.purchaseOrders[poIndex],
+        amendmentRequestIds: [...(globalStore.purchaseOrders[poIndex].amendmentRequestIds || []), amendmentRequest.id]
+      };
+    }
     res.status(201).json({ amendmentRequest, approvalRequestId });
   } catch (error: any) {
     if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
@@ -6578,6 +6602,38 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
             globalStore.procurementOperations[opIndex] = d.data() as any;
           }
         });
+      }
+    }
+
+    // PO amendment requests: the approval handler (approve_amendment)
+    // already marks the amendment request 'approved' in Firestore when
+    // decision === 'approved', but nothing marks it 'rejected' when it's
+    // rejected -- decideProcurementApproval only updates the generic
+    // procurement_approvals record on rejection, never the amendment
+    // request's own document, so a rejected amendment would sit at
+    // 'pending_approval' forever. Fixed here, localized to this one entity
+    // type, since GET /api/purchase-orders/:id/amendment-requests (added
+    // alongside this PO Amendment UI work) needs a real, accurate status
+    // to show -- not a wholesale fix of every other entity type with the
+    // same "no sync on reject" gap (see the engineering report).
+    if (decided.entityType === 'PurchaseOrder' && decided.action === 'approve_amendment') {
+      const amendmentId = (decided.payload as any)?.amendmentRequestId as string | undefined;
+      if (amendmentId) {
+        if (decision === 'rejected') {
+          await updateDurable('purchase_order_amendment_requests', amendmentId, {
+            status: 'rejected',
+            decidedBy: actor.uid,
+            decidedByName: actor.name,
+            decidedAt: new Date().toISOString(),
+            decisionNote: note
+          } as unknown as Record<string, unknown>);
+        }
+        const arSnap = await admin.firestore().collection('purchase_order_amendment_requests').doc(amendmentId).get();
+        if (arSnap.exists) {
+          const index = globalStore.purchaseOrderAmendmentRequests.findIndex(a => a.id === amendmentId);
+          if (index !== -1) globalStore.purchaseOrderAmendmentRequests[index] = arSnap.data() as any;
+          else globalStore.purchaseOrderAmendmentRequests.unshift(arSnap.data() as any);
+        }
       }
     }
 

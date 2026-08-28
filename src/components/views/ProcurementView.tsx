@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck } from 'lucide-react';
+import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
-import type { Supplier, PurchaseOrder, SupplierOperationTypeDef } from '../../types';
+import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem } from '../../types';
 
 /**
  * Splendor Procurement, Phase 1 -- operator-facing surface.
@@ -17,7 +17,8 @@ import type { Supplier, PurchaseOrder, SupplierOperationTypeDef } from '../../ty
  * tars,lateFees}.ts) implements all ~15 procurement workflows end to end,
  * each covered by its own HTTP test suite (tests/procurement.test.ts).
  * This screen gives UI coverage to the two highest-leverage surfaces:
- * Suppliers + Purchase Orders (the workflow every other one hangs off of),
+ * Suppliers + Purchase Orders (the workflow every other one hangs off of,
+ * including its full amendment request -> review -> approval workflow),
  * and a single universal Approvals inbox that decides EVERY pending
  * procurement request regardless of type, since they all flow through the
  * same generic Segregation-of-Duties engine (procurementApprovals.ts).
@@ -88,6 +89,8 @@ export const ProcurementView: React.FC = () => {
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
   const [poModalOpen, setPoModalOpen] = useState(false);
+  const [amendmentModalPo, setAmendmentModalPo] = useState<PurchaseOrder | null>(null);
+  const [amendmentsByPo, setAmendmentsByPo] = useState<Record<string, PurchaseOrderAmendmentRequest[]>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,9 +102,26 @@ export const ProcurementView: React.FC = () => {
         apiFetch('/api/procurement/supplier-operation-types')
       ]);
       if (suppliersRes.ok) setSuppliers(await suppliersRes.json());
-      if (posRes.ok) setPurchaseOrders(await posRes.json());
+      let pos: PurchaseOrder[] = [];
+      if (posRes.ok) { pos = await posRes.json(); setPurchaseOrders(pos); }
       if (approvalsRes.ok) setApprovals(await approvalsRes.json());
       if (typesRes.ok) setOperationTypes(await typesRes.json());
+
+      // Only fetch amendment history for POs that actually have any --
+      // most never do, so this stays cheap rather than N fetches per load.
+      const withAmendments = pos.filter(po => (po.amendmentRequestIds || []).length > 0);
+      if (withAmendments.length > 0) {
+        const results = await Promise.all(
+          withAmendments.map(po => apiFetch(`/api/purchase-orders/${encodeURIComponent(po.id)}/amendment-requests`))
+        );
+        const map: Record<string, PurchaseOrderAmendmentRequest[]> = {};
+        for (let i = 0; i < withAmendments.length; i++) {
+          if (results[i].ok) map[withAmendments[i].id] = await results[i].json();
+        }
+        setAmendmentsByPo(map);
+      } else {
+        setAmendmentsByPo({});
+      }
     } catch (e) {
       console.error('Failed to load procurement data:', e);
     } finally {
@@ -203,6 +223,18 @@ export const ProcurementView: React.FC = () => {
 
   const pendingApprovals = approvals.filter(a => a.status === 'pending');
   const decidedApprovals = approvals.filter(a => a.status !== 'pending').slice(0, 30);
+
+  // For an amendment approval, the approval record itself only carries
+  // {amendmentRequestId} -- an approver deciding blind on that alone is a
+  // poor (and arguably risky) review experience, so resolve the actual
+  // before/after line items and total from amendmentsByPo, keyed by the
+  // PO (a.entityId) the approval already targets.
+  const findAmendment = (a: ProcurementApproval): PurchaseOrderAmendmentRequest | null => {
+    if (a.entityType !== 'PurchaseOrder' || a.action !== 'approve_amendment') return null;
+    const amendmentId = a.payload?.amendmentRequestId as string | undefined;
+    if (!amendmentId) return null;
+    return (amendmentsByPo[a.entityId] || []).find(ar => ar.id === amendmentId) || null;
+  };
 
   return (
     <div className="space-y-6 animate-fade-in pb-12 text-xs">
@@ -323,8 +355,38 @@ export const ProcurementView: React.FC = () => {
                     </div>
                   ))}
                 </div>
+                {(amendmentsByPo[po.id] || []).length > 0 && (
+                  <div className="mt-2.5 space-y-1">
+                    <p className="text-[10px] uppercase tracking-wide text-zinc-500 flex items-center gap-1">
+                      <History className="w-3 h-3" /> {language === 'ar' ? 'سجل التعديلات' : 'Amendment history'}
+                    </p>
+                    {amendmentsByPo[po.id].map(ar => (
+                      <div key={ar.id} className="px-2.5 py-1.5 rounded-lg bg-zinc-950/60 border border-zinc-800/60 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-zinc-400 truncate">
+                            <span className="font-mono text-zinc-500">{ar.id}</span> — {po.totalValue.toLocaleString()} → {ar.proposedTotalValue.toLocaleString()} AED · {ar.reason}
+                          </p>
+                          <p className="text-zinc-600 text-[10px]">{ar.requestedByName}{ar.decidedByName ? ` → ${ar.decidedByName}: ${ar.decisionNote || ''}` : ''}</p>
+                        </div>
+                        <Badge variant={ar.status === 'approved' ? 'emerald' : ar.status === 'rejected' ? 'rose' : 'amber'} size="sm">
+                          {ar.status.replace('_', ' ')}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {po.status !== 'cancelled' && (
-                  <div className="mt-2.5 flex justify-end">
+                  <div className="mt-2.5 flex justify-end gap-4">
+                    {['approved', 'partially_fulfilled', 'fulfilled', 'partially_cancelled'].includes(po.status) && (
+                      <button
+                        disabled={busyKey === po.id}
+                        onClick={() => setAmendmentModalPo(po)}
+                        className="text-[11px] font-medium text-[#f5d97f] hover:text-[#e2c48c] disabled:opacity-50 flex items-center gap-1"
+                      >
+                        <FileEdit className="w-3 h-3" />
+                        {language === 'ar' ? 'طلب تعديل' : 'Request amendment'}
+                      </button>
+                    )}
                     <button
                       disabled={busyKey === po.id}
                       onClick={() => cancelPO(po)}
@@ -351,11 +413,26 @@ export const ProcurementView: React.FC = () => {
               <p className="text-zinc-500">{language === 'ar' ? 'لا توجد طلبات معلّقة.' : 'No pending requests.'}</p>
             ) : (
               <div className="space-y-2">
-                {pendingApprovals.map(a => (
+                {pendingApprovals.map(a => {
+                  const amendment = findAmendment(a);
+                  return (
                   <div key={a.id} className="p-3 rounded-xl bg-zinc-900/60 border border-amber-500/30 flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-semibold text-zinc-100">{a.entityType} {a.entityId} — {a.action}</p>
                       <p className="text-zinc-400 mt-0.5">{a.requestedByName} ({a.requestedByRole}) · {a.reason}</p>
+                      {amendment && (
+                        <div className="mt-1.5 p-2 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
+                          <p className="text-zinc-300">
+                            {language === 'ar' ? 'القيمة الإجمالية:' : 'Total value:'}{' '}
+                            <span className="font-mono">{(purchaseOrders.find(p => p.id === a.entityId)?.totalValue ?? 0).toLocaleString()}</span>
+                            {' → '}
+                            <span className="font-mono text-[#f5d97f]">{amendment.proposedTotalValue.toLocaleString()} AED</span>
+                          </p>
+                          <p className="text-zinc-500 text-[10px] mt-0.5">
+                            {amendment.proposedLineItems.length} {language === 'ar' ? 'عنصر بعد التعديل — راجع أمر التوريد لرؤية كل سطر.' : 'line item(s) after this amendment — see the purchase order card for the full line-level detail.'}
+                          </p>
+                        </div>
+                      )}
                     </div>
                     {isDecider && a.requestedBy !== currentUser.id && (
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -381,7 +458,8 @@ export const ProcurementView: React.FC = () => {
                       <span className="text-[10px] text-zinc-500 shrink-0">{language === 'ar' ? 'بانتظار شخص آخر' : 'Awaiting a different approver'}</span>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -415,6 +493,12 @@ export const ProcurementView: React.FC = () => {
         suppliers={suppliers}
         operationTypes={operationTypes}
         onCreated={async () => { setPoModalOpen(false); await load(); }}
+      />
+      <AmendmentRequestModal
+        po={amendmentModalPo}
+        onClose={() => setAmendmentModalPo(null)}
+        operationTypes={operationTypes}
+        onCreated={async () => { setAmendmentModalPo(null); await load(); }}
       />
     </div>
   );
@@ -641,6 +725,181 @@ const NewPurchaseOrderModal: React.FC<{
           </button>
           <button type="submit" disabled={submitting} className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50">
             {language === 'ar' ? 'إرسال للموافقة' : 'Submit for approval'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+interface AmendmentLineDraft {
+  id?: string; // present = modifies an existing line; absent = a brand-new line
+  operationType: string;
+  description: string;
+  vehicleDescription: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+const AmendmentRequestModal: React.FC<{
+  po: PurchaseOrder | null;
+  onClose: () => void;
+  operationTypes: SupplierOperationTypeDef[];
+  onCreated: () => void;
+}> = ({ po, onClose, operationTypes, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [reason, setReason] = useState('');
+  const [lines, setLines] = useState<AmendmentLineDraft[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Re-seed the draft from the PO's CURRENT line items every time a
+  // different PO is opened for amendment -- each existing line keeps its
+  // id (so the backend treats it as "modify this line", carrying forward
+  // anything left untouched exactly as it already works: an existing line
+  // not mentioned at all is never silently removed).
+  useEffect(() => {
+    if (po) {
+      setLines(po.lineItems.map((li): AmendmentLineDraft => ({
+        id: li.id,
+        operationType: li.operationType,
+        description: li.description,
+        vehicleDescription: li.vehicleDescription || '',
+        quantity: li.quantity,
+        unitPrice: li.unitPrice
+      })));
+      setReason('');
+    }
+  }, [po]);
+
+  if (!po) return null;
+
+  const updateLine = (idx: number, patch: Partial<AmendmentLineDraft>) => {
+    setLines(items => items.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+  };
+
+  const proposedTotal = lines.reduce((sum, li) => sum + (Number(li.quantity) || 0) * (Number(li.unitPrice) || 0), 0);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reason.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/purchase-orders/${encodeURIComponent(po.id)}/amendment-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: reason.trim(),
+          lineItems: lines.map(li => ({
+            id: li.id,
+            operationType: li.operationType,
+            description: li.description,
+            vehicleDescription: li.vehicleDescription || undefined,
+            quantity: Number(li.quantity),
+            unitPrice: Number(li.unitPrice)
+          }))
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to request this amendment.');
+      showToast(
+        language === 'ar' ? 'تم إرسال طلب التعديل' : 'Amendment requested',
+        `${po.id} · ${po.totalValue.toLocaleString()} → ${data.amendmentRequest.proposedTotalValue.toLocaleString()} AED`
+      );
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={!!po}
+      onClose={onClose}
+      title={language === 'ar' ? `طلب تعديل — ${po.id}` : `Request Amendment — ${po.id}`}
+      subtitle={language === 'ar'
+        ? 'عدّل السطور الحالية أو أضف سطوراً جديدة. لا يمكن حذف سطر موجود من هنا -- فقط طلب إلغائه بشكل منفصل.'
+        : 'Edit existing lines or add new ones. An existing line can\'t be deleted here -- request its own cancellation separately for that.'}
+      maxWidth="4xl"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'سبب التعديل *' : 'Reason for this amendment *'}</label>
+          <input
+            required
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder={language === 'ar' ? 'مثال: تصحيح السعر بعد عرض سعر جديد من المورد' : 'e.g. Correcting the price after a new supplier quote'}
+            className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="block text-zinc-400 font-medium">{language === 'ar' ? 'العناصر' : 'Line items'}</label>
+            <button
+              type="button"
+              onClick={() => setLines(items => [...items, { operationType: '', description: '', vehicleDescription: '', quantity: 1, unitPrice: 0 }])}
+              className="text-[11px] text-[#f5d97f] hover:underline"
+            >
+              + {language === 'ar' ? 'إضافة عنصر جديد' : 'Add new line item'}
+            </button>
+          </div>
+          {lines.map((li, idx) => (
+            <div key={li.id || `new-${idx}`} className="grid grid-cols-12 gap-1.5 items-center">
+              <select
+                required
+                value={li.operationType}
+                onChange={e => updateLine(idx, { operationType: e.target.value })}
+                className="col-span-3 px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100"
+              >
+                <option value="">{language === 'ar' ? '-- النوع --' : '-- Type --'}</option>
+                {operationTypes.map(t => <option key={t.key} value={t.key}>{language === 'ar' ? t.labelAr : t.labelEn}</option>)}
+              </select>
+              <input
+                required
+                placeholder={language === 'ar' ? 'الوصف' : 'Description'}
+                value={li.description}
+                onChange={e => updateLine(idx, { description: e.target.value })}
+                className="col-span-4 px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100"
+              />
+              <input
+                type="number" min={1} required
+                value={li.quantity}
+                onChange={e => updateLine(idx, { quantity: Number(e.target.value) })}
+                className="col-span-2 px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100"
+              />
+              <input
+                type="number" min={0} step="0.01" required
+                placeholder={language === 'ar' ? 'السعر' : 'Unit price'}
+                value={li.unitPrice}
+                onChange={e => updateLine(idx, { unitPrice: Number(e.target.value) })}
+                className="col-span-2 px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100"
+              />
+              {li.id ? (
+                <span className="col-span-1 text-center text-[9px] text-zinc-600 font-mono truncate" title={li.id}>{language === 'ar' ? 'موجود' : 'existing'}</span>
+              ) : (
+                <button type="button" onClick={() => setLines(items => items.filter((_, i) => i !== idx))} className="col-span-1 text-rose-400 hover:text-rose-300">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
+          <p className="text-zinc-400 text-right pt-1">
+            {language === 'ar' ? 'الإجمالي الحالي' : 'Current total'}: <span className="font-mono">{po.totalValue.toLocaleString()} AED</span>
+            {' → '}
+            {language === 'ar' ? 'المقترح' : 'Proposed'}: <span className="font-mono text-[#f5d97f]">{proposedTotal.toLocaleString()} AED</span>
+          </p>
+        </div>
+
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !reason.trim()} className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'إرسال طلب التعديل للموافقة' : 'Submit amendment for approval'}
           </button>
         </div>
       </form>

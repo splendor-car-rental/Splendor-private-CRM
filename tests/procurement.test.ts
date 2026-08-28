@@ -464,6 +464,58 @@ describe('#7/#8 PO amendment (rules 10-11): new version, old version retained, v
       .send({ reason: 'test', lineItems: [{ operationType: 'services', description: 'Service', quantity: 2, unitPrice: 100 }] });
     expect(amendRes.status).toBe(400);
   });
+
+  // An approver REJECTING an amendment (distinct from the case above, where
+  // the amendment request itself was invalid) must leave a real trail: the
+  // amendment request's own record has to say 'rejected', not sit at
+  // 'pending_approval' forever, and the PO itself must be untouched.
+  it('rejecting an amendment leaves the amendment request marked rejected and the PO unchanged', async () => {
+    const po = await createApprovedPO();
+    const brakePads = po.lineItems.find((li: any) => li.description === 'Brake pads');
+
+    const amendRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/amendment-requests`)
+      .set(authAs(OPS_UID))
+      .send({
+        reason: 'Supplier increased the unit price',
+        lineItems: [{ id: brakePads.id, operationType: 'spare_parts', description: 'Brake pads', quantity: 2, unitPrice: 999 }]
+      });
+    expect(amendRes.status).toBe(201);
+
+    const decideRes = await request(app)
+      .post(`/api/procurement/approvals/${amendRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'rejected', note: 'Price increase not confirmed with supplier.' });
+    expect(decideRes.status).toBe(200);
+
+    const amendmentList = (await request(app)
+      .get(`/api/purchase-orders/${po.id}/amendment-requests`)
+      .set(authAs(OPS_UID))).body;
+    const rejected = amendmentList.find((ar: any) => ar.id === amendRes.body.amendmentRequest.id);
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.decisionNote).toBe('Price increase not confirmed with supplier.');
+
+    const updatedPO = (await request(app).get(`/api/purchase-orders/${po.id}`).set(authAs(OPS_UID))).body;
+    expect(updatedPO.version).toBe(1);
+    expect(updatedPO.totalValue).toBe(po.totalValue);
+  });
+
+  it('GET amendment-requests lists requests scoped to the given PO only', async () => {
+    const poA = await createApprovedPO();
+    const poB = await createApprovedPO();
+    const lineA = poA.lineItems[0];
+
+    await request(app)
+      .post(`/api/purchase-orders/${poA.id}/amendment-requests`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'test A', lineItems: [{ id: lineA.id, operationType: lineA.operationType, description: lineA.description, quantity: lineA.quantity, unitPrice: 12345 }] });
+
+    const listA = (await request(app).get(`/api/purchase-orders/${poA.id}/amendment-requests`).set(authAs(OPS_UID))).body;
+    const listB = (await request(app).get(`/api/purchase-orders/${poB.id}/amendment-requests`).set(authAs(OPS_UID))).body;
+    expect(listA.length).toBeGreaterThan(0);
+    expect(listA.every((ar: any) => ar.purchaseOrderId === poA.id)).toBe(true);
+    expect(listB.length).toBe(0);
+  });
 });
 
 describe('#5 Partial line-item cancellation: one line of a multi-vehicle PO, request -> review -> approval', () => {
