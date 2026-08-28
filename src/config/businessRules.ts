@@ -176,6 +176,48 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     sourceNote: 'Was LATE_FEE_EXTRA_DAY_CONVERSION_HOURS, a hardcoded literal at src/config/procurement.ts:137.'
   },
 
+  // ---- Master Blueprint Rule Set (this session) -- see docs/SPLENDOR_MASTER_RULES.md ----
+  {
+    id: 'bookingOperationalBufferHours',
+    label: 'Mandatory post-booking operational buffer',
+    labelAr: 'فترة الأمان التشغيلي الإلزامية بعد كل حجز',
+    description: 'Hours reserved after every booking ends, before the next booking on the same vehicle may start -- covers receipt, inspection, detailing, and repositioning (RULE-R03).',
+    tier: 'business_rule', valueType: 'number', value: 3, min: 0, max: 24, editable: true,
+    sourceNote: 'Blueprint item 10 (REQ-BP10-2): "فترة أمان تشغيلي تلقائية قدرها 3 ساعات".'
+  },
+  {
+    id: 'bookingSoftHoldMinutes',
+    label: 'Temporary checkout hold duration',
+    labelAr: 'مدة الحجز المؤقت أثناء الدفع',
+    description: 'Minutes a vehicle/window is soft-held for a customer mid-checkout before automatically releasing back to availability (RULE-R04).',
+    tier: 'business_rule', valueType: 'number', value: 10, min: 1, max: 60, editable: true,
+    sourceNote: 'Blueprint item 10 (REQ-BP10-4): "قفلاً مؤقتاً لمدة 10 دقائق فقط".'
+  },
+  {
+    id: 'staffDiscountCeilingPercent',
+    label: 'Staff discount ceiling before manager approval',
+    labelAr: 'الحد الأقصى للخصم قبل موافقة المدير',
+    description: 'Maximum discount percentage a non-manager can apply without a separate, logged sales-manager approval (RULE-P01).',
+    tier: 'business_rule', valueType: 'number', value: 5, min: 0, max: 100, editable: true,
+    sourceNote: 'Blueprint item 11 (REQ-BP11-5): "الموظف العادي لا يملك صلاحية الخصم بأكثر من 5%".'
+  },
+  {
+    id: 'maintenanceOilFilterIntervalKm',
+    label: 'Oil/filter maintenance interval (km)',
+    labelAr: 'دورة صيانة الزيوت والفلاتر (كم)',
+    description: 'Kilometers between scheduled oil/filter maintenance (RULE-M01).',
+    tier: 'business_rule', valueType: 'number', value: 7000, min: 3000, max: 15000, editable: true,
+    sourceNote: 'Blueprint item 9: "كل 5,000 إلى 8,000 كم" -- midpoint used as the editable default.'
+  },
+  {
+    id: 'maintenanceAlertLeadKm',
+    label: 'Pre-maintenance workshop alert lead distance (km)',
+    labelAr: 'مسافة التنبيه المسبق قبل موعد الصيانة (كم)',
+    description: 'Kilometers before a maintenance threshold at which the workshop manager is alerted (RULE-M03).',
+    tier: 'business_rule', valueType: 'number', value: 500, min: 100, max: 2000, editable: true,
+    sourceNote: 'Blueprint item 9: "قبل موعد الصيانة بـ 500 كم".'
+  },
+
   // ---- editable:false visibility mirrors: still owned by their existing route/transaction ----
   {
     id: 'contractDefaultMileageAllowanceKm',

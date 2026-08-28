@@ -18,7 +18,7 @@ import { NOTIFICATION_EVENTS } from './src/config/notificationEvents';
 import { issueNextNumber, resetNumbering } from './src/server/idGenerator';
 import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence';
 import { asyncHandler } from './src/server/asyncHandler';
-import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
+import { reserveVehicleSlot, AvailabilityConflictError, placeTemporaryHold, releaseTemporaryHold } from './src/server/availability';
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
 import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
 import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
@@ -1235,6 +1235,40 @@ app.post('/api/fleet/availability', (req, res) => {
   const result = globalStore.checkVehicleAvailability(vehicleId, startDate, endDate, excludeReservationId);
   res.json(result);
 });
+
+// RULE-R04 (Splendor Master Rule Set): a short-lived soft hold on a
+// vehicle/window while a customer is mid-checkout. Requires authentication
+// (staff-initiated checkout today) since no public booking flow exists in
+// this repository yet (see DECISION-05) -- ready for a future public
+// website integration without changing this contract.
+app.post('/api/fleet/holds', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const { vehicleId, startDate, endDate, holdMinutes } = req.body || {};
+  if (!vehicleId || !startDate || !endDate) {
+    return res.status(400).json({ error: 'vehicleId, startDate, and endDate are required.' });
+  }
+  try {
+    const hold = await placeTemporaryHold({
+      vehicleId,
+      startIso: new Date(startDate).toISOString(),
+      endIso: new Date(endDate).toISOString(),
+      holderKey: actor.uid,
+      holdMinutes: typeof holdMinutes === 'number' ? holdMinutes : undefined
+    });
+    res.status(201).json(hold);
+  } catch (error: any) {
+    if (error instanceof AvailabilityConflictError) return res.status(409).json({ error: error.message, conflicts: error.conflicts });
+    throw error;
+  }
+}));
+
+app.delete('/api/fleet/holds/:id', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  await releaseTemporaryHold(req.params.id);
+  res.status(204).end();
+}));
 
 // Plate Assignment & Transfer with Historical Audit Trail
 app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
