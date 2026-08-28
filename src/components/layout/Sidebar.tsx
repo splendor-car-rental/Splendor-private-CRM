@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing
+  TicketCheck, BellRing, Truck
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -147,6 +147,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <CheckSquare className="w-4 h-4" />,
           badge: pendingTasksCount > 0 ? String(pendingTasksCount) : undefined,
           badgeVariant: 'zinc' as const
+        },
+        {
+          id: 'procurement',
+          label: language === 'ar' ? 'المشتريات والموردون' : 'Procurement & Suppliers',
+          icon: <Truck className="w-4 h-4" />
         }
       ]
     },

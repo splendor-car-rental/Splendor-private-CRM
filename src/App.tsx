@@ -26,6 +26,7 @@ import { TasksFollowupsView } from './components/views/TasksFollowupsView';
 import { AIStudioView } from './components/views/AIStudioView';
 import { TestSuiteRunnerView } from './components/views/TestSuiteRunnerView';
 import { SettingsAuditView } from './components/views/SettingsAuditView';
+import { ProcurementView } from './components/views/ProcurementView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -80,6 +81,8 @@ const MainLayout: React.FC = () => {
         return <NotificationWhatsAppCenterView />;
       case 'tasks':
         return <TasksFollowupsView />;
+      case 'procurement':
+        return <ProcurementView />;
       case 'ai-studio':
       case 'ai-intelligence':
         return <AIStudioView />;
