@@ -56,6 +56,10 @@ import {
   markEmployeeExpenseRejected, resubmitEmployeeExpense, EmployeeCustodyError
 } from './src/server/employeeCustody';
 import {
+  submitSupplierInvoice, markSupplierInvoiceRejected, requestSupplierInvoiceCancellation,
+  SupplierInvoiceError
+} from './src/server/supplierInvoices';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -6040,6 +6044,83 @@ app.post('/api/employee-expenses/:id/resubmit', requireRole('ceo', 'admin', 'fin
   }
 }));
 
+// ---- Supplier invoices: matched against the PO, corrections always linked to originals, duplicates flagged ----
+app.get('/api/supplier-invoices', (req, res) => {
+  const { supplierId, purchaseOrderId } = req.query;
+  let invoices = globalStore.supplierInvoices;
+  if (supplierId) invoices = invoices.filter(i => i.supplierId === supplierId);
+  if (purchaseOrderId) invoices = invoices.filter(i => i.purchaseOrderId === purchaseOrderId);
+  res.json(invoices);
+});
+
+app.get('/api/supplier-invoices/:id', (req, res) => {
+  const invoice = globalStore.supplierInvoices.find(i => i.id === req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found.' });
+  res.json(invoice);
+});
+
+app.post('/api/supplier-invoices', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required.' });
+  const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
+  if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+
+  try {
+    const { invoice, approvalRequestId } = await submitSupplierInvoice({
+      purchaseOrderId: body.purchaseOrderId,
+      operationId: body.operationId,
+      supplierId: supplier.id,
+      supplierName: supplier.legalName,
+      invoiceNumber: body.invoiceNumber,
+      invoiceDate: body.invoiceDate,
+      amount: body.amount,
+      documentIds: body.documentIds,
+      correctionOfInvoiceId: body.correctionOfInvoiceId,
+      correctionReason: body.correctionReason,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    globalStore.supplierInvoices.unshift(invoice);
+    if (body.correctionOfInvoiceId) {
+      const origSnap = await admin.firestore().collection('supplier_invoices').doc(body.correctionOfInvoiceId).get();
+      if (origSnap.exists) {
+        const origIndex = globalStore.supplierInvoices.findIndex(i => i.id === body.correctionOfInvoiceId);
+        if (origIndex !== -1) globalStore.supplierInvoices[origIndex] = origSnap.data() as any;
+      }
+    }
+    res.status(201).json({ invoice, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof SupplierInvoiceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/supplier-invoices/:id/cancel', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this cancellation.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestSupplierInvoiceCancellation({
+      invoiceId: req.params.id,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof SupplierInvoiceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -6233,6 +6314,29 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
             else globalStore.employeeCustodies.unshift(custodySnap.data() as any);
           }
         }
+      }
+    }
+
+    // Supplier invoices: same pattern as employee expenses -- a rejection
+    // carries no handler in the generic engine, so it's applied explicitly.
+    if (decided.entityType === 'SupplierInvoice') {
+      if (decision === 'rejected' && decided.action === 'approve_invoice') {
+        try {
+          await markSupplierInvoiceRejected({
+            invoiceId: decided.entityId,
+            reason: decided.decisionNote || 'Rejected',
+            actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+          }, recordAudit);
+        } catch (err: any) {
+          if (!(err instanceof SupplierInvoiceError)) throw err;
+        }
+      }
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('supplier_invoices').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.supplierInvoices.findIndex(i => i.id === decided.entityId);
+        if (index !== -1) globalStore.supplierInvoices[index] = snap.data() as any;
+        else globalStore.supplierInvoices.unshift(snap.data() as any);
       }
     }
 

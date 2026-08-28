@@ -1359,3 +1359,126 @@ describe('Employee custody/float + expenses: approval-gated issuance, pending/re
     expect(dupRes.body.expense.duplicateWarning.possibleDuplicateOfExpenseId).toBeTruthy();
   });
 });
+
+describe('Supplier invoices: matched against the PO, corrections linked to originals, duplicates flagged', () => {
+  it('invoice matching the PO exactly needs no variance approval note, and approving it never auto-creates a payment', async () => {
+    const po = await createApprovedPO({
+      lineItems: [{ operationType: 'spare_parts', description: 'Brake pads', quantity: 2, unitPrice: 100 }, { operationType: 'spare_parts', description: 'Oil filters', quantity: 5, unitPrice: 20 }]
+    });
+    const invRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-001', invoiceDate: '2026-01-15', amount: po.totalValue });
+    expect(invRes.status).toBe(201);
+    expect(invRes.body.invoice.poVarianceAmount).toBe(0);
+    expect(invRes.body.invoice.status).toBe('pending_review');
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${invRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${invRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Matches PO exactly.' });
+
+    const invoiceCheck = (await request(app).get(`/api/supplier-invoices/${invRes.body.invoice.id}`).set(authAs(OPS_UID))).body;
+    expect(invoiceCheck.status).toBe('approved');
+    // No payment request was auto-created by invoice approval.
+    const payments = (await request(app).get(`/api/supplier-payment-requests?purchaseOrderId=${po.id}`).set(authAs(OPS_UID))).body;
+    expect(payments).toHaveLength(0);
+  });
+
+  it('flags an invoice that exceeds the PO as needing re-evaluated approval, and never auto-debts an under-PO invoice', async () => {
+    const po = await createApprovedPO({ lineItems: [{ operationType: 'spare_parts', description: 'Brake pads', quantity: 1, unitPrice: 100 }] });
+
+    const overRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-OVER', invoiceDate: '2026-01-16', amount: 150 });
+    expect(overRes.status).toBe(201);
+    expect(overRes.body.invoice.poVarianceAmount).toBe(50);
+    expect(overRes.body.invoice.varianceApprovalRequestId).toBe(overRes.body.approvalRequestId);
+
+    const underRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-UNDER', invoiceDate: '2026-01-16', amount: 80 });
+    expect(underRes.status).toBe(201);
+    expect(underRes.body.invoice.poVarianceAmount).toBe(-20);
+
+    // No debt was auto-created for the under-PO invoice.
+    const debtsRes = await request(app).get(`/api/debts?customerId=${po.supplierId}`).set(authAs(OPS_UID));
+    expect(debtsRes.body).toHaveLength(0);
+  });
+
+  it('a corrective/replacement invoice is a new record linked to the original, which is cancelled with a forward reference', async () => {
+    const po = await createApprovedPO({ lineItems: [{ operationType: 'spare_parts', description: 'Brake pads', quantity: 1, unitPrice: 100 }] });
+    const originalRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-ORIG', invoiceDate: '2026-01-17', amount: 100 });
+
+    const correctionRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({
+        supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-ORIG-R1', invoiceDate: '2026-01-18', amount: 110,
+        correctionOfInvoiceId: originalRes.body.invoice.id, correctionReason: 'Supplier issued a corrected invoice with VAT included'
+      });
+    expect(correctionRes.status).toBe(201);
+    expect(correctionRes.body.invoice.correctionOfInvoiceId).toBe(originalRes.body.invoice.id);
+
+    const originalCheck = (await request(app).get(`/api/supplier-invoices/${originalRes.body.invoice.id}`).set(authAs(OPS_UID))).body;
+    expect(originalCheck.status).toBe('cancelled');
+    expect(originalCheck.cancellation.replacementInvoiceId).toBe(correctionRes.body.invoice.id);
+  });
+
+  it('flags a duplicate invoice (same supplier + invoice number) without blocking submission, and supports reject + separate cancellation-after-approval', async () => {
+    const po = await createApprovedPO({ lineItems: [{ operationType: 'spare_parts', description: 'Brake pads', quantity: 1, unitPrice: 100 }] });
+    await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-DUP', invoiceDate: '2026-01-19', amount: 100 });
+
+    const dupRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-DUP', invoiceDate: '2026-01-19', amount: 100 });
+    expect(dupRes.status).toBe(201); // never blocked
+    expect(dupRes.body.invoice.duplicateWarning.possibleDuplicateOfInvoiceId).toBeTruthy();
+
+    await request(app)
+      .post(`/api/procurement/approvals/${dupRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'rejected', note: 'Confirmed duplicate, rejecting.' });
+    const rejectedCheck = (await request(app).get(`/api/supplier-invoices/${dupRes.body.invoice.id}`).set(authAs(OPS_UID))).body;
+    expect(rejectedCheck.status).toBe('cancelled');
+    expect(rejectedCheck.cancellation.reason).toBe('Confirmed duplicate, rejecting.');
+
+    // Separately, an already-approved invoice can be cancelled through its own approval workflow.
+    const anotherRes = await request(app)
+      .post('/api/supplier-invoices')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: po.supplierId, purchaseOrderId: po.id, invoiceNumber: 'SUP-INV-CANCEL-LATER', invoiceDate: '2026-01-20', amount: 100 });
+    await request(app)
+      .post(`/api/procurement/approvals/${anotherRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const cancelReqRes = await request(app)
+      .post(`/api/supplier-invoices/${anotherRes.body.invoice.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Duplicate discovered after approval' });
+    expect(cancelReqRes.status).toBe(201);
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelReqRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Cancellation confirmed.' });
+
+    const finalCheck = (await request(app).get(`/api/supplier-invoices/${anotherRes.body.invoice.id}`).set(authAs(OPS_UID))).body;
+    expect(finalCheck.status).toBe('cancelled');
+  });
+});
