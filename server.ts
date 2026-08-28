@@ -1866,6 +1866,9 @@ app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
       if (contract.status === 'active') throw new PersistenceError('This contract has already been handed over.');
+      if (contract.status === 'completed' || contract.status === 'cancelled') {
+        throw new PersistenceError(`This contract is ${contract.status} and cannot be handed over.`);
+      }
 
       const updated = { ...contract, handover: handoverData, status: 'active', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
@@ -1942,6 +1945,9 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
       if (contract.status === 'completed') throw new PersistenceError('This contract has already been returned.');
+      if (contract.status !== 'active') {
+        throw new PersistenceError(`This contract is ${contract.status}, not active, and cannot be returned yet.`);
+      }
 
       const updated = { ...contract, returnDetails: returnData, status: 'completed', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
