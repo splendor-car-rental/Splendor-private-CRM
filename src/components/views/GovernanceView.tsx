@@ -297,7 +297,11 @@ export const GovernanceView: React.FC = () => {
             {pendingRequests.map(r => (
               <div key={r.id} className="p-3 rounded-xl bg-zinc-900/60 border border-amber-500/30 flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="font-semibold text-zinc-100">{r.entityId} — {String(r.beforeValue)} → {String(r.afterValue)}</p>
+                  <p className="font-semibold text-zinc-100">
+                    {r.entityId} — {r.beforeValue === null ? (language === 'ar' ? 'غير محدد' : 'not set') : String(r.beforeValue)}
+                    {' → '}
+                    {r.afterValue === null ? (language === 'ar' ? 'غير محدد' : 'not set') : String(r.afterValue)}
+                  </p>
                   <p className="text-zinc-400 mt-0.5">{r.requestedByName} ({r.requestedByRole}) · {r.reason}</p>
                 </div>
                 {isDecider && r.requestedBy !== currentUser.id && (
@@ -347,8 +351,8 @@ export const GovernanceView: React.FC = () => {
                 </div>
                 <p className="text-zinc-500 mt-1 leading-relaxed">{rule.description}</p>
                 <div className="flex items-center justify-between mt-2">
-                  <span className={`font-mono font-bold ${rule.tier === 'emergency_rule' && rule.value === true ? 'text-rose-400' : 'text-[#f5d97f]'}`}>
-                    {String(rule.value)}
+                  <span className={`font-mono font-bold ${rule.tier === 'emergency_rule' && rule.value === true ? 'text-rose-400' : rule.value === null ? 'text-zinc-600 italic' : 'text-[#f5d97f]'}`}>
+                    {rule.value === null ? (language === 'ar' ? 'غير محدد' : 'not set') : String(rule.value)}
                   </span>
                   {rule.editable && rule.valueType === 'boolean' && (
                     <button
@@ -367,7 +371,7 @@ export const GovernanceView: React.FC = () => {
                     <button
                       disabled={busyKey === rule.id}
                       onClick={() => {
-                        const next = window.prompt(language === 'ar' ? 'القيمة الجديدة:' : 'New value:', String(rule.value));
+                        const next = window.prompt(language === 'ar' ? 'القيمة الجديدة:' : 'New value:', rule.value === null ? '' : String(rule.value));
                         if (next === null || next.trim() === '') return;
                         const parsed = Number(next);
                         if (Number.isNaN(parsed)) return;

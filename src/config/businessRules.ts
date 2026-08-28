@@ -397,5 +397,65 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     description: 'Exact phrase required to run the irreversible transactional-data wipe.',
     tier: 'system_configuration', valueType: 'string', value: 'DELETE ALL DATA', editable: false,
     sourceNote: 'server.ts:428. Deliberately friction-adding and irreversible -- must never be softened or made configurable.'
+  },
+
+  // ---- sensitive_rule: Data Retention Policy framework (Phase 23.9) ----
+  // FRAMEWORK ONLY, per the explicit governance decision: every value below
+  // is seeded `null` ("not yet defined") -- none of them may be filled in
+  // with an invented number here. Deliberately reuses the sensitive_rule
+  // tier rather than a bespoke system: setting a real retention period is
+  // exactly the kind of "changes how the business handles everyone's data
+  // going forward" decision Four-Eyes Approval exists for, so activating
+  // one requires a second CEO/Admin's sign-off through the same Governance
+  // & Approvals panel as every other sensitive rule -- see
+  // docs/DATA_RETENTION.md for why that approval step is a technical gate
+  // that maps to, but does not replace, an actual external legal/
+  // regulatory review, which must happen first.
+  //
+  // No deletion, purge, anonymization, or archival code exists anywhere in
+  // this codebase referencing these values, on purpose -- setting one here
+  // does not and will not delete anything by itself. Building the actual
+  // enforcement job that reads these values is explicit future work, kept
+  // entirely separate so this phase cannot accidentally destroy real
+  // business data.
+  {
+    id: 'retentionCustomerRecordsDays',
+    label: 'Data retention: customer records (days, after relationship ends)',
+    labelAr: 'الاحتفاظ بالبيانات: سجلات العملاء (أيام، بعد انتهاء التعامل)',
+    description: 'Not yet defined -- requires legal/regulatory review before activation. Once set, does NOT itself delete anything: no retention-enforcement job exists yet (deliberately, see docs/DATA_RETENTION.md). Likely governed by UAE consumer-protection and general commercial record-keeping norms once reviewed.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
+    sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
+  },
+  {
+    id: 'retentionKycDocumentsDays',
+    label: 'Data retention: KYC documents (ID/passport/license scans, days)',
+    labelAr: 'الاحتفاظ بالبيانات: مستندات إثبات الهوية (أيام)',
+    description: 'Not yet defined -- requires legal/regulatory review before activation. Likely governed by UAE AML/CDD record-keeping requirements (typically measured in years from the end of the customer relationship) once reviewed -- do not activate without confirming the exact figure with legal/compliance.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
+    sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
+  },
+  {
+    id: 'retentionFinancialRecordsDays',
+    label: 'Data retention: financial records (invoices/payments/contracts, days)',
+    labelAr: 'الاحتفاظ بالبيانات: السجلات المالية (فواتير/مدفوعات/عقود، أيام)',
+    description: 'Not yet defined -- requires legal/regulatory review before activation. Likely governed by UAE Federal Tax Authority record-keeping requirements for VAT purposes (commonly a multi-year figure) once reviewed -- do not activate without confirming the exact figure with legal/compliance.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
+    sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
+  },
+  {
+    id: 'retentionAuditLogsDays',
+    label: 'Data retention: governance audit trail (days)',
+    labelAr: 'الاحتفاظ بالبيانات: سجل التدقيق الرقابي (أيام)',
+    description: 'Not yet defined -- requires legal/regulatory review before activation. The audit trail (Phase 23.3/23.5) is itself the evidence of governance compliance -- any period set here should be at least as long as the longest financial/KYC retention period, not shorter.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
+    sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
+  },
+  {
+    id: 'retentionWhatsappLogsDays',
+    label: 'Data retention: WhatsApp message log (days)',
+    labelAr: 'الاحتفاظ بالبيانات: سجل رسائل واتساب (أيام)',
+    description: 'Not yet defined -- requires legal/regulatory review before activation. Operational communications log, not a legal/financial record -- likely a shorter period than the categories above once reviewed.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
+    sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
   }
 ];
