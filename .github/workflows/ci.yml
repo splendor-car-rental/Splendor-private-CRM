@@ -50,8 +50,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Firestore emulator (java -jar) is what `npm test` shells out to via
-      # firebase-tools -- ubuntu-latest ships a JRE, so no extra setup step
-      # is needed for it here.
+      # firebase-tools. ubuntu-latest's default JRE (17) is too old --
+      # firebase-tools requires JDK 21+ and fails outright with "firebase-
+      # tools no longer supports Java version before 21" otherwise, which
+      # is exactly what the first version of this workflow hit.
+      - name: Set up JDK 21 for the Firestore emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
       - name: Verify Java is available for the Firestore emulator
         run: java -version
 
