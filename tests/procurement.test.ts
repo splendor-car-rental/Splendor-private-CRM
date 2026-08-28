@@ -1005,3 +1005,102 @@ describe('Balances: opening balances, offsetting (mandatory reason, never automa
     expect(unblockedOffset.status).toBe(201);
   });
 });
+
+describe('Customer credit balances & refunds: never revenue, never auto-used/refunded, always approval-gated', () => {
+  it('books an overpayment as a credit balance (never revenue) through Segregation of Duties', async () => {
+    const customerId = 'CUS-TEST-OVERPAY-1';
+    const res = await request(app)
+      .post('/api/customer-credit-balances')
+      .set(authAs(OPS_UID))
+      .send({ customerId, amount: 300, source: 'overpayment', reason: 'Customer paid 300 AED more than the invoice' });
+    expect(res.status).toBe(201);
+    expect(res.body.creditBalance.status).toBe('open');
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Overpayment confirmed against the invoice.' });
+
+    const balancesRes = await request(app).get(`/api/customer-credit-balances?customerId=${customerId}`).set(authAs(OPS_UID));
+    expect(balancesRes.body[0].source).toBe('overpayment');
+  });
+
+  it('rejects a refund request for more than the remaining credit balance, and never lets ops execute a refund directly', async () => {
+    const customerId = 'CUS-TEST-REFUND-1';
+    const cbRes = await request(app)
+      .post('/api/customer-credit-balances')
+      .set(authAs(OPS_UID))
+      .send({ customerId, amount: 500, source: 'cancellation_refund_due', reason: 'Booking cancelled, refund owed' });
+    await request(app)
+      .post(`/api/procurement/approvals/${cbRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const tooMuch = await request(app)
+      .post('/api/customer-refund-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ customerId, creditBalanceId: cbRes.body.creditBalance.id, amount: 600, reason: 'Full refund requested' });
+    expect(tooMuch.status).toBe(400);
+
+    // Operations role cannot even reach the approval-decide route (requireRole ceo/admin).
+    const opsAttempt = await request(app)
+      .post('/api/customer-refund-requests')
+      .set(authAs(OPS_UID))
+      .send({ customerId, creditBalanceId: cbRes.body.creditBalance.id, amount: 200, reason: 'Ops trying to request a refund' });
+    expect(opsAttempt.status).toBe(403);
+  });
+
+  it('processes a partial refund -- leaves the remainder of the credit balance open, then a second refund closes it out', async () => {
+    const customerId = 'CUS-TEST-PARTIAL-REFUND-1';
+    const cbRes = await request(app)
+      .post('/api/customer-credit-balances')
+      .set(authAs(OPS_UID))
+      .send({ customerId, amount: 500, source: 'cancellation_refund_due', reason: 'Booking cancelled, refund owed' });
+    await request(app)
+      .post(`/api/procurement/approvals/${cbRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const firstRefund = await request(app)
+      .post('/api/customer-refund-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ customerId, creditBalanceId: cbRes.body.creditBalance.id, amount: 200, reason: 'Partial refund requested by customer' });
+    expect(firstRefund.status).toBe(201);
+    await request(app)
+      .post(`/api/procurement/approvals/${firstRefund.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Partial refund approved.' });
+
+    let cbCheck = (await request(app).get(`/api/customer-credit-balances?customerId=${customerId}`).set(authAs(FINANCE_UID))).body[0];
+    expect(cbCheck.amount).toBe(300);
+    expect(cbCheck.status).toBe('partially_used');
+    expect(cbCheck.originalAmount).toBe(500); // original recorded amount never overwritten
+
+    // Execute records the actual money movement, separate from approval.
+    const execRes = await request(app)
+      .post(`/api/customer-refund-requests/${firstRefund.body.refundRequest.id}/execute`)
+      .set(authAs(FINANCE_UID))
+      .send({ paymentMethod: 'bank_transfer' });
+    expect(execRes.status).toBe(200);
+    expect(execRes.body.status).toBe('executed');
+
+    const secondRefund = await request(app)
+      .post('/api/customer-refund-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ customerId, creditBalanceId: cbRes.body.creditBalance.id, amount: 300, reason: 'Remaining balance refunded' });
+    await request(app)
+      .post(`/api/procurement/approvals/${secondRefund.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Final refund approved.' });
+
+    cbCheck = (await request(app).get(`/api/customer-credit-balances?customerId=${customerId}`).set(authAs(FINANCE_UID))).body[0];
+    expect(cbCheck.amount).toBe(0);
+    expect(cbCheck.status).toBe('refunded');
+  });
+});

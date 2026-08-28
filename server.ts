@@ -44,6 +44,10 @@ import {
   raiseCustomerDispute, requestCustomerDisputeResolution, BalanceError
 } from './src/server/balances';
 import {
+  requestCustomerCreditBalance, requestCustomerRefund, markCustomerRefundExecuted,
+  CustomerRefundError
+} from './src/server/customerRefunds';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -5648,6 +5652,96 @@ app.post('/api/customer-disputes/:id/resolve', requireRole('ceo', 'admin', 'fina
   }
 }));
 
+// ---- Customer credit balances: never revenue, never auto-used/refunded ----
+app.get('/api/customer-credit-balances', (req, res) => {
+  const { customerId } = req.query;
+  let balances = globalStore.customerCreditBalances;
+  if (customerId) balances = balances.filter(b => b.customerId === customerId);
+  res.json(balances);
+});
+
+app.post('/api/customer-credit-balances', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this credit balance.' });
+  }
+
+  try {
+    const { creditBalance, approvalRequestId } = await requestCustomerCreditBalance({
+      customerId: body.customerId,
+      amount: body.amount,
+      source: body.source,
+      sourceOther: body.sourceOther,
+      relatedContractId: body.relatedContractId,
+      recordedBy: actor.uid,
+      recordedByName: actor.name,
+      recordedByRole: actor.role as any,
+      reason: body.reason
+    }, recordAudit);
+    globalStore.customerCreditBalances.unshift(creditBalance);
+    res.status(201).json({ creditBalance, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof CustomerRefundError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Customer refunds: never a direct action by operations staff, always approval-gated ----
+app.get('/api/customer-refund-requests', (req, res) => {
+  const { customerId } = req.query;
+  let refunds = globalStore.customerRefundRequests;
+  if (customerId) refunds = refunds.filter(r => r.customerId === customerId);
+  res.json(refunds);
+});
+
+app.post('/api/customer-refund-requests', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this refund.' });
+  }
+
+  try {
+    const { refundRequest, approvalRequestId } = await requestCustomerRefund({
+      customerId: body.customerId,
+      creditBalanceId: body.creditBalanceId,
+      amount: body.amount,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    globalStore.customerRefundRequests.unshift(refundRequest);
+    res.status(201).json({ refundRequest, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof CustomerRefundError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/customer-refund-requests/:id/execute', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const refundRequest = await markCustomerRefundExecuted({
+      refundRequestId: req.params.id,
+      paymentMethod: body.paymentMethod,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.customerRefundRequests.findIndex(r => r.id === refundRequest.id);
+    if (index !== -1) globalStore.customerRefundRequests[index] = refundRequest;
+    res.json(refundRequest);
+  } catch (error: any) {
+    if (error instanceof CustomerRefundError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -5756,6 +5850,36 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
         const index = globalStore.customerDisputedAmounts.findIndex(d => d.id === decided.entityId);
         if (index !== -1) globalStore.customerDisputedAmounts[index] = snap.data() as any;
         else globalStore.customerDisputedAmounts.unshift(snap.data() as any);
+      }
+    }
+
+    if (decided.entityType === 'CustomerCreditBalance' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('customer_credit_balances').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.customerCreditBalances.findIndex(b => b.id === decided.entityId);
+        if (index !== -1) globalStore.customerCreditBalances[index] = snap.data() as any;
+        else globalStore.customerCreditBalances.unshift(snap.data() as any);
+      }
+    }
+
+    if (decided.entityType === 'CustomerRefundRequest' && decision === 'approved') {
+      const admin2 = admin;
+      const refundSnap = await admin2.firestore().collection('customer_refund_requests').doc(decided.entityId).get();
+      if (refundSnap.exists) {
+        const refundData = refundSnap.data() as any;
+        const index = globalStore.customerRefundRequests.findIndex(r => r.id === decided.entityId);
+        if (index !== -1) globalStore.customerRefundRequests[index] = refundData;
+        else globalStore.customerRefundRequests.unshift(refundData);
+
+        if (refundData.creditBalanceId) {
+          const cbSnap = await admin2.firestore().collection('customer_credit_balances').doc(refundData.creditBalanceId).get();
+          if (cbSnap.exists) {
+            const cbIndex = globalStore.customerCreditBalances.findIndex(b => b.id === refundData.creditBalanceId);
+            if (cbIndex !== -1) globalStore.customerCreditBalances[cbIndex] = cbSnap.data() as any;
+            else globalStore.customerCreditBalances.unshift(cbSnap.data() as any);
+          }
+        }
       }
     }
 
