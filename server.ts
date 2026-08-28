@@ -30,7 +30,10 @@ import { detectAnomalies } from './src/server/anomalyDetection';
 import { checkOperationalHealth } from './src/server/operationalHealth';
 import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers';
 import { PROCUREMENT_PAYMENT_METHOD_DEFS, DEBT_TYPE_DEFS } from './src/config/procurement';
-import { createPurchaseOrder, PurchaseOrderError } from './src/server/purchaseOrders';
+import {
+  createPurchaseOrder, PurchaseOrderError, requestPurchaseOrderAmendment,
+  requestLineItemCancellation, requestFullPurchaseOrderCancellation, receiveLineItem
+} from './src/server/purchaseOrders';
 import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
@@ -5213,6 +5216,102 @@ app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operati
   }
 }));
 
+// ---- PO Amendment (rules 10-11): request -> review -> approval -> new version ----
+app.post('/api/purchase-orders/:id/amendment-requests', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this amendment.' });
+  }
+
+  try {
+    const { amendmentRequest, approvalRequestId } = await requestPurchaseOrderAmendment({
+      purchaseOrderId: req.params.id,
+      lineItems: body.lineItems || [],
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any,
+      reason: body.reason
+    }, recordAudit);
+    res.status(201).json({ amendmentRequest, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Partial line-item cancellation: request -> review -> approval ----
+app.post('/api/purchase-orders/:id/line-items/:lineId/cancel', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this cancellation.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestLineItemCancellation({
+      purchaseOrderId: req.params.id,
+      lineItemId: req.params.lineId,
+      reason: body.reason,
+      financialImpact: body.financialImpact,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Full PO cancellation: same request -> review -> approval workflow, status only ----
+app.post('/api/purchase-orders/:id/cancel', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this cancellation.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestFullPurchaseOrderCancellation({
+      purchaseOrderId: req.params.id,
+      reason: body.reason,
+      financialImpact: body.financialImpact,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Partial fulfillment: mark one line item received (PO stays open until all lines are) ----
+app.post('/api/purchase-orders/:id/line-items/:lineId/receive', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  try {
+    const po = await receiveLineItem({
+      purchaseOrderId: req.params.id,
+      lineItemId: req.params.lineId,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.purchaseOrders.findIndex(p => p.id === po.id);
+    if (index !== -1) globalStore.purchaseOrders[index] = po as any;
+    res.json(po);
+  } catch (error: any) {
+    if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -5249,8 +5348,11 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
         if (index !== -1) globalStore.purchaseOrders[index] = snap.data() as any;
         const opsSnap = await admin2.firestore().collection('procurement_operations').where('purchaseOrderId', '==', decided.entityId).get();
         opsSnap.docs.forEach(d => {
-          if (!globalStore.procurementOperations.some(o => o.id === d.id)) {
+          const opIndex = globalStore.procurementOperations.findIndex(o => o.id === d.id);
+          if (opIndex === -1) {
             globalStore.procurementOperations.unshift(d.data() as any);
+          } else {
+            globalStore.procurementOperations[opIndex] = d.data() as any;
           }
         });
       }

@@ -355,3 +355,258 @@ describe('Purchase Orders -- regular PO, sequencing (rules 1, 9, 85)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+async function createApprovedPO(overrides: { supplierName?: string; lineItems?: any[] } = {}) {
+  const supplier = await registerSupplier({ legalName: overrides.supplierName || 'Amendment Test Supplier LLC' });
+  const createRes = await request(app)
+    .post('/api/purchase-orders')
+    .set(authAs(OPS_UID))
+    .send({
+      kind: 'regular',
+      supplierId: supplier.id,
+      reason: 'Setup for amendment/cancellation test',
+      lineItems: overrides.lineItems || [
+        { operationType: 'spare_parts', description: 'Brake pads', quantity: 2, unitPrice: 100 },
+        { operationType: 'spare_parts', description: 'Oil filters', quantity: 5, unitPrice: 20 }
+      ]
+    });
+  expect(createRes.status).toBe(201);
+  await request(app)
+    .post(`/api/procurement/approvals/${createRes.body.approvalRequestId}/decide`)
+    .set(authAs(CEO_UID))
+    .send({ decision: 'approved', note: 'Approved.' });
+  const poRes = await request(app).get(`/api/purchase-orders/${createRes.body.po.id}`).set(authAs(OPS_UID));
+  return poRes.body;
+}
+
+describe('#7/#8 PO amendment (rules 10-11): new version, old version retained, value re-evaluated', () => {
+  it('amending a line item creates a new version, keeps the old version in history, and recomputes the total', async () => {
+    const po = await createApprovedPO();
+    expect(po.version).toBe(1);
+    const brakePads = po.lineItems.find((li: any) => li.description === 'Brake pads');
+
+    const amendRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/amendment-requests`)
+      .set(authAs(OPS_UID))
+      .send({
+        reason: 'Supplier increased the unit price',
+        lineItems: [{ id: brakePads.id, operationType: 'spare_parts', description: 'Brake pads', quantity: 2, unitPrice: 150 }]
+      });
+    expect(amendRes.status).toBe(201);
+    expect(amendRes.body.amendmentRequest.proposedTotalValue).toBe(400); // (2*150) + (5*20)
+
+    // Requester cannot approve their own amendment.
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${amendRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    const decideRes = await request(app)
+      .post(`/api/procurement/approvals/${amendRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Price increase confirmed with supplier.' });
+    expect(decideRes.status).toBe(200);
+
+    const updatedPO = (await request(app).get(`/api/purchase-orders/${po.id}`).set(authAs(OPS_UID))).body;
+    expect(updatedPO.version).toBe(2);
+    expect(updatedPO.totalValue).toBe(400);
+    expect(updatedPO.history).toHaveLength(2);
+    // Old version is fully retained, not overwritten.
+    expect(updatedPO.history[0].version).toBe(1);
+    expect(updatedPO.history[0].totalValue).toBe(po.totalValue);
+    expect(updatedPO.history[1].version).toBe(2);
+    expect(updatedPO.history[1].totalValue).toBe(400);
+    // The unchanged line item (oil filters) was carried forward untouched.
+    const oilFilters = updatedPO.lineItems.find((li: any) => li.description === 'Oil filters');
+    expect(oilFilters.unitPrice).toBe(20);
+    expect(oilFilters.operationId).toBeTruthy();
+  });
+
+  it('an amendment can add a brand-new line item, which gets its own Operation on approval', async () => {
+    const po = await createApprovedPO();
+
+    const amendRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/amendment-requests`)
+      .set(authAs(OPS_UID))
+      .send({
+        reason: 'Adding a third item to the same order',
+        lineItems: [{ operationType: 'spare_parts', description: 'Wiper blades', quantity: 1, unitPrice: 60 }]
+      });
+    expect(amendRes.status).toBe(201);
+    expect(amendRes.body.amendmentRequest.proposedLineItems).toHaveLength(3);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${amendRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Added item approved.' });
+
+    const updatedPO = (await request(app).get(`/api/purchase-orders/${po.id}`).set(authAs(OPS_UID))).body;
+    const newLine = updatedPO.lineItems.find((li: any) => li.description === 'Wiper blades');
+    expect(newLine).toBeTruthy();
+    expect(newLine.operationId).toBeTruthy();
+  });
+
+  it('rejects an amendment on a purchase order that is still pending_approval (not yet approved once)', async () => {
+    const supplier = await registerSupplier({ legalName: 'Not Yet Approved Supplier LLC' });
+    const createRes = await request(app)
+      .post('/api/purchase-orders')
+      .set(authAs(OPS_UID))
+      .send({
+        kind: 'regular',
+        supplierId: supplier.id,
+        reason: 'test',
+        lineItems: [{ operationType: 'services', description: 'Service', quantity: 1, unitPrice: 100 }]
+      });
+    const amendRes = await request(app)
+      .post(`/api/purchase-orders/${createRes.body.po.id}/amendment-requests`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'test', lineItems: [{ operationType: 'services', description: 'Service', quantity: 2, unitPrice: 100 }] });
+    expect(amendRes.status).toBe(400);
+  });
+});
+
+describe('#5 Partial line-item cancellation: one line of a multi-vehicle PO, request -> review -> approval', () => {
+  it('cancelling one line item leaves the rest untouched, never deletes, and marks the PO partially_cancelled', async () => {
+    const po = await createApprovedPO();
+    const oilFilters = po.lineItems.find((li: any) => li.description === 'Oil filters');
+
+    const cancelRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/line-items/${oilFilters.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'No longer needed', financialImpact: 'Reduces PO value by 100 AED' });
+    expect(cancelRes.status).toBe(201);
+
+    // Same requester cannot approve their own cancellation.
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Cancellation confirmed.' });
+
+    const updatedPO = (await request(app).get(`/api/purchase-orders/${po.id}`).set(authAs(OPS_UID))).body;
+    expect(updatedPO.status).toBe('partially_cancelled');
+    expect(updatedPO.totalValue).toBe(200); // brake pads only: 2*100
+    const cancelledLine = updatedPO.lineItems.find((li: any) => li.id === oilFilters.id);
+    expect(cancelledLine.status).toBe('cancelled');
+    expect(cancelledLine.cancellation.status).toBe('approved');
+    expect(cancelledLine.cancellation.reason).toBe('No longer needed');
+    // Never deleted -- the line item record still exists on the PO.
+    expect(updatedPO.lineItems).toHaveLength(2);
+    const otherLine = updatedPO.lineItems.find((li: any) => li.id !== oilFilters.id);
+    expect(otherLine.status).not.toBe('cancelled');
+  });
+
+  it('rejects cancelling a line item that is already cancelled', async () => {
+    const po = await createApprovedPO();
+    const line = po.lineItems[0];
+    const cancelRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/line-items/${line.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'first cancellation' });
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const secondAttempt = await request(app)
+      .post(`/api/purchase-orders/${po.id}/line-items/${line.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'second cancellation attempt' });
+    expect(secondAttempt.status).toBe(400);
+  });
+});
+
+describe('#6 Full PO cancellation: same workflow, status only, number never reused', () => {
+  it('cancels every remaining line item, cascades to open Operations, and keeps the PO id intact', async () => {
+    const po = await createApprovedPO({
+      lineItems: [
+        { operationType: 'vehicle_supply_rental', description: 'Vehicle A', quantity: 1, unitPrice: 40000 },
+        { operationType: 'vehicle_supply_rental', description: 'Vehicle B', quantity: 1, unitPrice: 45000 }
+      ]
+    });
+
+    const cancelRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Deal fell through with the supplier' });
+    expect(cancelRes.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Full cancellation confirmed.' });
+
+    const updatedPO = (await request(app).get(`/api/purchase-orders/${po.id}`).set(authAs(OPS_UID))).body;
+    expect(updatedPO.id).toBe(po.id); // number never reused / never changed
+    expect(updatedPO.status).toBe('cancelled');
+    expect(updatedPO.cancellation.status).toBe('approved');
+    updatedPO.lineItems.forEach((li: any) => expect(li.status).toBe('cancelled'));
+
+    const opsRes = await request(app).get('/api/procurement/operations').set(authAs(OPS_UID));
+    const linkedOps = opsRes.body.filter((o: any) => o.purchaseOrderId === po.id);
+    expect(linkedOps.length).toBeGreaterThan(0);
+    linkedOps.forEach((op: any) => expect(op.status).toBe('cancelled'));
+  });
+
+  it('rejects a second full-cancellation request once the PO is already cancelled', async () => {
+    const po = await createApprovedPO();
+    const cancelRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'first cancellation' });
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const secondAttempt = await request(app)
+      .post(`/api/purchase-orders/${po.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'second attempt' });
+    expect(secondAttempt.status).toBe(400);
+  });
+});
+
+describe('#4 Partial fulfillment: n of m line items received, PO stays open', () => {
+  it('marks one line item received while the PO stays partially_fulfilled until every line is in', async () => {
+    const po = await createApprovedPO({
+      lineItems: [
+        { operationType: 'vehicle_supply_rental', description: 'Vehicle A', quantity: 1, unitPrice: 40000 },
+        { operationType: 'vehicle_supply_rental', description: 'Vehicle B', quantity: 1, unitPrice: 45000 }
+      ]
+    });
+    const [lineA, lineB] = po.lineItems;
+
+    const receiveRes = await request(app)
+      .post(`/api/purchase-orders/${po.id}/line-items/${lineA.id}/receive`)
+      .set(authAs(OPS_UID));
+    expect(receiveRes.status).toBe(200);
+    expect(receiveRes.body.status).toBe('partially_fulfilled');
+
+    const receiveSecond = await request(app)
+      .post(`/api/purchase-orders/${po.id}/line-items/${lineB.id}/receive`)
+      .set(authAs(OPS_UID));
+    expect(receiveSecond.status).toBe(200);
+    expect(receiveSecond.body.status).toBe('fulfilled');
+  });
+
+  it('rejects receiving the same line item twice', async () => {
+    const po = await createApprovedPO();
+    const line = po.lineItems[0];
+    await request(app).post(`/api/purchase-orders/${po.id}/line-items/${line.id}/receive`).set(authAs(OPS_UID));
+    const secondAttempt = await request(app).post(`/api/purchase-orders/${po.id}/line-items/${line.id}/receive`).set(authAs(OPS_UID));
+    expect(secondAttempt.status).toBe(400);
+  });
+});
