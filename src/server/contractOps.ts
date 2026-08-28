@@ -2,6 +2,7 @@ import { runIdempotent } from './idempotency';
 import { AvailabilityConflictError } from './availability';
 import { issueNextNumber } from './idGenerator';
 import { PersistenceError } from './persistence';
+import { vatPortion } from '../config/tax';
 import type { AuditLog, Contract, Customer, Vehicle } from '../types';
 
 // Server-authoritative "instant contract" creation (POST /api/contracts).
@@ -94,7 +95,7 @@ export async function createContractDurable(input: CreateContractInput): Promise
       // the rate, never a client-supplied figure ---
       const dailyRate = vehicle.dailyRate;
       const rentalTotal = dailyRate * days;
-      const vatAmount = rentalTotal * 0.05;
+      const vatAmount = vatPortion(rentalTotal);
       const grandTotal = rentalTotal + vatAmount;
       const depositAmount = vehicle.minDeposit || 5000;
 

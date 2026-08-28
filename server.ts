@@ -6,6 +6,7 @@ import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
 import type { Lead, Contract, Customer, Quotation, Reservation, TollType } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
+import { vatPortion, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
@@ -1501,7 +1502,7 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
   const extraServicesTotal = (data.extraServices || []).reduce((s: number, e: any) => s + (e.included ? Number(e.price) : 0), 0);
   const discountAmount = Number(data.discountAmount) || 0;
   const subtotal = Math.max(0, baseTotal + extraServicesTotal - discountAmount);
-  const vatAmount = subtotal * 0.05; // 5% UAE VAT
+  const vatAmount = vatPortion(subtotal);
   const grandTotal = subtotal + vatAmount;
 
   const quote = {
@@ -1977,8 +1978,8 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
           id: chargeId,
           type: 'other',
           amount: returnData.totalAdditionalCharges,
-          vatAmount: returnData.totalAdditionalCharges * 0.05,
-          totalAmount: returnData.totalAdditionalCharges * 1.05,
+          vatAmount: vatPortion(returnData.totalAdditionalCharges),
+          totalAmount: applyVat(returnData.totalAdditionalCharges),
           relatedContractId: contract.id,
           customerId: contract.customerId,
           customerName: contract.customerName,
@@ -2068,7 +2069,7 @@ app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'),
 
       const extraDays = Math.ceil((newEndMs - oldEndMs) / 86400000);
       const extraRental = extraDays * contract.dailyRate;
-      const extraVat = extraRental * 0.05;
+      const extraVat = vatPortion(extraRental);
       const updated = {
         ...contract,
         endDateTime: newEndDateTime,
@@ -2125,7 +2126,7 @@ app.get('/api/charges', (req, res) => {
 app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Charge');
   const amount = Number(req.body.amount) || 0;
-  const vat = amount * 0.05;
+  const vat = vatPortion(amount);
   const charge = {
     ...req.body,
     id: newId,

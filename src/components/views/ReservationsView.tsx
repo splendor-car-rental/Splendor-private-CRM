@@ -10,6 +10,7 @@ import { Reservation } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
+import { applyVat } from '../../config/tax';
 
 export const ReservationsView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -57,7 +58,7 @@ export const ReservationsView: React.FC = () => {
     const veh = vehicles.find(v => v.id === vehId);
     if (veh) {
       const days = form.durationDays || 3;
-      const total = veh.dailyRate * days * 1.05; // 5% VAT
+      const total = applyVat(veh.dailyRate * days);
       setForm(prev => ({
         ...prev,
         vehicleId: veh.id,
