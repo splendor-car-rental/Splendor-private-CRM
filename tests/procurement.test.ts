@@ -610,3 +610,115 @@ describe('#4 Partial fulfillment: n of m line items received, PO stays open', ()
     expect(secondAttempt.status).toBe(400);
   });
 });
+
+describe('Supplier quotes/offers: every offer documented, known source, staff recommends / approver approves', () => {
+  it('records an official-quote offer and rejects a zero/negative price', async () => {
+    const supplier = await registerSupplier({ legalName: 'Quote Supplier LLC' });
+    const goodQuote = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: supplier.id, source: 'official_quote', price: 1200, terms: 'Net 30' });
+    expect(goodQuote.status).toBe(201);
+    expect(goodQuote.body.id).toMatch(/^QTV-/);
+    expect(goodQuote.body.isSelected).toBe(false);
+
+    const badQuote = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: supplier.id, source: 'official_quote', price: 0 });
+    expect(badQuote.status).toBe(400);
+  });
+
+  it('requires a responsible contact name and phone number for a phone-call quote', async () => {
+    const supplier = await registerSupplier({ legalName: 'Phone Quote Supplier LLC' });
+
+    const missingContact = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({ supplierId: supplier.id, source: 'phone_call', price: 900 });
+    expect(missingContact.status).toBe(400);
+
+    const withContact = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({
+        supplierId: supplier.id, source: 'phone_call', price: 900,
+        phoneContactPersonName: 'Ahmed (Sales)', phoneContactPersonPhone: '971509876543'
+      });
+    expect(withContact.status).toBe(201);
+    expect(withContact.body.phoneContactPersonName).toBe('Ahmed (Sales)');
+  });
+
+  it('staff recommends an offer, a different approver selects it, and it supersedes the prior selected offer for the same PO', async () => {
+    const po = await createApprovedPO({ supplierName: 'Quote Selection Supplier LLC' });
+    const supplierId = po.supplierId;
+
+    const quoteA = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, supplierId, source: 'email', price: 1000 });
+    const quoteB = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, supplierId, source: 'whatsapp', price: 950 });
+
+    // Select quote A first.
+    const selectA = await request(app)
+      .post(`/api/supplier-quotes/${quoteA.body.id}/select`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Best terms at the time' });
+    expect(selectA.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${selectA.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${selectA.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Approved quote A.' });
+
+    let refreshedA = (await request(app).get(`/api/supplier-quotes/${quoteA.body.id}`).set(authAs(OPS_UID))).body;
+    expect(refreshedA.isSelected).toBe(true);
+    expect(refreshedA.approvedBy).toBe(CEO_UID);
+
+    // A cheaper quote comes in later and is selected instead -- quote A stays
+    // on record (never deleted), only its isSelected flag flips.
+    const selectB = await request(app)
+      .post(`/api/supplier-quotes/${quoteB.body.id}/select`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Cheaper offer received' });
+    await request(app)
+      .post(`/api/procurement/approvals/${selectB.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Switching to the cheaper offer.' });
+
+    refreshedA = (await request(app).get(`/api/supplier-quotes/${quoteA.body.id}`).set(authAs(OPS_UID))).body;
+    const refreshedB = (await request(app).get(`/api/supplier-quotes/${quoteB.body.id}`).set(authAs(OPS_UID))).body;
+    expect(refreshedA.isSelected).toBe(false);
+    expect(refreshedA.price).toBe(1000); // original recorded price untouched
+    expect(refreshedB.isSelected).toBe(true);
+  });
+
+  it('rejects a second selection request while one is already pending for the same quote', async () => {
+    const po = await createApprovedPO({ supplierName: 'Duplicate Selection Supplier LLC' });
+    const quote = await request(app)
+      .post('/api/supplier-quotes')
+      .set(authAs(OPS_UID))
+      .send({ purchaseOrderId: po.id, supplierId: po.supplierId, source: 'email', price: 500 });
+
+    const first = await request(app)
+      .post(`/api/supplier-quotes/${quote.body.id}/select`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'First recommendation' });
+    expect(first.status).toBe(201);
+
+    const second = await request(app)
+      .post(`/api/supplier-quotes/${quote.body.id}/select`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Duplicate recommendation attempt' });
+    expect(second.status).toBe(400);
+  });
+});

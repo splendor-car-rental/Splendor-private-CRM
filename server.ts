@@ -34,6 +34,7 @@ import {
   createPurchaseOrder, PurchaseOrderError, requestPurchaseOrderAmendment,
   requestLineItemCancellation, requestFullPurchaseOrderCancellation, receiveLineItem
 } from './src/server/purchaseOrders';
+import { addSupplierQuote, requestSupplierQuoteSelection, SupplierQuoteError } from './src/server/supplierQuotes';
 import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
@@ -5312,6 +5313,77 @@ app.post('/api/purchase-orders/:id/line-items/:lineId/receive', requireRole('ceo
   }
 }));
 
+// ---- Supplier quotes/offers: every offer documented, source known, staff recommends / approver approves ----
+app.get('/api/supplier-quotes', (req, res) => {
+  const { purchaseOrderId, supplierId } = req.query;
+  let quotes = globalStore.supplierQuotes;
+  if (purchaseOrderId) quotes = quotes.filter(q => q.purchaseOrderId === purchaseOrderId);
+  if (supplierId) quotes = quotes.filter(q => q.supplierId === supplierId);
+  res.json(quotes);
+});
+
+app.get('/api/supplier-quotes/:id', (req, res) => {
+  const quote = globalStore.supplierQuotes.find(q => q.id === req.params.id);
+  if (!quote) return res.status(404).json({ error: 'Quote not found.' });
+  res.json(quote);
+});
+
+app.post('/api/supplier-quotes', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required -- a quote can only reference a registered supplier, never free text.' });
+  const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
+  if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+
+  try {
+    const quote = await addSupplierQuote({
+      purchaseOrderId: body.purchaseOrderId,
+      supplierId: supplier.id,
+      supplierName: supplier.legalName,
+      source: body.source,
+      sourceOther: body.sourceOther,
+      contactInfo: body.contactInfo,
+      phoneContactPersonName: body.phoneContactPersonName,
+      phoneContactPersonPhone: body.phoneContactPersonPhone,
+      price: body.price,
+      terms: body.terms,
+      documentIds: body.documentIds,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    globalStore.supplierQuotes.unshift(quote);
+    res.status(201).json(quote);
+  } catch (error: any) {
+    if (error instanceof SupplierQuoteError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/supplier-quotes/:id/select', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to recommend this quote for selection.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestSupplierQuoteSelection({
+      quoteId: req.params.id,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any,
+      reason: body.reason
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof SupplierQuoteError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -5356,6 +5428,21 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
           }
         });
       }
+    }
+
+    // Same in-memory refresh for supplier-quote selections: the handler may
+    // also flip other quotes for the same PO back to unselected.
+    if (decided.entityType === 'SupplierQuote' && decision === 'approved') {
+      const admin2 = admin;
+      const quotesSnap = await admin2.firestore().collection('supplier_quotes').get();
+      quotesSnap.docs.forEach(d => {
+        const index = globalStore.supplierQuotes.findIndex(q => q.id === d.id);
+        if (index === -1) {
+          globalStore.supplierQuotes.unshift(d.data() as any);
+        } else {
+          globalStore.supplierQuotes[index] = d.data() as any;
+        }
+      });
     }
 
     res.json(decided);

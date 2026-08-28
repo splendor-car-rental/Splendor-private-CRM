@@ -1264,6 +1264,9 @@ export interface SupplierQuote {
   source: QuoteSource;
   sourceOther?: string;
   contactInfo?: string;
+  /** Mandatory alongside phoneContactPersonPhone when source is 'phone_call' -- the spec requires the responsible supplier contact's name and number to be captured for a verbal quote. The date/time of capture is `createdAt`. */
+  phoneContactPersonName?: string;
+  phoneContactPersonPhone?: string;
   price: number;
   terms?: string;
   documentIds?: string[];
