@@ -1104,3 +1104,115 @@ describe('Customer credit balances & refunds: never revenue, never auto-used/ref
     expect(cbCheck.status).toBe('refunded');
   });
 });
+
+describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective reversals never edits', () => {
+  it('creates a debt, settles it across two different payment methods, and marks it paid', async () => {
+    const createRes = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .send({ customerId: 'CUS-DBT-1', customerName: 'Debt Test Customer', type: 'traffic_fine', description: 'Speeding fine', originalAmount: 500 });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.status).toBe('open');
+
+    const firstSettle = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .send({ method: 'cash', amount: 200 });
+    expect(firstSettle.status).toBe(200);
+    expect(firstSettle.body.status).toBe('partially_paid');
+    expect(firstSettle.body.remainingAmount).toBe(300);
+
+    const secondSettle = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .send({ method: 'bank_transfer', amount: 300 });
+    expect(secondSettle.status).toBe(200);
+    expect(secondSettle.body.status).toBe('paid');
+    expect(secondSettle.body.remainingAmount).toBe(0);
+    expect(secondSettle.body.settlements).toHaveLength(2);
+  });
+
+  it('rejects a settlement exceeding the remaining debt', async () => {
+    const createRes = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .send({ customerId: 'CUS-DBT-2', customerName: 'Debt Test Customer 2', type: 'salik', description: 'Toll charges', originalAmount: 100 });
+    const res = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .send({ method: 'cash', amount: 500 });
+    expect(res.status).toBe(400);
+  });
+
+  it('reverses a wrong settlement via a new corrective movement -- never edits or deletes the original', async () => {
+    const createRes = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .send({ customerId: 'CUS-DBT-3', customerName: 'Debt Test Customer 3', type: 'damage', description: 'Minor scratch', originalAmount: 400 });
+    const settleRes = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .send({ method: 'cash', amount: 400 });
+    expect(settleRes.body.status).toBe('paid');
+    const movementId = settleRes.body.settlements[0].id;
+
+    const reverseRes = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements/${movementId}/reverse`)
+      .set(authAs(FINANCE_UID))
+      .send({ reason: 'Recorded against the wrong debt by mistake' });
+    expect(reverseRes.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${reverseRes.body.approvalRequestId}/decide`)
+      .set(authAs(FINANCE_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${reverseRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Reversal confirmed.' });
+
+    const debtRes = await request(app).get(`/api/debts/${createRes.body.id}`).set(authAs(FINANCE_UID));
+    expect(debtRes.body.status).toBe('open');
+    expect(debtRes.body.remainingAmount).toBe(400);
+    expect(debtRes.body.settlements).toHaveLength(2); // original + reversal, both retained
+    expect(debtRes.body.settlements[0].amount).toBe(400); // original untouched
+    expect(debtRes.body.settlements[1].isReversal).toBe(true);
+    expect(debtRes.body.settlements[1].amount).toBe(-400);
+  });
+
+  it('corrects a debt amount through approval, and cancels a debt through approval', async () => {
+    const createRes = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .send({ customerId: 'CUS-DBT-4', customerName: 'Debt Test Customer 4', type: 'fuel_shortage', description: 'Fuel gauge shortfall', originalAmount: 150 });
+
+    const correctionRes = await request(app)
+      .post(`/api/debts/${createRes.body.id}/correction-requests`)
+      .set(authAs(OPS_UID))
+      .send({ newAmount: 120, reason: 'Recalculated fuel price' });
+    expect(correctionRes.status).toBe(201);
+    await request(app)
+      .post(`/api/procurement/approvals/${correctionRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Correction confirmed.' });
+
+    let debtRes = await request(app).get(`/api/debts/${createRes.body.id}`).set(authAs(FINANCE_UID));
+    expect(debtRes.body.originalAmount).toBe(120);
+    expect(debtRes.body.remainingAmount).toBe(120);
+
+    const cancelRes = await request(app)
+      .post(`/api/debts/${createRes.body.id}/cancel`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Fuel level dispute resolved in customer\'s favor' });
+    expect(cancelRes.status).toBe(201);
+    await request(app)
+      .post(`/api/procurement/approvals/${cancelRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Cancellation confirmed.' });
+
+    debtRes = await request(app).get(`/api/debts/${createRes.body.id}`).set(authAs(FINANCE_UID));
+    expect(debtRes.body.status).toBe('cancelled');
+  });
+});

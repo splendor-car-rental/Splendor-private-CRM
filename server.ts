@@ -48,6 +48,10 @@ import {
   CustomerRefundError
 } from './src/server/customerRefunds';
 import {
+  createDebt, addDebtSettlement, requestDebtSettlementReversal,
+  requestDebtCorrection, requestDebtCancellation, DebtError
+} from './src/server/debts';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -5766,6 +5770,143 @@ app.post('/api/customer-refund-requests/:id/execute', requireRole('ceo', 'admin'
   }
 }));
 
+// ---- Debts: fixed type list, lifecycle, multiple settlement methods (never edited/deleted -- always corrective movements) ----
+app.get('/api/debts', (req, res) => {
+  const { customerId } = req.query;
+  let debts = globalStore.debts;
+  if (customerId) debts = debts.filter(d => d.customerId === customerId);
+  res.json(debts);
+});
+
+app.get('/api/debts/:id', (req, res) => {
+  const debt = globalStore.debts.find(d => d.id === req.params.id);
+  if (!debt) return res.status(404).json({ error: 'Debt not found.' });
+  res.json(debt);
+});
+
+app.post('/api/debts', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const debt = await createDebt({
+      customerId: body.customerId,
+      customerName: body.customerName,
+      type: body.type,
+      typeOther: body.typeOther,
+      description: body.description,
+      evidenceDocumentIds: body.evidenceDocumentIds,
+      originalAmount: body.originalAmount,
+      relatedContractId: body.relatedContractId,
+      relatedOperationId: body.relatedOperationId,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    globalStore.debts.unshift(debt);
+    res.status(201).json(debt);
+  } catch (error: any) {
+    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/debts/:id/settlements', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const debt = await addDebtSettlement({
+      debtId: req.params.id,
+      method: body.method,
+      methodOther: body.methodOther,
+      amount: body.amount,
+      recordedBy: actor.uid,
+      recordedByName: actor.name,
+      recordedByRole: actor.role as any
+    }, recordAudit);
+    const index = globalStore.debts.findIndex(d => d.id === debt.id);
+    if (index !== -1) globalStore.debts[index] = debt;
+    res.json(debt);
+  } catch (error: any) {
+    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/debts/:id/settlements/:movementId/reverse', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this reversal.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestDebtSettlementReversal({
+      debtId: req.params.id,
+      movementId: req.params.movementId,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/debts/:id/correction-requests', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this correction.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestDebtCorrection({
+      debtId: req.params.id,
+      newAmount: body.newAmount,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/debts/:id/cancel', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this cancellation.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestDebtCancellation({
+      debtId: req.params.id,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -5904,6 +6045,16 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
             else globalStore.customerCreditBalances.unshift(cbSnap.data() as any);
           }
         }
+      }
+    }
+
+    if (decided.entityType === 'Debt' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('debts').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.debts.findIndex(d => d.id === decided.entityId);
+        if (index !== -1) globalStore.debts[index] = snap.data() as any;
+        else globalStore.debts.unshift(snap.data() as any);
       }
     }
 
