@@ -21,6 +21,7 @@ import { asyncHandler } from './src/server/asyncHandler';
 import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
 import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
+import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
@@ -276,7 +277,13 @@ async function getRequesterRole(uid: string): Promise<string | null> {
  */
 async function recordAudit(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<AuditLog> {
   const id = await issueNextNumber('AuditLog');
-  const entry: AuditLog = { ...log, id, timestamp: new Date().toISOString() } as AuditLog;
+  const timestamp = new Date().toISOString();
+  const baseEntry = { ...log, id, timestamp } as AuditLog;
+  // RULE-A01: hash-chain this entry to the previous one before persisting,
+  // so a later deletion or direct-Firestore edit is detectable via
+  // verifyAuditChainIntegrity() -- see src/server/auditIntegrity.ts.
+  const { contentHash, previousHash } = await appendToAuditChain(baseEntry as unknown as AuditChainFields);
+  const entry: AuditLog = { ...baseEntry, contentHash, previousHash };
   await createDurable('audit_logs', entry as unknown as { id: string });
   globalStore.auditLogs.unshift(entry);
   return entry;
@@ -4009,6 +4016,14 @@ app.post('/api/dead-letter-queue/:id/resolve', requireRole('ceo', 'admin', 'oper
 // Duties, immutable approval history, and the Emergency Kill Switch. See
 // src/server/businessRules.ts and src/server/approvals.ts for the engine
 // itself, and src/config/businessRules.ts for the tier permission tables.
+
+// RULE-A01 (Splendor Master Rule Set, Module 12): tamper-evidence check
+// over the entire audit trail's hash chain. Not on any write path -- an
+// on-demand integrity check for CEO/Admin, or a future scheduled job.
+app.get('/api/audit-integrity/verify', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const report = await verifyAuditChainIntegrity();
+  res.json(report);
+}));
 
 /** Every rule the caller's role is allowed to see, tier-filtered -- system_configuration entries are hidden from non-CEO/Admin roles even in this read-only list. */
 app.get('/api/business-rules', asyncHandler(async (req, res) => {

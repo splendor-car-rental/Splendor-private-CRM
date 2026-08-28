@@ -845,6 +845,9 @@ export interface AuditLog {
   reason?: string;
   ipAddress?: string;
   timestamp: string;
+  /** Tamper-evidence hash chain (RULE-A01) -- see src/server/auditIntegrity.ts. Absent on entries written before this feature existed; those are treated as unverifiable, not tampered. */
+  contentHash?: string;
+  previousHash?: string;
 }
 
 // ----------------------------------------------------
