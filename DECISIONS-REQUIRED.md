@@ -53,7 +53,7 @@ No file was touched as a result.
 
 ---
 
-## 2. Received Amount Classification (FIN-002) — implement or drop the type?
+## 2. Received Amount Classification (FIN-002) — RESOLVED, APPROVED
 
 **The problem.** `src/types/index.ts` declares `ReceivedAmountClassification`
 (`settlement | advance_payment | security_deposit | credit_balance |
@@ -102,8 +102,13 @@ supplied actor id). `BankReconciliationView.tsx` now requires an explicit
 classification choice before confirming a match (no pre-selected default)
 and exposes a reclassify flow. Verified via automated tests (added to
 `tests/coreWorkflows.test.ts`) and real-browser verification against a
-Firestore/Auth emulator. This item is now IMPLEMENTED and VERIFIED, not yet
-APPROVED as production behavior — that determination is the user's alone.
+Firestore/Auth emulator. This item was IMPLEMENTED and VERIFIED as of that
+checkpoint.
+
+**Update (2026-08-28): APPROVED.** The user has explicitly confirmed FIN-002
+as implemented and verified, and directed that it be treated as approved.
+Status: **IMPLEMENTED — VERIFIED — APPROVED.** No further action on this
+item; it is closed.
 
 ---
 
