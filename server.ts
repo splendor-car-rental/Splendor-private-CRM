@@ -132,6 +132,18 @@ function initFirebaseAdmin() {
   // completely unchanged. See docs/QA_TEST_ENVIRONMENT.md.
   if (process.env.FIRESTORE_EMULATOR_HOST) {
     admin.initializeApp({ projectId: process.env.GCLOUD_PROJECT || 'demo-splendor-audit' });
+    // Every route builds its Firestore-bound object by spreading optional
+    // fields straight out of req.body (e.g. POST /api/suppliers), so a field
+    // the client legitimately omits arrives here as `undefined`. Firestore's
+    // real SDK rejects that outright; only the mocked test double is lenient
+    // about it. This setting makes the server's actual behavior match what
+    // every route already assumes: omitted optional fields are just absent
+    // from the stored document, not a fatal error. Guarded because test
+    // suites mock admin.firestore() with a plain object that has no
+    // .settings() method.
+    if (typeof admin.firestore().settings === 'function') {
+      admin.firestore().settings({ ignoreUndefinedProperties: true });
+    }
     console.log(`[auth] Firebase Admin initialized against LOCAL EMULATORS (project: ${process.env.GCLOUD_PROJECT || 'demo-splendor-audit'}) -- this is not the real production project.`);
     return;
   }
@@ -149,6 +161,14 @@ function initFirebaseAdmin() {
       credential: admin.credential.cert(serviceAccount),
       storageBucket: 'splendor-private-crm.firebasestorage.app'
     });
+    // See the emulator branch above: routes routinely spread optional
+    // req.body fields into Firestore-bound objects, so an omitted field is
+    // `undefined`, not absent. Without this, the real Admin SDK throws on
+    // that -- unlike the test suite's mock -- crashing writes that never
+    // fail in CI. See docs/QA_TEST_ENVIRONMENT.md for how this was found.
+    if (typeof admin.firestore().settings === 'function') {
+      admin.firestore().settings({ ignoreUndefinedProperties: true });
+    }
     console.log('[auth] Firebase Admin initialized -- API requests will be verified.');
   } catch (error) {
     console.error('[auth] Failed to parse/initialize FIREBASE_SERVICE_ACCOUNT_KEY:', error);
