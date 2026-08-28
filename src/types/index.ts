@@ -830,12 +830,103 @@ export interface AuditLog {
   userRole: string;
   entityType: string;
   entityId: string;
-  action: 'create' | 'update' | 'delete' | 'status_change' | 'approval' | 'refund' | 'reconcile' | 'merge';
+  action: 'create' | 'update' | 'delete' | 'status_change' | 'approval' | 'refund' | 'reconcile' | 'merge' | 'rule_change' | 'kill_switch' | 'approval_decision';
   previousValue?: string;
   newValue?: string;
   reason?: string;
   ipAddress?: string;
   timestamp: string;
+}
+
+// ----------------------------------------------------
+// GOVERNANCE & APPROVAL ENGINE (Phase 23)
+// ----------------------------------------------------
+// Four tiers, in increasing order of how carefully a change must be
+// controlled:
+//  - system_configuration: read-only visibility of a security/integrity
+//    constant that lives in code on purpose (role ranks, password policy,
+//    document-path allowlists, ...). ALWAYS editable:false -- no role, not
+//    even CEO, can change it through this engine. Existing here only so the
+//    governance dashboard has full visibility, not just over financial data.
+//  - business_rule: a normal operational threshold a manager should be able
+//    to tune (mileage allowance, notification windows, ...). Direct-edit is
+//    restricted to the same roles already trusted with pricing elsewhere in
+//    the app (see RULE_TIER_DIRECT_EDIT_ROLES) and is versioned + audited,
+//    but does not require a second approver.
+//  - sensitive_rule: a threshold whose change should never take effect from
+//    a single person's action alone -- proposing a change creates an
+//    ApprovalRequest; a DIFFERENT authorized person must decide it before
+//    the new value ever applies (Four-Eyes / Segregation of Duties).
+//  - emergency_rule: a kill-switch-style on/off control for one category of
+//    high-risk operation. Restricted to CEO/Admin, applies immediately (an
+//    incident response control that waited for a second approver would
+//    defeat its own purpose), but every flip is fully audited with a
+//    mandatory reason.
+export type BusinessRuleTier = 'system_configuration' | 'business_rule' | 'sensitive_rule' | 'emergency_rule';
+export type BusinessRuleValueType = 'number' | 'boolean' | 'string';
+
+export interface BusinessRuleVersion {
+  version: number;
+  value: number | boolean | string | null;
+  changedBy: string;
+  changedByName: string;
+  changedByRole: string;
+  changedAt: string;
+  reason: string;
+  approvalRequestId?: string;
+  effectiveAt?: string; // when set and in the future, this version is SCHEDULED, not yet live -- see promoteScheduledRuleVersions()
+}
+
+export interface BusinessRule {
+  id: string; // the rule key, e.g. 'notificationExpiryLookaheadDays'
+  label: string;
+  labelAr?: string;
+  description: string;
+  tier: BusinessRuleTier;
+  valueType: BusinessRuleValueType;
+  value: number | boolean | string | null;
+  min?: number;
+  max?: number;
+  /**
+   * false = this entry is catalog-visibility only and can NEVER be changed
+   * through this engine, regardless of role or tier -- used for
+   * system_configuration entries (security/integrity constants) and for
+   * "fast-follow" mirror entries that still live behind their own existing
+   * route (see sourceNote).
+   */
+  editable: boolean;
+  version: number;
+  history: BusinessRuleVersion[]; // append-only; a rollback appends a new version pointing back to an old value, it never rewrites history
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedByRole?: string;
+  updatedAt?: string;
+  /** Where this rule used to be (or still is) hardcoded/managed, for traceability. */
+  sourceNote?: string;
+}
+
+export type ApprovalRequestType = 'rule_change';
+export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ApprovalRequest {
+  id: string;
+  type: ApprovalRequestType;
+  entityType: string; // 'BusinessRule'
+  entityId: string; // the rule key
+  fieldPath?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedByRole: string;
+  reason: string; // mandatory -- "mandatory reason for overrides"
+  beforeValue: number | boolean | string | null;
+  afterValue: number | boolean | string | null;
+  status: ApprovalRequestStatus;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedByRole?: string;
+  decisionNote?: string;
+  decidedAt?: string;
+  createdAt: string;
 }
 
 export interface CustomFieldDefinition {

@@ -16,6 +16,12 @@
 
 import { globalStore } from './dataStore';
 import { sendWhatsAppMessage, getWhatsAppGroupRecipients } from './whatsapp';
+import { getRuleValue } from './businessRules';
+
+/** True when the Phase 23.4 emergency kill switch for WhatsApp outbound messaging is tripped. */
+function whatsappOutboundSuspended(): boolean {
+  return getRuleValue('killSwitch.whatsappOutbound', false);
+}
 
 function nextLogId(): string {
   return `WA-${String(globalStore.whatsappMessageLog.length + 1).padStart(6, '0')}`;
@@ -29,6 +35,10 @@ function nextLogId(): string {
  * an event with nobody assigned is not an error, just not wired up yet.
  */
 export async function dispatchNotificationEvent(eventKey: string, messageEn: string, messageAr: string, reminderId?: string): Promise<void> {
+  if (whatsappOutboundSuspended()) {
+    console.warn(`[notificationEngine] WhatsApp outbound suspended by emergency kill switch -- skipped event "${eventKey}".`);
+    return;
+  }
   const config = globalStore.notificationEventConfigs.find(c => c.eventKey === eventKey);
   if (!config || !config.enabled) return;
 
@@ -76,6 +86,10 @@ export async function dispatchNotificationEvent(eventKey: string, messageEn: str
  * overall status to store on the CustomReminder record itself.
  */
 export async function dispatchCustomReminder(reminderId: string, title: string, message: string, broadcastToGroup: boolean, staffRecipientIds: string[]): Promise<'sent' | 'partially_sent' | 'failed' | 'not_configured'> {
+  if (whatsappOutboundSuspended()) {
+    console.warn(`[notificationEngine] WhatsApp outbound suspended by emergency kill switch -- skipped custom reminder "${reminderId}".`);
+    return 'failed';
+  }
   const recipients: { phone: string; label: string; type: 'group' | 'staff' }[] = [];
   if (broadcastToGroup) {
     getWhatsAppGroupRecipients().forEach(phone => recipients.push({ phone, label: 'General WhatsApp Group', type: 'group' }));
@@ -123,6 +137,10 @@ export async function dispatchCustomReminder(reminderId: string, title: string, 
  * activity log rather than silently dropped.
  */
 export async function dispatchCustomerNotification(eventKey: string, customerId: string, customerName: string, customerPhone: string | undefined, messageEn: string, messageAr: string): Promise<void> {
+  if (whatsappOutboundSuspended()) {
+    console.warn(`[notificationEngine] WhatsApp outbound suspended by emergency kill switch -- skipped customer event "${eventKey}" for ${customerId}.`);
+    return;
+  }
   const config = globalStore.customerNotificationConfigs.find(c => c.eventKey === eventKey);
   if (!config || !config.enabled) return;
 
@@ -181,10 +199,21 @@ export interface NotificationCheckSummary {
  * message itself lists every affected record.
  */
 export async function runNotificationChecks(): Promise<NotificationCheckSummary> {
+  if (getRuleValue('killSwitch.backgroundJobs', false)) {
+    return { ranAt: new Date().toISOString(), alertsFired: 0, details: ['Background/scheduled jobs suspended by emergency kill switch -- sweep skipped.'] };
+  }
+
   const details: string[] = [];
   let alertsFired = 0;
   const now = Date.now();
-  const soon = now + 30 * DAY_MS;
+  const expiryLookaheadDays = getRuleValue('notificationExpiryLookaheadDays', 30);
+  const standardCooldownHours = getRuleValue('notificationCooldownHours', 24);
+  const overdueCooldownHours = getRuleValue('notificationOverdueCooldownHours', 12);
+  const contractEndingReminderDays = getRuleValue('notificationContractEndingReminderDays', 2);
+  const depositDueSoonDays = getRuleValue('notificationDepositDueSoonDays', 3);
+  const paymentDueSoonDays = getRuleValue('notificationPaymentDueSoonDays', 3);
+  const unmatchedTollStalenessHours = getRuleValue('notificationUnmatchedTollStalenessHours', 24);
+  const soon = now + expiryLookaheadDays * DAY_MS;
 
   const fireIfNew = async (eventKey: string, cooldownKey: string, cooldownHours: number, msgEn: string, msgAr: string) => {
     if (!shouldAlert(cooldownKey, cooldownHours)) return;
@@ -201,7 +230,7 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   });
   if (expiringRegistration.length > 0) {
     const list = expiringRegistration.map(v => `${v.make} ${v.model} (${v.plateNumber}) -- ${v.registrationExpiry}`).join('; ');
-    await fireIfNew('vehicle_registration_expiring', 'vehicle_registration_expiring:batch', 24,
+    await fireIfNew('vehicle_registration_expiring', 'vehicle_registration_expiring:batch', standardCooldownHours,
       `Vehicle registration (Mulkiya) expiring within 30 days: ${list}`,
       `تنبيه: انتهاء ملكية مركبات خلال 30 يوم: ${list}`);
   }
@@ -212,7 +241,7 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   });
   if (expiringInsurance.length > 0) {
     const list = expiringInsurance.map(v => `${v.make} ${v.model} (${v.plateNumber}) -- ${v.insuranceExpiry}`).join('; ');
-    await fireIfNew('vehicle_insurance_expiring', 'vehicle_insurance_expiring:batch', 24,
+    await fireIfNew('vehicle_insurance_expiring', 'vehicle_insurance_expiring:batch', standardCooldownHours,
       `Vehicle insurance expiring within 30 days: ${list}`,
       `تنبيه: انتهاء تأمين مركبات خلال 30 يوم: ${list}`);
   }
@@ -225,7 +254,7 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   });
   if (expiringDocs.length > 0) {
     const list = expiringDocs.map(c => c.fullName).join('; ');
-    await fireIfNew('customer_document_expiring', 'customer_document_expiring:batch', 24,
+    await fireIfNew('customer_document_expiring', 'customer_document_expiring:batch', standardCooldownHours,
       `Customer ID/License documents expiring within 30 days: ${list}`,
       `تنبيه: انتهاء هوية أو رخصة عملاء خلال 30 يوم: ${list}`);
   }
@@ -234,7 +263,7 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   const overdueContracts = globalStore.contracts.filter(c => c.status === 'active' && new Date(c.endDateTime).getTime() < now);
   if (overdueContracts.length > 0) {
     const list = overdueContracts.map(c => `${c.id} (${c.customerName})`).join('; ');
-    await fireIfNew('contract_overdue', 'contract_overdue:batch', 12,
+    await fireIfNew('contract_overdue', 'contract_overdue:batch', overdueCooldownHours,
       `Contracts overdue for return: ${list}`,
       `تنبيه: عقود متأخرة عن موعد التسليم: ${list}`);
   }
@@ -245,11 +274,11 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   const expiringSoonContracts = globalStore.contracts.filter(c => {
     if (c.status !== 'active') return false;
     const end = new Date(c.endDateTime).getTime();
-    return end >= now && end <= now + 2 * DAY_MS;
+    return end >= now && end <= now + contractEndingReminderDays * DAY_MS;
   });
   for (const c of expiringSoonContracts) {
     const key = `customer_contract_expiring:${c.id}`;
-    if (!shouldAlert(key, 24)) continue;
+    if (!shouldAlert(key, standardCooldownHours)) continue;
     const customer = globalStore.customers.find(cu => cu.id === c.customerId);
     await dispatchCustomerNotification('customer_contract_expiring', c.customerId, c.customerName, customer?.phone,
       `Your rental contract ${c.id} is ending on ${c.endDateTime.slice(0, 10)}. Please contact us to extend or arrange the vehicle return.`,
@@ -263,11 +292,11 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   const depositsDue = globalStore.deposits.filter(d => {
     if (d.status !== 'held' && d.status !== 'collected') return false;
     const t = new Date(d.holdReleaseDueDate).getTime();
-    return !isNaN(t) && t <= now + 3 * DAY_MS;
+    return !isNaN(t) && t <= now + depositDueSoonDays * DAY_MS;
   });
   if (depositsDue.length > 0) {
     const list = depositsDue.map(d => `${d.customerName} (${d.balance} AED)`).join('; ');
-    await fireIfNew('deposit_refund_due', 'deposit_refund_due:batch', 24,
+    await fireIfNew('deposit_refund_due', 'deposit_refund_due:batch', standardCooldownHours,
       `Security deposits due for refund within 3 days: ${list}`,
       `تنبيه: تأمينات مستحقة الاسترجاع خلال 3 أيام: ${list}`);
   }
@@ -276,7 +305,7 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
   const overdueInvoices = globalStore.invoices.filter(i => i.balanceDue > 0 && new Date(i.dueDate).getTime() < now);
   if (overdueInvoices.length > 0) {
     const list = overdueInvoices.map(i => `${i.id} (${i.customerName}, ${i.balanceDue} AED)`).join('; ');
-    await fireIfNew('invoice_overdue', 'invoice_overdue:batch', 24,
+    await fireIfNew('invoice_overdue', 'invoice_overdue:batch', standardCooldownHours,
       `Overdue invoices: ${list}`,
       `تنبيه: فواتير متأخرة السداد: ${list}`);
   }
@@ -291,7 +320,7 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
 
     if (due < now) {
       const key = `customer_payment_overdue:${inv.id}`;
-      if (shouldAlert(key, 24)) {
+      if (shouldAlert(key, standardCooldownHours)) {
         await dispatchCustomerNotification('customer_payment_overdue', inv.customerId, inv.customerName, customer?.phone,
           `Invoice ${inv.id} is overdue -- outstanding balance ${inv.balanceDue.toLocaleString()} AED. Please settle at your earliest convenience.`,
           `فاتورة ${inv.id} متأخرة السداد -- الرصيد المستحق ${inv.balanceDue.toLocaleString()} درهم. برجاء السداد في أقرب وقت.`);
@@ -299,9 +328,9 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
         alertsFired++;
         details.push(`customer_payment_overdue: ${inv.id}`);
       }
-    } else if (due <= now + 3 * DAY_MS) {
+    } else if (due <= now + paymentDueSoonDays * DAY_MS) {
       const key = `customer_payment_due:${inv.id}`;
-      if (shouldAlert(key, 24)) {
+      if (shouldAlert(key, standardCooldownHours)) {
         await dispatchCustomerNotification('customer_payment_due', inv.customerId, inv.customerName, customer?.phone,
           `Invoice ${inv.id} is due on ${inv.dueDate.slice(0, 10)} -- balance ${inv.balanceDue.toLocaleString()} AED.`,
           `فاتورة ${inv.id} مستحقة بتاريخ ${inv.dueDate.slice(0, 10)} -- الرصيد ${inv.balanceDue.toLocaleString()} درهم.`);
@@ -312,21 +341,21 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
     }
   }
 
-  // Toll/parking rows still unmatched more than 24h after creation
+  // Toll/parking rows still unmatched more than notificationUnmatchedTollStalenessHours after creation
   const unmatchedTolls = globalStore.tollTransactions.filter(t => {
     if (t.contractId || t.customerId) return false;
-    return (now - new Date(t.createdAt).getTime()) > DAY_MS;
+    return (now - new Date(t.createdAt).getTime()) > unmatchedTollStalenessHours * 60 * 60 * 1000;
   });
   if (unmatchedTolls.length > 0) {
-    await fireIfNew('toll_unmatched_transaction', 'toll_unmatched_transaction:batch', 24,
-      `${unmatchedTolls.length} toll/parking transaction(s) still unmatched to a contract after 24h -- please review and assign.`,
-      `تنبيه: ${unmatchedTolls.length} معاملة رسوم/مواقف بدون مطابقة عقد منذ أكثر من 24 ساعة -- برجاء المراجعة.`);
+    await fireIfNew('toll_unmatched_transaction', 'toll_unmatched_transaction:batch', standardCooldownHours,
+      `${unmatchedTolls.length} toll/parking transaction(s) still unmatched to a contract after ${unmatchedTollStalenessHours}h -- please review and assign.`,
+      `تنبيه: ${unmatchedTolls.length} معاملة رسوم/مواقف بدون مطابقة عقد منذ أكثر من ${unmatchedTollStalenessHours} ساعة -- برجاء المراجعة.`);
   }
 
-  // Bank transactions still unreconciled more than 48h after import
+  // Bank transactions still unreconciled
   const staleUnreconciled = globalStore.bankTransactions.filter(t => !t.reconciled);
   if (staleUnreconciled.length > 0) {
-    await fireIfNew('bank_discrepancy_found', 'bank_discrepancy_found:batch', 24,
+    await fireIfNew('bank_discrepancy_found', 'bank_discrepancy_found:batch', standardCooldownHours,
       `${staleUnreconciled.length} bank transaction(s) still unreconciled -- please review for discrepancies.`,
       `تنبيه: ${staleUnreconciled.length} معاملة بنكية غير مطابقة -- برجاء المراجعة.`);
   }

@@ -20,6 +20,13 @@ import { asyncHandler } from './src/server/asyncHandler';
 import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
 import { runIdempotent } from './src/server/idempotency';
+import {
+  hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
+  evaluateRuleChangeRequest, evaluateRollbackRequest,
+  RuleValidationError, RuleNotEditableError, RuleForbiddenError, RuleNotFoundError
+} from './src/server/businessRules';
+import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
+import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
 const app = express();
@@ -213,6 +220,41 @@ function requireRole(...allowedRoles: string[]) {
       console.error('requireRole check failed:', error);
       res.status(500).json({ error: 'Could not verify permissions.' });
     }
+  };
+}
+
+/** Resolves the full (uid, name, role) of the authenticated caller from their Firestore profile -- used by the Governance & Approval Engine routes, which need the display name for the immutable Who/What/When/Why/Before/After/Decision record, not just the role. */
+async function getRequesterActor(req: express.Request): Promise<{ uid: string; name: string; role: string } | null> {
+  const uid = (req as any).authUser?.uid;
+  if (!uid) return null;
+  const snap = await admin.firestore().collection('users').doc(uid).get();
+  if (!snap.exists) return null;
+  const data = snap.data() as any;
+  return { uid, name: data?.name || uid, role: data?.role };
+}
+
+/**
+ * Phase 23.4 Emergency Kill Switch: short-circuits a route with a 503
+ * BEFORE any business logic runs if the named category has been suspended.
+ * Always placed AFTER requireAuth/requireRole in a route's middleware
+ * chain, so RBAC is never bypassed -- this only ever adds an extra reason
+ * to refuse a request that authorization already allowed, never a way
+ * around it. No data is read or written on the blocked path: existing
+ * records are completely untouched, and the suspension itself is already
+ * fully audited at the moment an emergency_rule is flipped (see
+ * applyRuleValue in src/server/businessRules.ts).
+ */
+function requireOperationEnabled(category: string) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const key = `killSwitch.${category}`;
+    if (getRuleValue(key, false)) {
+      const rule = getRule(key);
+      return res.status(503).json({
+        error: `🚨 This operation is temporarily suspended by an emergency control (${rule?.label || category}). Existing records remain unaffected.`,
+        killSwitch: category
+      });
+    }
+    next();
   };
 }
 
@@ -793,7 +835,7 @@ app.put('/api/customers/:id', asyncHandler(async (req, res) => {
 // atomic Firestore batch (chunked at 500 writes, matching the existing
 // precedent in the admin reset endpoint below) -- a merge either fully
 // lands or fully doesn't, and it survives a restart.
-app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+app.post('/api/customers/:id/merge', requireRole('operations', 'ceo', 'admin'), requireOperationEnabled('customerMerge'), asyncHandler(async (req, res) => {
   const { targetCustomerId } = req.body;
   const sourceCust = globalStore.customers.find(c => c.id === req.params.id);
   const targetCust = globalStore.customers.find(c => c.id === targetCustomerId);
@@ -1629,7 +1671,7 @@ app.get('/api/reservations', (req, res) => {
 // the reservation write happen inside one Firestore transaction, so two
 // concurrent requests for the same vehicle/overlapping dates can no longer
 // both succeed, regardless of which instance handles which request.
-app.post('/api/reservations', asyncHandler(async (req, res) => {
+app.post('/api/reservations', requireOperationEnabled('reservationsBooking'), asyncHandler(async (req, res) => {
   const data = req.body || {};
   if (!data.vehicleId || !data.pickupDateTime || !data.returnDateTime) {
     return res.status(400).json({ error: 'vehicleId, pickupDateTime, and returnDateTime are required.' });
@@ -1681,7 +1723,7 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
 // Now atomic: the transaction reads the reservation, rejects if
 // reserv.contractId is already set, and creates the contract + updates the
 // reservation together.
-app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const contractId = await issueNextNumber('Contract');
   const now = new Date().toISOString();
   const reservationRef = admin.firestore().collection('reservations').doc(req.params.id);
@@ -1700,7 +1742,12 @@ app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'o
       const customer = customerSnap.exists ? (customerSnap.data() as any) : null;
       const vehicle = vehicleSnap.exists ? (vehicleSnap.data() as any) : null;
 
-      const vatAmount = reserv.totalAmount * (5 / 105); // already inclusive of 5%
+      // reserv.totalAmount is VAT-inclusive; vatPortion() backs out the
+      // configured rate instead of a raw 5/105 literal, so this stays
+      // correct if the VAT rate in src/config/tax.ts ever changes (Phase
+      // 23.0 audit finding: this used to drift from every other
+      // money-touching route, which all already used the shared helper).
+      const vatAmount = vatPortion(reserv.totalAmount);
       const rentalTotal = reserv.totalAmount - vatAmount;
 
       const contract = {
@@ -1724,9 +1771,15 @@ app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'o
         vatAmount,
         grandTotal: reserv.totalAmount,
         depositAmount: reserv.depositAmount,
-        mileageAllowancePerDay: 250,
-        extraKmRate: 15,
-        depositReleaseDays: 21,
+        // These three previously hardcoded 250/15/21 here specifically,
+        // conflicting with the 200/15/21 used everywhere else a contract is
+        // created (src/server/contractOps.ts, AddContractModal.tsx) -- a
+        // Phase 23.0 audit finding. Reading from the Business Rules Engine
+        // now makes this path consistent with the rest of the app instead
+        // of picking a new number.
+        mileageAllowancePerDay: getRuleValue('contractDefaultMileageAllowanceKm', 200),
+        extraKmRate: getRuleValue('contractExtraKmRateAed', 15),
+        depositReleaseDays: getRuleValue('contractDepositReleaseDays', 21),
         status: 'draft' as const,
         paymentStatus: 'unpaid' as const,
         depositStatus: 'pending' as const,
@@ -1772,7 +1825,7 @@ app.get('/api/contracts', (req, res) => {
 // createContractDurable() (src/server/contractOps.ts). An Idempotency-Key
 // header/body field makes a double-click or network retry return the
 // original contract instead of creating a second one.
-app.post('/api/contracts', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+app.post('/api/contracts', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const data = req.body || {};
   if (!data.vehicleId || !data.customerId) {
     return res.status(400).json({ error: 'vehicleId and customerId are required.' });
@@ -1846,7 +1899,7 @@ app.get('/api/contracts/:id', (req, res) => {
   res.json(contract);
 });
 
-app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const { handoverData, actorId, actorName } = req.body;
   const now = new Date().toISOString();
   const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
@@ -1924,7 +1977,7 @@ app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'
   res.json({ success: true, contract: updatedContract });
 }));
 
-app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const { returnData, actorId, actorName } = req.body;
   const now = new Date().toISOString();
   const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
@@ -2035,7 +2088,7 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
 // at the contract's existing daily rate, logs an audit entry, and sends the
 // customer a WhatsApp "extension addendum" notice (the spec's explicit
 // "ملحق تمديد للعقد" -- extension addendum -- requirement).
-app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const { newEndDateTime, actorId, actorName } = req.body || {};
   if (!newEndDateTime) return res.status(400).json({ error: 'newEndDateTime is required.' });
   const now = new Date().toISOString();
@@ -2114,7 +2167,7 @@ app.get('/api/charges', (req, res) => {
   res.json(globalStore.charges);
 });
 
-app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), asyncHandler(async (req, res) => {
+app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('financialAdjustments'), asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Charge');
   const amount = Number(req.body.amount) || 0;
   const vat = vatPortion(amount);
@@ -2244,7 +2297,7 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
   res.json({ success: true, deposit: updatedDeposit });
 }));
 
-app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
   const { refundAmount, actorId, actorName } = req.body;
   const now = new Date().toISOString();
 
@@ -2318,7 +2371,7 @@ app.get('/api/payments', (req, res) => {
 // decrementing invoice.paidAmount and customer.outstandingBalance --
 // double-crediting the customer. The whole payment+invoice+customer write
 // is now one atomic transaction, replayed (not repeated) on a matching key.
-app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
   const data = req.body || {};
   const amount = Number(data.amount) || 0;
   if (amount <= 0) {
@@ -2428,7 +2481,7 @@ app.get('/api/bank-transactions', (req, res) => {
   res.json(globalStore.bankTransactions);
 });
 
-app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
   const { fileName, bankName, accountNumber, transactions, uploadedBy } = req.body;
   const batchSeq = await issueNextNumber('BankBatch');
   const batchId = `BATCH-${new Date().toISOString().slice(0, 7)}-${batchSeq.replace(/\D/g, '').slice(-2).padStart(2, '0')}`;
@@ -2517,7 +2570,7 @@ app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), asyncHandl
 // Guards against double-reconcile (the audit's finding: reconciling twice
 // would double-credit the matched invoice) by checking txn.reconciled
 // inside the same transaction that writes the reconciliation.
-app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
   const { targetRecordType, targetRecordId, actorId, actorName } = req.body;
   const now = new Date().toISOString();
   const txnRef = admin.firestore().collection('bank_transactions').doc(req.params.id);
@@ -2664,7 +2717,7 @@ app.get('/api/toll-pricing-config', (req, res) => {
   res.json(globalStore.tollPricingConfig || DEFAULT_TOLL_PRICING);
 });
 
-app.patch('/api/toll-pricing-config', asyncHandler(async (req, res) => {
+app.patch('/api/toll-pricing-config', requireOperationEnabled('pricingDiscounts'), asyncHandler(async (req, res) => {
   const allowed = await requesterCanEditTollPricing(req);
   if (!allowed) {
     return res.status(403).json({ error: 'Only Admin, Finance, Sales, or CEO can change Salik/Darb/Parking pricing.' });
@@ -3465,6 +3518,164 @@ app.get('/api/document-templates', (req, res) => {
 app.get('/api/audit-logs', (req, res) => {
   res.json(globalStore.auditLogs);
 });
+
+// ----------------------------------------------------
+// GOVERNANCE & APPROVAL ENGINE (Phase 23.1-23.4)
+// ----------------------------------------------------
+// Business Rules Engine + tiering, Four-Eyes Approval / Segregation of
+// Duties, immutable approval history, and the Emergency Kill Switch. See
+// src/server/businessRules.ts and src/server/approvals.ts for the engine
+// itself, and src/config/businessRules.ts for the tier permission tables.
+
+/** Every rule the caller's role is allowed to see, tier-filtered -- system_configuration entries are hidden from non-CEO/Admin roles even in this read-only list. */
+app.get('/api/business-rules', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  res.json(listReadableRules(actor.role as any));
+}));
+
+app.get('/api/business-rules/:key/history', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const rule = getRule(req.params.key);
+  if (!rule) return res.status(404).json({ error: 'Unknown business rule.' });
+  if (!canReadRuleTier(actor.role as any, rule.tier)) {
+    return res.status(403).json({ error: 'You do not have permission to view this rule.' });
+  }
+  res.json(rule.history);
+}));
+
+// Proposes a change to a rule's value. Mandatory `reason` on every request
+// -- this is the "mandatory reason for overrides" control. Depending on
+// the rule's tier and the caller's role, this either applies immediately
+// (business_rule / emergency_rule, versioned + audited) or creates a
+// pending ApprovalRequest that a DIFFERENT authorized person must decide
+// (sensitive_rule) -- see evaluateRuleChangeRequest in businessRules.ts.
+app.patch('/api/business-rules/:key', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { value, reason } = req.body || {};
+  if (value === undefined || value === null) {
+    return res.status(400).json({ error: 'A value is required.' });
+  }
+  if (!reason || typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ error: 'A reason is required to change a business rule.' });
+  }
+
+  const rule = getRule(req.params.key);
+  if (!rule) return res.status(404).json({ error: 'Unknown business rule.' });
+
+  try {
+    const outcome = await evaluateRuleChangeRequest(
+      req.params.key, value, reason, { uid: actor.uid, name: actor.name, role: actor.role as any }, recordAudit
+    );
+    if (outcome.applied) {
+      return res.json({ status: 'applied', rule: outcome.rule });
+    }
+    const request = await createApprovalRequest({
+      type: 'rule_change',
+      entityType: 'BusinessRule',
+      entityId: req.params.key,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any,
+      reason,
+      beforeValue: rule.value,
+      afterValue: value
+    }, recordAudit);
+    return res.status(202).json({ status: 'pending_approval', approvalRequest: request });
+  } catch (error: any) {
+    if (error instanceof RuleForbiddenError) return res.status(403).json({ error: error.message });
+    if (error instanceof RuleNotEditableError) return res.status(403).json({ error: error.message });
+    if (error instanceof RuleValidationError) return res.status(400).json({ error: error.message });
+    if (error instanceof RuleNotFoundError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Reverts a rule to a previous version's value. Never rewrites history --
+// this appends a new forward version whose value happens to match an old
+// one, going through the exact same tier/approval logic as any other
+// change (rolling back a sensitive rule still requires a second approver).
+app.post('/api/business-rules/:key/rollback', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { toVersion, reason } = req.body || {};
+  if (typeof toVersion !== 'number') return res.status(400).json({ error: 'toVersion is required.' });
+  if (!reason || typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ error: 'A reason is required to roll back a business rule.' });
+  }
+
+  try {
+    const outcome = await evaluateRollbackRequest(
+      req.params.key, toVersion, reason, { uid: actor.uid, name: actor.name, role: actor.role as any }, recordAudit
+    );
+    if (outcome.applied) {
+      return res.json({ status: 'applied', rule: outcome.rule });
+    }
+    const rule = getRule(req.params.key)!;
+    const target = rule.history.find(h => h.version === toVersion)!;
+    const request = await createApprovalRequest({
+      type: 'rule_change',
+      entityType: 'BusinessRule',
+      entityId: req.params.key,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any,
+      reason: `Rollback to v${toVersion}: ${reason}`,
+      beforeValue: rule.value,
+      afterValue: target.value
+    }, recordAudit);
+    return res.status(202).json({ status: 'pending_approval', approvalRequest: request });
+  } catch (error: any) {
+    if (error instanceof RuleForbiddenError) return res.status(403).json({ error: error.message });
+    if (error instanceof RuleNotEditableError) return res.status(403).json({ error: error.message });
+    if (error instanceof RuleValidationError) return res.status(400).json({ error: error.message });
+    if (error instanceof RuleNotFoundError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/approval-requests', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
+  const requests = await listApprovalRequests(status);
+  // Anyone can see the requests they filed themselves; only CEO/Admin (the
+  // decider-eligible roles) see everyone else's -- a requester should never
+  // lose visibility into their own pending request, but staff shouldn't
+  // browse each other's override history by default.
+  const visible = ['ceo', 'admin'].includes(actor.role)
+    ? requests
+    : requests.filter(r => r.requestedBy === actor.uid);
+  res.json(visible);
+}));
+
+// Approves or rejects a pending request. Four-Eyes / Segregation of Duties
+// is enforced inside decideApprovalRequest itself: the decider can never be
+// the same person who requested the change, even if they hold an eligible
+// role. A decision note is mandatory in every case.
+app.post('/api/approval-requests/:id/decide', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') {
+    return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  }
+
+  try {
+    const decided = await decideApprovalRequest(
+      req.params.id, decision, note, { uid: actor.uid, name: actor.name, role: actor.role as any }, recordAudit
+    );
+    res.json(decided);
+  } catch (error: any) {
+    if (error instanceof ApprovalError) return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
 
 app.get('/api/settings/custom-fields', (req, res) => {
   res.json(globalStore.customFields);
@@ -4699,6 +4910,15 @@ async function hydrateStoreFromFirestore() {
     }
   } catch (error) {
     console.error('[hydrate] Failed to load toll pricing config from Firestore:', error);
+  }
+
+  // Business Rules Engine (Phase 23.1): loads every governed rule/kill
+  // switch from Firestore, seeding any rule that doesn't have a document
+  // yet with its already-existing code default -- never an invented one.
+  try {
+    await hydrateBusinessRules();
+  } catch (error) {
+    console.error('[hydrate] Failed to load business rules from Firestore:', error);
   }
 
   console.log(`[hydrate] Restored ${totalDocs} record(s) across ${hydratedCollections} collection(s) from Firestore.`);
