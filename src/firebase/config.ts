@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDocFromServer, collection, getDocs, limit, query } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
+import { getFirestore, doc, getDocFromServer, collection, getDocs, limit, query, connectFirestoreEmulator } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
 
 export const firebaseConfig = {
   apiKey: "AIzaSyBai1Hc6IldBar2jDkiMmTzkx-I7X2o-wQ",
@@ -15,6 +15,19 @@ export const firebaseConfig = {
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+
+// QA/local-testing only -- connects this client to LOCAL Firebase emulators
+// instead of the real production project, so a real browser session can be
+// verified end-to-end without ever touching real Auth users or Firestore
+// data. Strictly opt-in via VITE_USE_FIREBASE_EMULATORS: unset (the default,
+// always true in production) leaves every line above completely unaffected.
+// See docs/QA_TEST_ENVIRONMENT.md.
+if (import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  // eslint-disable-next-line no-console
+  console.warn('[QA] Connected to LOCAL Firebase emulators -- this is not the real production project.');
+}
 
 // NOTE: this file used to auto-sign-in an anonymous Firebase user on every
 // page load ("Automatically ensure authenticated session"), left over from

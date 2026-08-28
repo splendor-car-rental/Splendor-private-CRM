@@ -122,6 +122,20 @@ app.use((req, res, next) => {
 // /api/* requests with 503 rather than silently allowing them through.
 function initFirebaseAdmin() {
   if (admin.apps.length > 0) return;
+
+  // QA/local-testing only -- when FIRESTORE_EMULATOR_HOST is set (the
+  // standard signal every Firebase Admin SDK already recognizes), the
+  // Admin SDK talks to LOCAL emulators instead of real GCP and needs no
+  // real service-account credential to do so. This branch is otherwise
+  // fully inert: in every real deployment FIRESTORE_EMULATOR_HOST is
+  // unset, so the existing FIREBASE_SERVICE_ACCOUNT_KEY path below runs
+  // completely unchanged. See docs/QA_TEST_ENVIRONMENT.md.
+  if (process.env.FIRESTORE_EMULATOR_HOST) {
+    admin.initializeApp({ projectId: process.env.GCLOUD_PROJECT || 'demo-splendor-audit' });
+    console.log(`[auth] Firebase Admin initialized against LOCAL EMULATORS (project: ${process.env.GCLOUD_PROJECT || 'demo-splendor-audit'}) -- this is not the real production project.`);
+    return;
+  }
+
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (!raw) {
     console.warn(
