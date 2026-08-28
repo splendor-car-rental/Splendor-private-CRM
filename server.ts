@@ -52,6 +52,10 @@ import {
   requestDebtCorrection, requestDebtCancellation, DebtError
 } from './src/server/debts';
 import {
+  requestIssueCustodyFloat, recordCustodyReturn, submitEmployeeExpense,
+  markEmployeeExpenseRejected, resubmitEmployeeExpense, EmployeeCustodyError
+} from './src/server/employeeCustody';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -5907,6 +5911,135 @@ app.post('/api/debts/:id/cancel', requireRole('ceo', 'admin', 'finance', 'operat
   }
 }));
 
+// ---- Employee custody/float ----
+app.get('/api/employee-custodies', (req, res) => {
+  const { employeeId } = req.query;
+  let custodies = globalStore.employeeCustodies;
+  if (employeeId) custodies = custodies.filter(c => c.employeeId === employeeId);
+  res.json(custodies);
+});
+
+app.get('/api/employee-custodies/:id', (req, res) => {
+  const custody = globalStore.employeeCustodies.find(c => c.id === req.params.id);
+  if (!custody) return res.status(404).json({ error: 'Custody account not found.' });
+  res.json(custody);
+});
+
+app.post('/api/employee-custodies/issue', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this issuance.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestIssueCustodyFloat({
+      employeeId: body.employeeId,
+      employeeName: body.employeeName,
+      amount: body.amount,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/employee-custodies/:id/return', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const custody = await recordCustodyReturn({
+      custodyId: req.params.id,
+      amount: body.amount,
+      note: body.note,
+      actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+    }, recordAudit);
+    const index = globalStore.employeeCustodies.findIndex(c => c.id === custody.id);
+    if (index !== -1) globalStore.employeeCustodies[index] = custody;
+    res.json(custody);
+  } catch (error: any) {
+    if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Employee expenses: pending_review -> approved/rejected, resubmittable, duplicates flagged never blocked ----
+app.get('/api/employee-expenses', (req, res) => {
+  const { employeeId, status } = req.query;
+  let expenses = globalStore.employeeExpenses;
+  if (employeeId) expenses = expenses.filter(e => e.employeeId === employeeId);
+  if (status) expenses = expenses.filter(e => e.status === status);
+  res.json(expenses);
+});
+
+app.get('/api/employee-expenses/:id', (req, res) => {
+  const expense = globalStore.employeeExpenses.find(e => e.id === req.params.id);
+  if (!expense) return res.status(404).json({ error: 'Expense not found.' });
+  res.json(expense);
+});
+
+app.post('/api/employee-expenses', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const { expense, approvalRequestId } = await submitEmployeeExpense({
+      employeeId: body.employeeId,
+      employeeName: body.employeeName,
+      custodyId: body.custodyId,
+      fundingSource: body.fundingSource,
+      category: body.category,
+      categoryOther: body.categoryOther,
+      amount: body.amount,
+      date: body.date,
+      vendorOrPartyName: body.vendorOrPartyName,
+      documentIds: body.documentIds,
+      submittedBy: actor.uid,
+      submittedByName: actor.name,
+      submittedByRole: actor.role as any
+    }, recordAudit);
+    globalStore.employeeExpenses.unshift(expense);
+    res.status(201).json({ expense, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/employee-expenses/:id/resubmit', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const { expense, approvalRequestId } = await resubmitEmployeeExpense({
+      expenseId: req.params.id,
+      amount: body.amount,
+      category: body.category,
+      categoryOther: body.categoryOther,
+      documentIds: body.documentIds,
+      resubmittedBy: actor.uid,
+      resubmittedByName: actor.name,
+      resubmittedByRole: actor.role as any
+    }, recordAudit);
+    const index = globalStore.employeeExpenses.findIndex(e => e.id === expense.id);
+    if (index !== -1) globalStore.employeeExpenses[index] = expense;
+    res.status(201).json({ expense, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -6058,9 +6191,58 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
       }
     }
 
+    if (decided.entityType === 'EmployeeCustody' && decision === 'approved') {
+      const admin2 = admin;
+      const custodiesSnap = await admin2.firestore().collection('employee_custodies').get();
+      custodiesSnap.docs.forEach(d => {
+        const index = globalStore.employeeCustodies.findIndex(c => c.id === d.id);
+        if (index !== -1) globalStore.employeeCustodies[index] = d.data() as any;
+        else globalStore.employeeCustodies.unshift(d.data() as any);
+      });
+    }
+
+    // Employee expenses: an approval runs through the registered handler
+    // (debits the float / sets amountOwedToEmployee) via decideProcurementApproval
+    // above; a rejection carries no handler in the generic engine, so it is
+    // applied here explicitly -- still through the same requester!=decider
+    // check decideProcurementApproval already enforced.
+    if (decided.entityType === 'EmployeeExpense') {
+      if (decision === 'rejected') {
+        try {
+          await markEmployeeExpenseRejected({
+            expenseId: decided.entityId,
+            reason: decided.decisionNote || 'Rejected',
+            actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+          }, recordAudit);
+        } catch (err: any) {
+          if (!(err instanceof EmployeeCustodyError)) throw err;
+        }
+      }
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('employee_expenses').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.employeeExpenses.findIndex(e => e.id === decided.entityId);
+        if (index !== -1) globalStore.employeeExpenses[index] = snap.data() as any;
+        else globalStore.employeeExpenses.unshift(snap.data() as any);
+
+        if (decision === 'approved' && (snap.data() as any).custodyId) {
+          const custodySnap = await admin2.firestore().collection('employee_custodies').doc((snap.data() as any).custodyId).get();
+          if (custodySnap.exists) {
+            const cIndex = globalStore.employeeCustodies.findIndex(c => c.id === custodySnap.id);
+            if (cIndex !== -1) globalStore.employeeCustodies[cIndex] = custodySnap.data() as any;
+            else globalStore.employeeCustodies.unshift(custodySnap.data() as any);
+          }
+        }
+      }
+    }
+
     res.json(decided);
   } catch (error: any) {
     if (error instanceof ProcurementApprovalError) return res.status(409).json({ error: error.message });
+    // A registered approval handler can itself fail validation (e.g. the
+    // float balance changed between request and decision) -- surface that
+    // as a normal 400, not an unhandled 500.
+    if (error instanceof PersistenceError) return res.status(400).json({ error: error.message });
     throw error;
   }
 }));

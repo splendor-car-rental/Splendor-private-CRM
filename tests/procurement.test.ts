@@ -1216,3 +1216,146 @@ describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective
     expect(debtRes.body.status).toBe('cancelled');
   });
 });
+
+describe('Employee custody/float + expenses: approval-gated issuance, pending/rejected/resubmitted, duplicates flagged not blocked', () => {
+  it('opens a custody float through Segregation of Duties, and a later top-up increases the existing balance', async () => {
+    const issueRes = await request(app)
+      .post('/api/employee-custodies/issue')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-1', employeeName: 'Test Employee', amount: 1000, reason: 'Monthly float' });
+    expect(issueRes.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${issueRes.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${issueRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Float issued.' });
+
+    let custodyRes = (await request(app).get('/api/employee-custodies?employeeId=EMP-CUST-1').set(authAs(OPS_UID))).body[0];
+    expect(custodyRes.currentBalance).toBe(1000);
+    expect(custodyRes.movements[0].type).toBe('opening_balance');
+
+    const topUpRes = await request(app)
+      .post('/api/employee-custodies/issue')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-1', employeeName: 'Test Employee', amount: 200, reason: 'Extra float for a trip' });
+    await request(app)
+      .post(`/api/procurement/approvals/${topUpRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Top-up approved.' });
+
+    custodyRes = (await request(app).get('/api/employee-custodies?employeeId=EMP-CUST-1').set(authAs(OPS_UID))).body[0];
+    expect(custodyRes.currentBalance).toBe(1200);
+    expect(custodyRes.movements).toHaveLength(2);
+  });
+
+  it('an approved custody_float expense debits the float; an insufficient balance is rejected at approval', async () => {
+    const issueRes = await request(app)
+      .post('/api/employee-custodies/issue')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-2', employeeName: 'Float Spender', amount: 300, reason: 'Float' });
+    await request(app)
+      .post(`/api/procurement/approvals/${issueRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+    const custody = (await request(app).get('/api/employee-custodies?employeeId=EMP-CUST-2').set(authAs(OPS_UID))).body[0];
+
+    const expenseRes = await request(app)
+      .post('/api/employee-expenses')
+      .set(authAs(OPS_UID))
+      .send({
+        employeeId: 'EMP-CUST-2', employeeName: 'Float Spender', custodyId: custody.id, fundingSource: 'custody_float',
+        category: 'fuel', amount: 150, date: '2026-01-10'
+      });
+    expect(expenseRes.status).toBe(201);
+    expect(expenseRes.body.expense.status).toBe('pending_review');
+
+    await request(app)
+      .post(`/api/procurement/approvals/${expenseRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Expense approved.' });
+
+    const custodyAfter = (await request(app).get(`/api/employee-custodies/${custody.id}`).set(authAs(OPS_UID))).body;
+    expect(custodyAfter.currentBalance).toBe(150);
+
+    // Now try to approve an expense larger than what's left in the float.
+    const tooLargeExpenseRes = await request(app)
+      .post('/api/employee-expenses')
+      .set(authAs(OPS_UID))
+      .send({
+        employeeId: 'EMP-CUST-2', employeeName: 'Float Spender', custodyId: custody.id, fundingSource: 'custody_float',
+        category: 'maintenance', amount: 500, date: '2026-01-11'
+      });
+    const decideRes = await request(app)
+      .post(`/api/procurement/approvals/${tooLargeExpenseRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Trying to approve anyway.' });
+    expect(decideRes.status).toBe(400); // handler blocks it -- insufficient float balance, not silently overdrawn
+  });
+
+  it('own-money expense records amountOwedToEmployee on approval; rejecting keeps the float untouched and preserves rejection history for resubmission', async () => {
+    const ownMoneyRes = await request(app)
+      .post('/api/employee-expenses')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-3', employeeName: 'Own Money Spender', fundingSource: 'employee_own_money', category: 'transport', amount: 80, date: '2026-01-12' });
+    expect(ownMoneyRes.status).toBe(201);
+    await request(app)
+      .post(`/api/procurement/approvals/${ownMoneyRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Reimbursement approved.' });
+
+    const ownMoneyExpense = (await request(app).get(`/api/employee-expenses/${ownMoneyRes.body.expense.id}`).set(authAs(OPS_UID))).body;
+    expect(ownMoneyExpense.amountOwedToEmployee).toBe(80);
+
+    // Rejection flow + resubmission.
+    const rejectableRes = await request(app)
+      .post('/api/employee-expenses')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-3', employeeName: 'Own Money Spender', fundingSource: 'employee_own_money', category: 'meals', amount: 40, date: '2026-01-13' });
+    await request(app)
+      .post(`/api/procurement/approvals/${rejectableRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'rejected', note: 'Missing receipt.' });
+
+    let rejectedExpense = (await request(app).get(`/api/employee-expenses/${rejectableRes.body.expense.id}`).set(authAs(OPS_UID))).body;
+    expect(rejectedExpense.status).toBe('rejected');
+    expect(rejectedExpense.rejectionHistory).toHaveLength(1);
+    expect(rejectedExpense.rejectionHistory[0].reason).toBe('Missing receipt.');
+
+    const resubmitRes = await request(app)
+      .post(`/api/employee-expenses/${rejectableRes.body.expense.id}/resubmit`)
+      .set(authAs(OPS_UID))
+      .send({ documentIds: ['DOC-RECEIPT-1'] });
+    expect(resubmitRes.status).toBe(201);
+    expect(resubmitRes.body.expense.status).toBe('pending_review');
+
+    await request(app)
+      .post(`/api/procurement/approvals/${resubmitRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Receipt attached, approved.' });
+
+    rejectedExpense = (await request(app).get(`/api/employee-expenses/${rejectableRes.body.expense.id}`).set(authAs(OPS_UID))).body;
+    expect(rejectedExpense.status).toBe('approved');
+    expect(rejectedExpense.rejectionHistory).toHaveLength(1); // rejection history preserved, never erased
+  });
+
+  it('flags a possible duplicate expense (same employee/amount/date) without blocking submission', async () => {
+    await request(app)
+      .post('/api/employee-expenses')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-4', employeeName: 'Dup Test', fundingSource: 'employee_own_money', category: 'fuel', amount: 60, date: '2026-01-14', vendorOrPartyName: 'ADNOC' });
+
+    const dupRes = await request(app)
+      .post('/api/employee-expenses')
+      .set(authAs(OPS_UID))
+      .send({ employeeId: 'EMP-CUST-4', employeeName: 'Dup Test', fundingSource: 'employee_own_money', category: 'fuel', amount: 60, date: '2026-01-14', vendorOrPartyName: 'ADNOC' });
+    expect(dupRes.status).toBe(201); // never blocked
+    expect(dupRes.body.expense.duplicateWarning).toBeTruthy();
+    expect(dupRes.body.expense.duplicateWarning.possibleDuplicateOfExpenseId).toBeTruthy();
+  });
+});
