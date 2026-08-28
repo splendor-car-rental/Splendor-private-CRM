@@ -146,6 +146,36 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     sourceNote: 'Was a hardcoded literal at src/server/notificationEngine.ts (contract-overdue case).'
   },
 
+  // ---- business_rule: customer late-fee thresholds (migrated from
+  // src/server/lateFees.ts / src/config/procurement.ts, Procurement Phase
+  // 1's own config, which predated this engine and was never migrated
+  // into it). computeLateFee() is a pure, synchronous function called
+  // fresh on every /api/late-fees/compute request and on every waiver
+  // request -- it stores nothing itself, so changing either value here
+  // only affects fees computed AFTER the change; a LateFeeWaiver already
+  // on record keeps its own frozen originalLateFeeAmount forever,
+  // regardless of any later rule change (historical calculations are
+  // never retroactively recomputed). The two time thresholds below were
+  // given as real numbers by the business spec; the values are unchanged
+  // by this migration -- only their storage moved from a hardcoded
+  // literal to this auditable, versioned engine. ----
+  {
+    id: 'lateFeeGracePeriodHours',
+    label: 'Late-fee grace period',
+    labelAr: 'فترة السماح قبل احتساب رسوم التأخير',
+    description: 'Hours after the scheduled return time before any late fee starts accruing.',
+    tier: 'business_rule', valueType: 'number', value: 1, min: 0, max: 24, editable: true,
+    sourceNote: 'Was LATE_FEE_GRACE_PERIOD_HOURS, a hardcoded literal at src/config/procurement.ts:136.'
+  },
+  {
+    id: 'lateFeeExtraDayConversionHours',
+    label: 'Late-fee full-day conversion threshold',
+    labelAr: 'حد التحويل إلى يوم إيجار كامل لرسوم التأخير',
+    description: 'Hours of delay past the grace period after which the late fee converts from hourly billing to one full extra rental day.',
+    tier: 'business_rule', valueType: 'number', value: 6, min: 1, max: 24, editable: true,
+    sourceNote: 'Was LATE_FEE_EXTRA_DAY_CONVERSION_HOURS, a hardcoded literal at src/config/procurement.ts:137.'
+  },
+
   // ---- editable:false visibility mirrors: still owned by their existing route/transaction ----
   {
     id: 'contractDefaultMileageAllowanceKm',

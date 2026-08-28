@@ -1827,4 +1827,44 @@ describe('Customer late fee: 1h grace, round-to-nearest-hour (exact 30min rounds
       });
     expect(res.status).toBe(400);
   });
+
+  // CONFIG-002: the grace period and full-day-conversion thresholds used to
+  // be hardcoded literals in src/config/procurement.ts. They're now real,
+  // editable Business Rules -- this proves the compute endpoint actually
+  // reads the CURRENT rule value on every call, not a value baked in at
+  // import time.
+  it('CONFIG-002: changing the grace-period business rule immediately changes what the compute endpoint charges', async () => {
+    // 90 minutes late is 30 min past the default 1h grace -> exactly a
+    // half-hour, which rounds UP to 1 billable hour under the default rule.
+    const beforeChange = await request(app)
+      .post('/api/late-fees/compute')
+      .set(authAs(FINANCE_UID))
+      .send({ dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T11:30:00.000Z' });
+    expect(beforeChange.body.withinGrace).toBe(false);
+    expect(beforeChange.body.billableHours).toBe(1);
+
+    const patchRes = await request(app)
+      .patch('/api/business-rules/lateFeeGracePeriodHours')
+      .set(authAs(CEO_UID))
+      .send({ value: 2, reason: 'QA verification of CONFIG-002 live wiring.' });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.status).toBe('applied');
+
+    // The exact same 90-minutes-late scenario is now WITHIN the new 2h
+    // grace period -- no fee at all. If this module still read the old
+    // hardcoded constant instead of the live rule, this would still
+    // charge 1 billable hour.
+    const afterChange = await request(app)
+      .post('/api/late-fees/compute')
+      .set(authAs(FINANCE_UID))
+      .send({ dailyRate: 240, scheduledReturnAt: '2026-01-01T10:00:00.000Z', actualReturnAt: '2026-01-01T11:30:00.000Z' });
+    expect(afterChange.body.withinGrace).toBe(true);
+    expect(afterChange.body.feeAmount).toBe(0);
+
+    // Restore the default so it doesn't leak into other tests in this file.
+    await request(app)
+      .patch('/api/business-rules/lateFeeGracePeriodHours')
+      .set(authAs(CEO_UID))
+      .send({ value: 1, reason: 'Restore default after QA verification.' });
+  });
 });

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck } from 'lucide-react';
+import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck, Calculator, HandCoins } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
-import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract } from '../../types';
+import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver } from '../../types';
 
 /**
  * Splendor Procurement, Phase 1 -- operator-facing surface.
@@ -82,7 +82,7 @@ export const ProcurementView: React.FC = () => {
   const { showToast } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
-  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars'>('purchase-orders');
+  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees'>('purchase-orders');
   const [loading, setLoading] = useState(true);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
@@ -90,6 +90,7 @@ export const ProcurementView: React.FC = () => {
   const [operationTypes, setOperationTypes] = useState<SupplierOperationTypeDef[]>([]);
   const [tarsRecords, setTarsRecords] = useState<TarsRecord[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
+  const [lateFeeWaivers, setLateFeeWaivers] = useState<LateFeeWaiver[]>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
@@ -97,6 +98,14 @@ export const ProcurementView: React.FC = () => {
   const [amendmentModalPo, setAmendmentModalPo] = useState<PurchaseOrder | null>(null);
   const [amendmentsByPo, setAmendmentsByPo] = useState<Record<string, PurchaseOrderAmendmentRequest[]>>({});
   const [tarsModalOpen, setTarsModalOpen] = useState(false);
+
+  // Late-fee calculator state -- purely a display tool until "Request
+  // Waiver" is pressed; nothing here is persisted by typing into it.
+  const [lateFeeContractId, setLateFeeContractId] = useState('');
+  const [lateFeeActualReturnAt, setLateFeeActualReturnAt] = useState('');
+  const [lateFeeComputation, setLateFeeComputation] = useState<{ rawDelayMinutes: number; withinGrace: boolean; billableHours: number; convertedToExtraDay: boolean; feeAmount: number } | null>(null);
+  const [lateFeeCalculating, setLateFeeCalculating] = useState(false);
+  const [waiverModalContext, setWaiverModalContext] = useState<{ contractId: string; dailyRate: number; scheduledReturnAt: string; actualReturnAt: string; originalFeeAmount: number } | null>(null);
 
   // TARS deadlines/escalation are time-based -- re-render every 30s so an
   // "overdue by X minutes" figure stays live without a manual refresh,
@@ -110,14 +119,15 @@ export const ProcurementView: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes] = await Promise.all([
+      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes, lateFeeWaiversRes] = await Promise.all([
         apiFetch('/api/suppliers'),
         apiFetch('/api/purchase-orders'),
         apiFetch('/api/procurement/approvals'),
         apiFetch('/api/procurement/supplier-operation-types'),
         apiFetch('/api/tars-records'),
         apiFetch('/api/tars-records/escalations'),
-        apiFetch('/api/contracts')
+        apiFetch('/api/contracts'),
+        apiFetch('/api/late-fee-waivers')
       ]);
       if (suppliersRes.ok) setSuppliers(await suppliersRes.json());
       let pos: PurchaseOrder[] = [];
@@ -136,6 +146,7 @@ export const ProcurementView: React.FC = () => {
         setTarsRecords(rawTars.map(r => ({ ...r, escalationLevel: escalationById.get(r.id) || 'none' })));
       }
       if (contractsRes.ok) setContracts(await contractsRes.json());
+      if (lateFeeWaiversRes.ok) setLateFeeWaivers(await lateFeeWaiversRes.json());
 
       // Only fetch amendment history for POs that actually have any --
       // most never do, so this stays cheap rather than N fetches per load.
@@ -293,6 +304,32 @@ export const ProcurementView: React.FC = () => {
     }
   };
 
+  const lateFeeSelectedContract = contracts.find(c => c.id === lateFeeContractId);
+
+  const calculateLateFee = async () => {
+    if (!lateFeeSelectedContract || !lateFeeActualReturnAt) return;
+    setLateFeeCalculating(true);
+    setLateFeeComputation(null);
+    try {
+      const res = await apiFetch('/api/late-fees/compute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dailyRate: lateFeeSelectedContract.dailyRate,
+          scheduledReturnAt: lateFeeSelectedContract.endDateTime,
+          actualReturnAt: new Date(lateFeeActualReturnAt).toISOString()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to compute the late fee.');
+      setLateFeeComputation(data);
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل الحساب' : 'Calculation failed', e?.message || '');
+    } finally {
+      setLateFeeCalculating(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-zinc-500 text-sm gap-2">
@@ -353,6 +390,7 @@ export const ProcurementView: React.FC = () => {
           { id: 'purchase-orders', label: language === 'ar' ? 'أوامر التوريد' : 'Purchase Orders', icon: <ClipboardList className="w-3.5 h-3.5" /> },
           { id: 'suppliers', label: language === 'ar' ? 'الموردون' : 'Suppliers', icon: <Truck className="w-3.5 h-3.5" /> },
           { id: 'tars', label: 'TARS', icon: <Timer className="w-3.5 h-3.5" /> },
+          { id: 'late-fees', label: language === 'ar' ? 'رسوم التأخير' : 'Late Fees', icon: <HandCoins className="w-3.5 h-3.5" /> },
           { id: 'approvals', label: `${language === 'ar' ? 'الموافقات' : 'Approvals'} (${pendingApprovals.length})`, icon: <ShieldCheck className="w-3.5 h-3.5" /> }
         ].map(item => (
           <button
@@ -603,6 +641,102 @@ export const ProcurementView: React.FC = () => {
         </div>
       )}
 
+      {tab === 'late-fees' && (
+        <div className="space-y-5">
+          <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+            <p className="font-semibold text-zinc-100 flex items-center gap-1.5"><Calculator className="w-4 h-4 text-[#f5d97f]" /> {language === 'ar' ? 'حاسبة رسوم التأخير' : 'Late Fee Calculator'}</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'العقد *' : 'Contract *'}</label>
+                <select
+                  value={lateFeeContractId}
+                  onChange={e => { setLateFeeContractId(e.target.value); setLateFeeComputation(null); }}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100"
+                >
+                  <option value="">{language === 'ar' ? '-- اختر عقداً --' : '-- Select a contract --'}</option>
+                  {contracts.map(c => <option key={c.id} value={c.id}>{c.contractNumber} — {c.customerName}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'وقت الإرجاع المجدول' : 'Scheduled return'}</label>
+                <input
+                  disabled
+                  value={lateFeeSelectedContract ? new Date(lateFeeSelectedContract.endDateTime).toLocaleString() : ''}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-950/50 border border-zinc-800 text-zinc-500"
+                />
+              </div>
+              <div>
+                <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'وقت الإرجاع الفعلي *' : 'Actual return *'}</label>
+                <input
+                  type="datetime-local"
+                  value={lateFeeActualReturnAt}
+                  onChange={e => { setLateFeeActualReturnAt(e.target.value); setLateFeeComputation(null); }}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100"
+                />
+              </div>
+            </div>
+            <button
+              onClick={calculateLateFee}
+              disabled={!lateFeeSelectedContract || !lateFeeActualReturnAt || lateFeeCalculating}
+              className="px-4 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-40"
+            >
+              {lateFeeCalculating ? (language === 'ar' ? 'جارٍ الحساب...' : 'Calculating...') : (language === 'ar' ? 'احسب الرسوم' : 'Calculate fee')}
+            </button>
+
+            {lateFeeComputation && (
+              <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 space-y-1">
+                <p className="text-zinc-300">
+                  {language === 'ar' ? 'التأخير الفعلي:' : 'Raw delay:'} <span className="font-mono">{lateFeeComputation.rawDelayMinutes} {language === 'ar' ? 'دقيقة' : 'min'}</span>
+                </p>
+                {lateFeeComputation.withinGrace ? (
+                  <p className="text-emerald-400">{language === 'ar' ? 'ضمن فترة السماح -- لا توجد رسوم.' : 'Within the grace period -- no fee.'}</p>
+                ) : lateFeeComputation.convertedToExtraDay ? (
+                  <p className="text-rose-400">{language === 'ar' ? 'تجاوز حد التحويل -- تُحتسب كيوم إيجار كامل:' : 'Past the conversion threshold -- billed as one full extra day:'} <span className="font-mono">{lateFeeComputation.feeAmount.toLocaleString()} AED</span></p>
+                ) : (
+                  <p className="text-rose-400">
+                    {language === 'ar' ? 'الساعات المحتسبة:' : 'Billable hours:'} <span className="font-mono">{lateFeeComputation.billableHours}</span> — {language === 'ar' ? 'الرسوم:' : 'Fee:'} <span className="font-mono">{lateFeeComputation.feeAmount.toLocaleString()} AED</span>
+                  </p>
+                )}
+                {lateFeeComputation.feeAmount > 0 && lateFeeSelectedContract && (
+                  <button
+                    onClick={() => setWaiverModalContext({
+                      contractId: lateFeeSelectedContract.id,
+                      dailyRate: lateFeeSelectedContract.dailyRate,
+                      scheduledReturnAt: lateFeeSelectedContract.endDateTime,
+                      actualReturnAt: new Date(lateFeeActualReturnAt).toISOString(),
+                      originalFeeAmount: lateFeeComputation.feeAmount
+                    })}
+                    className="mt-1 text-[11px] font-medium text-sky-400 hover:text-sky-300"
+                  >
+                    {language === 'ar' ? 'طلب إعفاء من هذه الرسوم' : 'Request a waiver of this fee'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <p className="font-semibold text-zinc-100 mb-2">{language === 'ar' ? 'الإعفاءات المسجّلة' : 'Recorded waivers'}</p>
+            <div className="space-y-2">
+              {lateFeeWaivers.map(w => (
+                <div key={w.id} className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-zinc-300"><span className="font-mono">{w.id}</span> — {w.contractId}</p>
+                    <p className="text-zinc-500">
+                      {language === 'ar' ? 'الأصل:' : 'Original:'} <span className="font-mono">{w.originalLateFeeAmount.toLocaleString()} AED</span>
+                      {' → '}{language === 'ar' ? 'أُعفي:' : 'Waived:'} <span className="font-mono text-emerald-400">{w.waivedAmount.toLocaleString()} AED</span>
+                      {' · '}{w.reason}
+                    </p>
+                    <p className="text-zinc-600 text-[10px]">{w.waivedByName} · {new Date(w.waivedAt).toLocaleString()}</p>
+                  </div>
+                </div>
+              ))}
+              {lateFeeWaivers.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد إعفاءات مسجّلة بعد.' : 'No waivers recorded yet.'}</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab === 'approvals' && (
         <div className="space-y-6">
           <div>
@@ -705,6 +839,11 @@ export const ProcurementView: React.FC = () => {
         onClose={() => setTarsModalOpen(false)}
         contracts={contracts}
         onCreated={async () => { setTarsModalOpen(false); await load(); }}
+      />
+      <LateFeeWaiverModal
+        context={waiverModalContext}
+        onClose={() => setWaiverModalContext(null)}
+        onCreated={async () => { setWaiverModalContext(null); setLateFeeComputation(null); await load(); }}
       />
     </div>
   );
@@ -1202,6 +1341,99 @@ const NewTarsRecordModal: React.FC<{
           </button>
           <button type="submit" disabled={submitting || !contractId} className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50">
             {language === 'ar' ? 'فتح السجل' : 'Open record'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const LateFeeWaiverModal: React.FC<{
+  context: { contractId: string; dailyRate: number; scheduledReturnAt: string; actualReturnAt: string; originalFeeAmount: number } | null;
+  onClose: () => void;
+  onCreated: () => void;
+}> = ({ context, onClose, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [waivedAmount, setWaivedAmount] = useState(0);
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (context) { setWaivedAmount(context.originalFeeAmount); setReason(''); }
+  }, [context]);
+
+  if (!context) return null;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reason.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch('/api/late-fee-waivers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contractId: context.contractId,
+          dailyRate: context.dailyRate,
+          scheduledReturnAt: context.scheduledReturnAt,
+          actualReturnAt: context.actualReturnAt,
+          waivedAmount,
+          reason: reason.trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to request the waiver.');
+      showToast(language === 'ar' ? 'تم إرسال طلب الإعفاء' : 'Waiver requested', `${context.contractId} — ${waivedAmount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={!!context}
+      onClose={onClose}
+      title={language === 'ar' ? 'طلب إعفاء من رسوم التأخير' : 'Request a Late Fee Waiver'}
+      subtitle={language === 'ar'
+        ? 'الرسم الأصلي محسوب دائماً أولاً ويبقى في السجل -- الإعفاء طبقة منفصلة تتطلب موافقة.'
+        : 'The original fee is always computed first and stays on record -- a waiver is a separate, approval-gated layer on top of it.'}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
+          <p className="text-zinc-400">{language === 'ar' ? 'العقد:' : 'Contract:'} <span className="font-mono text-zinc-200">{context.contractId}</span></p>
+          <p className="text-zinc-400">{language === 'ar' ? 'الرسم الأصلي:' : 'Original fee:'} <span className="font-mono text-zinc-200">{context.originalFeeAmount.toLocaleString()} AED</span></p>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ المُعفى *' : 'Amount to waive *'}</label>
+          <input
+            type="number" min={0.01} max={context.originalFeeAmount} step="0.01" required
+            value={waivedAmount}
+            onChange={e => setWaivedAmount(Number(e.target.value))}
+            className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+          />
+          <p className="text-[10px] text-zinc-500 mt-1">{language === 'ar' ? 'لا يمكن أن يتجاوز الرسم الأصلي.' : 'Can never exceed the original fee.'}</p>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'السبب *' : 'Reason *'}</label>
+          <input
+            required
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder={language === 'ar' ? 'مثال: إخطار العميل بحالة طارئة، لفتة حسن نية.' : 'e.g. Customer notified of an emergency, goodwill gesture.'}
+            className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+          />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !reason.trim() || waivedAmount <= 0} className="px-5 py-2 rounded-xl bg-sky-500 text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'إرسال طلب الإعفاء' : 'Submit waiver request'}
           </button>
         </div>
       </form>
