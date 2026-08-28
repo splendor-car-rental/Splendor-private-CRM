@@ -2071,6 +2071,13 @@ app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'
   let updatedContract: any;
   try {
     updatedContract = await runDurableTransaction(async (tx, db) => {
+      // Real Firestore transactions require ALL reads before ANY writes;
+      // this route used to write the contract, then read the vehicle and
+      // customer afterward -- illegal against real Firestore, invisible to
+      // the mocked test suite (found via real-emulator browser testing
+      // while auditing every transaction in this file for the same
+      // pattern that produced an earlier reconcile-route bug). Reads are
+      // now all hoisted before the first write.
       const snap = await tx.get(contractRef);
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
@@ -2079,19 +2086,20 @@ app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'
         throw new PersistenceError(`This contract is ${contract.status} and cannot be handed over.`);
       }
 
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+
       const updated = { ...contract, handover: handoverData, status: 'active', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
 
-      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-      const vehicleSnap = await tx.get(vehicleRef);
       if (vehicleSnap.exists) {
         const vehicleUpdate: Record<string, unknown> = { status: 'rented', currentCustomerId: contract.customerId, currentContractId: contract.id, updatedAt: now };
         if (handoverData.startMileage) vehicleUpdate.mileage = handoverData.startMileage;
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
       }
 
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const customerSnap = await tx.get(customerRef);
       if (customerSnap.exists) {
         tx.set(customerRef, { totalRentals: ((customerSnap.data() as any).totalRentals || 0) + 1, updatedAt: now }, { merge: true });
       }
@@ -2150,6 +2158,9 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   let chargeDoc: any = null;
   try {
     ({ updatedContract, chargeDoc } = await runDurableTransaction(async (tx, db) => {
+      // Same real-Firestore-vs-mock ordering issue as the handover route
+      // above: all reads must happen before any write in a real Firestore
+      // transaction. Reads hoisted before the first tx.set/tx.create.
       const snap = await tx.get(contractRef);
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
@@ -2158,11 +2169,14 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
         throw new PersistenceError(`This contract is ${contract.status}, not active, and cannot be returned yet.`);
       }
 
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+
       const updated = { ...contract, returnDetails: returnData, status: 'completed', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
 
-      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-      const vehicleSnap = await tx.get(vehicleRef);
       if (vehicleSnap.exists) {
         const v = vehicleSnap.data() as any;
         const vehicleUpdate: Record<string, unknown> = {
@@ -2173,8 +2187,6 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
       }
 
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const customerSnap = await tx.get(customerRef);
       if (customerSnap.exists) {
         tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
       }
@@ -2395,12 +2407,15 @@ app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', '
 
   const customerRef = req.body.customerId ? admin.firestore().collection('customers').doc(req.body.customerId) : null;
   await runDurableTransaction(async (tx, db) => {
+    // Read before write -- real Firestore transactions reject a read that
+    // follows a write in the same transaction; the mocked test double
+    // doesn't enforce this ordering at all. Found via a repo-wide sweep of
+    // every transaction in this file after the same bug surfaced in the
+    // bank-reconciliation route.
+    const snap = customerRef ? await tx.get(customerRef) : null;
     tx.create(db.collection('deposits').doc(newId), deposit);
-    if (customerRef) {
-      const snap = await tx.get(customerRef);
-      if (snap.exists) {
-        tx.set(customerRef, { securityDepositsHeld: ((snap.data() as any).securityDepositsHeld || 0) + amount, updatedAt: now }, { merge: true });
-      }
+    if (customerRef && snap?.exists) {
+      tx.set(customerRef, { securityDepositsHeld: ((snap.data() as any).securityDepositsHeld || 0) + amount, updatedAt: now }, { merge: true });
     }
   });
 
@@ -2455,6 +2470,11 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
       if (charge.deductedFromDepositId) throw new PersistenceError('Charge has already been deducted from a deposit');
       if (amt > charge.totalAmount) throw new PersistenceError('Apply amount exceeds the charge\'s own total amount');
 
+      // Real Firestore transactions require all reads before any writes --
+      // read the customer now, before the deposit/charge writes below.
+      const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
+      const customerSnap = customerRef ? await tx.get(customerRef) : null;
+
       const updated = {
         ...deposit,
         appliedAmount: deposit.appliedAmount + amt,
@@ -2466,13 +2486,9 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
       tx.set(depositRef, updated, { merge: true });
       tx.set(chargeRef, { deductedFromDepositId: deposit.id }, { merge: true });
 
-      if (deposit.customerId) {
-        const customerRef = db.collection('customers').doc(deposit.customerId);
-        const customerSnap = await tx.get(customerRef);
-        if (customerSnap.exists) {
-          const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-          tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-        }
+      if (customerRef && customerSnap?.exists) {
+        const held = (customerSnap.data() as any).securityDepositsHeld || 0;
+        tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
       }
       return updated;
     });
@@ -2520,6 +2536,11 @@ app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), req
       amt = Number(refundAmount) || deposit.balance;
       if (amt > deposit.balance) throw new PersistenceError('Refund amount exceeds held balance');
 
+      // Real Firestore transactions require all reads before any writes --
+      // read the customer now, before the deposit write below.
+      const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
+      const customerSnap = customerRef ? await tx.get(customerRef) : null;
+
       const updated = {
         ...deposit,
         refundedAmount: deposit.refundedAmount + amt,
@@ -2530,13 +2551,9 @@ app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), req
       };
       tx.set(depositRef, updated, { merge: true });
 
-      if (deposit.customerId) {
-        const customerRef = db.collection('customers').doc(deposit.customerId);
-        const customerSnap = await tx.get(customerRef);
-        if (customerSnap.exists) {
-          const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-          tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-        }
+      if (customerRef && customerSnap?.exists) {
+        const held = (customerSnap.data() as any).securityDepositsHeld || 0;
+        tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
       }
       return updated;
     });
