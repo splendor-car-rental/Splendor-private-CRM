@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History } from 'lucide-react';
+import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
-import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem } from '../../types';
+import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract } from '../../types';
 
 /**
  * Splendor Procurement, Phase 1 -- operator-facing surface.
@@ -16,13 +16,16 @@ import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAm
  * employeeCustody,supplierInvoices,operationalExpenses,vehicleReceiving,
  * tars,lateFees}.ts) implements all ~15 procurement workflows end to end,
  * each covered by its own HTTP test suite (tests/procurement.test.ts).
- * This screen gives UI coverage to the two highest-leverage surfaces:
+ * This screen gives UI coverage to the highest-leverage surfaces:
  * Suppliers + Purchase Orders (the workflow every other one hangs off of,
  * including its full amendment request -> review -> approval workflow),
- * and a single universal Approvals inbox that decides EVERY pending
+ * a single universal Approvals inbox that decides EVERY pending
  * procurement request regardless of type, since they all flow through the
- * same generic Segregation-of-Duties engine (procurementApprovals.ts).
- * Quotes/payments/balances/refunds/debts/custody/invoices/receiving/TARS/
+ * same generic Segregation-of-Duties engine (procurementApprovals.ts), and
+ * TARS (vehicle-transfer deadline tracking -- see the TARS tab below and
+ * src/server/tars.ts; deadlines and delays are always computed from real
+ * timestamps, never a value a user can type in).
+ * Quotes/payments/balances/refunds/debts/custody/invoices/receiving/
  * late-fee screens are intentionally not built in this checkpoint -- see
  * the closure report's UI-coverage section.
  */
@@ -79,33 +82,60 @@ export const ProcurementView: React.FC = () => {
   const { showToast } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
-  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals'>('purchase-orders');
+  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars'>('purchase-orders');
   const [loading, setLoading] = useState(true);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [approvals, setApprovals] = useState<ProcurementApproval[]>([]);
   const [operationTypes, setOperationTypes] = useState<SupplierOperationTypeDef[]>([]);
+  const [tarsRecords, setTarsRecords] = useState<TarsRecord[]>([]);
+  const [contracts, setContracts] = useState<Contract[]>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [amendmentModalPo, setAmendmentModalPo] = useState<PurchaseOrder | null>(null);
   const [amendmentsByPo, setAmendmentsByPo] = useState<Record<string, PurchaseOrderAmendmentRequest[]>>({});
+  const [tarsModalOpen, setTarsModalOpen] = useState(false);
+
+  // TARS deadlines/escalation are time-based -- re-render every 30s so an
+  // "overdue by X minutes" figure stays live without a manual refresh,
+  // purely a display tick (nothing here recomputes or stores anything).
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setClockTick(t => t + 1), 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [suppliersRes, posRes, approvalsRes, typesRes] = await Promise.all([
+      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes] = await Promise.all([
         apiFetch('/api/suppliers'),
         apiFetch('/api/purchase-orders'),
         apiFetch('/api/procurement/approvals'),
-        apiFetch('/api/procurement/supplier-operation-types')
+        apiFetch('/api/procurement/supplier-operation-types'),
+        apiFetch('/api/tars-records'),
+        apiFetch('/api/tars-records/escalations'),
+        apiFetch('/api/contracts')
       ]);
       if (suppliersRes.ok) setSuppliers(await suppliersRes.json());
       let pos: PurchaseOrder[] = [];
       if (posRes.ok) { pos = await posRes.json(); setPurchaseOrders(pos); }
       if (approvalsRes.ok) setApprovals(await approvalsRes.json());
       if (typesRes.ok) setOperationTypes(await typesRes.json());
+      if (tarsRes.ok) {
+        const rawTars: TarsRecord[] = await tarsRes.json();
+        // escalationLevel on the stored record is frozen at 'none' from
+        // creation -- computeTarsEscalations() is a pure, on-read
+        // monitoring function (never persisted, by design: "detection,
+        // never enforcement"), so the live level has to come from its own
+        // endpoint, not the record's own field.
+        const escalated: Array<TarsRecord & { escalationLevel: 'normal' | 'urgent' }> = tarsEscalationsRes.ok ? await tarsEscalationsRes.json() : [];
+        const escalationById = new Map(escalated.map(r => [r.id, r.escalationLevel]));
+        setTarsRecords(rawTars.map(r => ({ ...r, escalationLevel: escalationById.get(r.id) || 'none' })));
+      }
+      if (contractsRes.ok) setContracts(await contractsRes.json());
 
       // Only fetch amendment history for POs that actually have any --
       // most never do, so this stays cheap rather than N fetches per load.
@@ -212,6 +242,57 @@ export const ProcurementView: React.FC = () => {
     }
   };
 
+  const tarsExecute = async (record: TarsRecord) => {
+    setBusyKey(record.id);
+    try {
+      const res = await apiFetch(`/api/tars-records/${encodeURIComponent(record.id)}/execute`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to record execution.');
+      showToast(
+        language === 'ar' ? 'تم تسجيل التنفيذ' : 'Execution recorded',
+        data.isDelayed ? `${language === 'ar' ? 'متأخر' : 'Delayed'} ${data.delayMinutes} ${language === 'ar' ? 'دقيقة' : 'min'}` : (language === 'ar' ? 'في الموعد' : 'On time')
+      );
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل' : 'Failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const tarsReturnToSupplier = async (record: TarsRecord) => {
+    setBusyKey(record.id);
+    try {
+      const res = await apiFetch(`/api/tars-records/${encodeURIComponent(record.id)}/return-to-supplier`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to record return to supplier.');
+      showToast(language === 'ar' ? 'تم تسجيل الإعادة للمورد' : 'Return to supplier recorded', record.id);
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل' : 'Failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const tarsCloseReturn = async (record: TarsRecord) => {
+    setBusyKey(record.id);
+    try {
+      const res = await apiFetch(`/api/tars-records/${encodeURIComponent(record.id)}/close-return`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to close the return.');
+      showToast(
+        language === 'ar' ? 'تم إغلاق الإعادة' : 'Return closed',
+        data.closingDelayed ? (language === 'ar' ? 'تأخر الإغلاق' : 'Closing was delayed') : (language === 'ar' ? 'في الوقت المناسب' : 'On time')
+      );
+      await load();
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'فشل' : 'Failed', e?.message || '');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-zinc-500 text-sm gap-2">
@@ -236,6 +317,23 @@ export const ProcurementView: React.FC = () => {
     return (amendmentsByPo[a.entityId] || []).find(ar => ar.id === amendmentId) || null;
   };
 
+  // Pure display formatting over real timestamps already on the record --
+  // never recomputes or alters deadlineAt/executedAt/etc. themselves.
+  const formatDuration = (ms: number) => {
+    const mins = Math.round(Math.abs(ms) / 60000);
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    return `${hrs}h ${mins % 60}m`;
+  };
+
+  const tarsCountdown = (record: TarsRecord): { text: string; overdue: boolean } => {
+    const deadlineMs = new Date(record.deadlineAt).getTime();
+    const nowMs = Date.now();
+    const diff = deadlineMs - nowMs;
+    if (diff > 0) return { text: `${formatDuration(diff)} ${language === 'ar' ? 'متبقٍ' : 'remaining'}`, overdue: false };
+    return { text: `${formatDuration(diff)} ${language === 'ar' ? 'متأخر' : 'overdue'}`, overdue: true };
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-12 text-xs">
       <div>
@@ -254,6 +352,7 @@ export const ProcurementView: React.FC = () => {
         {[
           { id: 'purchase-orders', label: language === 'ar' ? 'أوامر التوريد' : 'Purchase Orders', icon: <ClipboardList className="w-3.5 h-3.5" /> },
           { id: 'suppliers', label: language === 'ar' ? 'الموردون' : 'Suppliers', icon: <Truck className="w-3.5 h-3.5" /> },
+          { id: 'tars', label: 'TARS', icon: <Timer className="w-3.5 h-3.5" /> },
           { id: 'approvals', label: `${language === 'ar' ? 'الموافقات' : 'Approvals'} (${pendingApprovals.length})`, icon: <ShieldCheck className="w-3.5 h-3.5" /> }
         ].map(item => (
           <button
@@ -403,6 +502,107 @@ export const ProcurementView: React.FC = () => {
         </div>
       )}
 
+      {tab === 'tars' && (
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <button
+              onClick={() => setTarsModalOpen(true)}
+              disabled={contracts.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all disabled:opacity-40"
+              title={contracts.length === 0 ? (language === 'ar' ? 'لا توجد عقود بعد' : 'No contracts exist yet') : ''}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {language === 'ar' ? 'فتح سجل TARS' : 'Open TARS Record'}
+            </button>
+          </div>
+          <div className="space-y-2.5">
+            {tarsRecords.map(r => {
+              const countdown = !r.executedAt ? tarsCountdown(r) : null;
+              return (
+                <div key={r.id} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-zinc-100 font-mono">{r.id}</p>
+                      <span className="text-zinc-500">{r.contractId}{r.vehicleId ? ` · ${r.vehicleId}` : ''}</span>
+                      {r.escalationLevel && r.escalationLevel !== 'none' && (
+                        <Badge variant={r.escalationLevel === 'urgent' ? 'rose' : 'amber'} size="sm">
+                          <AlertTriangle className="w-3 h-3 inline mr-1" />
+                          {r.escalationLevel === 'urgent' ? (language === 'ar' ? 'عاجل' : 'URGENT') : (language === 'ar' ? 'تصعيد' : 'ESCALATED')}
+                        </Badge>
+                      )}
+                    </div>
+                    {countdown && (
+                      <span className={`font-mono ${countdown.overdue ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {countdown.text}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2 text-zinc-400">
+                    <p>{language === 'ar' ? 'وقت توقيع العقد:' : 'Contract signed:'} <span className="font-mono text-zinc-300">{new Date(r.contractSignedAt).toLocaleString()}</span></p>
+                    <p>{language === 'ar' ? 'الموعد النهائي (٣ ساعات):' : '3h deadline:'} <span className="font-mono text-zinc-300">{new Date(r.deadlineAt).toLocaleString()}</span></p>
+                    {r.executedAt && (
+                      <>
+                        <p>{language === 'ar' ? 'وقت التنفيذ الفعلي:' : 'Actual execution:'} <span className="font-mono text-zinc-300">{new Date(r.executedAt).toLocaleString()}</span> ({r.executedByName})</p>
+                        <p>
+                          {language === 'ar' ? 'التأخير:' : 'Delay:'}{' '}
+                          {r.isDelayed
+                            ? <span className="text-rose-400 font-mono">{r.delayMinutes} {language === 'ar' ? 'دقيقة' : 'min'} — {language === 'ar' ? 'المسؤول:' : 'responsible:'} {r.fineResponsibility}</span>
+                            : <span className="text-emerald-400">{language === 'ar' ? 'لا يوجد -- في الموعد' : 'None -- on time'}</span>}
+                        </p>
+                      </>
+                    )}
+                    {r.returnedToSupplierAt && (
+                      <p>{language === 'ar' ? 'أُعيدت للمورد:' : 'Returned to supplier:'} <span className="font-mono text-zinc-300">{new Date(r.returnedToSupplierAt).toLocaleString()}</span></p>
+                    )}
+                    {r.returnClosedAt && (
+                      <p>
+                        {language === 'ar' ? 'إغلاق الإعادة:' : 'Return closed:'} <span className="font-mono text-zinc-300">{new Date(r.returnClosedAt).toLocaleString()}</span>
+                        {r.closingDelayed && <span className="text-rose-400"> — {language === 'ar' ? 'متأخر' : 'delayed'}</span>}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mt-2.5 flex items-center justify-end gap-4">
+                    {!r.executedAt && (
+                      <button
+                        disabled={busyKey === r.id}
+                        onClick={() => tarsExecute(r)}
+                        className="flex items-center gap-1 text-[11px] font-medium text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5" />
+                        {language === 'ar' ? 'تسجيل التنفيذ الآن' : 'Record execution now'}
+                      </button>
+                    )}
+                    {r.executedAt && !r.returnedToSupplierAt && (
+                      <button
+                        disabled={busyKey === r.id}
+                        onClick={() => tarsReturnToSupplier(r)}
+                        className="flex items-center gap-1 text-[11px] font-medium text-sky-400 hover:text-sky-300 disabled:opacity-50"
+                      >
+                        <ArrowLeftRight className="w-3.5 h-3.5" />
+                        {language === 'ar' ? 'تسجيل الإعادة للمورد' : 'Record return to supplier'}
+                      </button>
+                    )}
+                    {r.returnedToSupplierAt && !r.returnClosedAt && (
+                      <button
+                        disabled={busyKey === r.id}
+                        onClick={() => tarsCloseReturn(r)}
+                        className="flex items-center gap-1 text-[11px] font-medium text-[#f5d97f] hover:text-[#e2c48c] disabled:opacity-50"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        {language === 'ar' ? 'إغلاق الإعادة' : 'Close the return'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {tarsRecords.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد سجلات TARS بعد.' : 'No TARS records yet.'}</p>}
+          </div>
+        </div>
+      )}
+
       {tab === 'approvals' && (
         <div className="space-y-6">
           <div>
@@ -499,6 +699,12 @@ export const ProcurementView: React.FC = () => {
         onClose={() => setAmendmentModalPo(null)}
         operationTypes={operationTypes}
         onCreated={async () => { setAmendmentModalPo(null); await load(); }}
+      />
+      <NewTarsRecordModal
+        isOpen={tarsModalOpen}
+        onClose={() => setTarsModalOpen(false)}
+        contracts={contracts}
+        onCreated={async () => { setTarsModalOpen(false); await load(); }}
       />
     </div>
   );
@@ -900,6 +1106,102 @@ const AmendmentRequestModal: React.FC<{
           </button>
           <button type="submit" disabled={submitting || !reason.trim()} className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50">
             {language === 'ar' ? 'إرسال طلب التعديل للموافقة' : 'Submit amendment for approval'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const NewTarsRecordModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  contracts: Contract[];
+  onCreated: () => void;
+}> = ({ isOpen, onClose, contracts, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [contractId, setContractId] = useState('');
+  const [vehicleId, setVehicleId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const selectedContract = contracts.find(c => c.id === contractId);
+
+  useEffect(() => {
+    if (selectedContract) setVehicleId(selectedContract.vehicleId);
+  }, [contractId]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedContract) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch('/api/tars-records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contractId: selectedContract.id,
+          vehicleId: vehicleId || undefined,
+          // The signed time is the contract's own createdAt -- never a
+          // value typed into this form. Letting a human pick an arbitrary
+          // "signed at" time would be exactly the kind of timestamp
+          // manipulation the 3-hour deadline exists to be immune to.
+          contractSignedAt: selectedContract.createdAt
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to open a TARS record.');
+      showToast(language === 'ar' ? 'تم فتح سجل TARS' : 'TARS record opened', `${data.id} — ${language === 'ar' ? 'الموعد النهائي' : 'deadline'} ${new Date(data.deadlineAt).toLocaleString()}`);
+      setContractId(''); setVehicleId('');
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل الفتح' : 'Failed to open', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={language === 'ar' ? 'فتح سجل TARS' : 'Open a TARS Record'}
+      subtitle={language === 'ar'
+        ? 'الموعد النهائي (٣ ساعات) يُحسب من وقت توقيع العقد الفعلي -- لا يمكن تعديله يدوياً.'
+        : 'The 3-hour deadline is computed from the contract\'s actual signed time -- it can\'t be edited here.'}
+      maxWidth="md"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'العقد *' : 'Contract *'}</label>
+          <select
+            required
+            value={contractId}
+            onChange={e => setContractId(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+          >
+            <option value="">{language === 'ar' ? '-- اختر عقداً --' : '-- Select a contract --'}</option>
+            {contracts.map(c => <option key={c.id} value={c.id}>{c.contractNumber} — {c.customerName} — {c.vehicleName}</option>)}
+          </select>
+        </div>
+        {selectedContract && (
+          <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
+            <p className="text-zinc-400">
+              {language === 'ar' ? 'وقت التوقيع الفعلي (من سجل العقد):' : 'Actual signed time (from the contract record):'}{' '}
+              <span className="font-mono text-zinc-200">{new Date(selectedContract.createdAt).toLocaleString()}</span>
+            </p>
+            <p className="text-zinc-500 mt-1">
+              {language === 'ar' ? 'الموعد النهائي سيكون:' : 'Deadline will be:'}{' '}
+              <span className="font-mono text-[#f5d97f]">{new Date(new Date(selectedContract.createdAt).getTime() + 3 * 60 * 60 * 1000).toLocaleString()}</span>
+            </p>
+          </div>
+        )}
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !contractId} className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'فتح السجل' : 'Open record'}
           </button>
         </div>
       </form>
