@@ -1482,3 +1482,85 @@ describe('Supplier invoices: matched against the PO, corrections linked to origi
     expect(finalCheck.status).toBe('cancelled');
   });
 });
+
+describe('Operational expenses: expense-without-invoice / fully-undocumented (strict conditions, always flagged), never auto-blocked', () => {
+  it('requires a reason and an alternate document for a no-invoice expense', async () => {
+    const missingReason = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({ documentationLevel: 'no_invoice_has_alternate_document', category: 'maintenance', amount: 200, date: '2026-01-20', paymentMethod: 'cash' });
+    expect(missingReason.status).toBe(400);
+
+    const missingDoc = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({ documentationLevel: 'no_invoice_has_alternate_document', category: 'maintenance', amount: 200, date: '2026-01-20', paymentMethod: 'cash', reasonForNoInvoice: 'Roadside repair, no invoice given' });
+    expect(missingDoc.status).toBe(400);
+
+    const ok = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({
+        documentationLevel: 'no_invoice_has_alternate_document', category: 'maintenance', amount: 200, date: '2026-01-20', paymentMethod: 'cash',
+        reasonForNoInvoice: 'Roadside repair, no invoice given', alternateDocumentIds: ['DOC-PHOTO-1']
+      });
+    expect(ok.status).toBe(201);
+    expect(ok.body.expense.status).toBe('pending_approval');
+  });
+
+  it('requires a reason AND a detailed description for a fully undocumented expense, and always flags it', async () => {
+    const missingBoth = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({ documentationLevel: 'undocumented', category: 'other_purchases', amount: 100, date: '2026-01-21', paymentMethod: 'cash' });
+    expect(missingBoth.status).toBe(400);
+
+    const missingDescription = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({ documentationLevel: 'undocumented', category: 'other_purchases', amount: 100, date: '2026-01-21', paymentMethod: 'cash', reasonForNoInvoice: 'Cash-only vendor, no receipt available' });
+    expect(missingDescription.status).toBe(400);
+
+    const ok = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({
+        documentationLevel: 'undocumented', category: 'other_purchases', amount: 100, date: '2026-01-21', paymentMethod: 'cash',
+        reasonForNoInvoice: 'Cash-only vendor, no receipt available', detailedDescription: 'Emergency tow rope purchased from a roadside stall near the highway exit.'
+      });
+    expect(ok.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${ok.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${ok.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Reviewed with extra scrutiny given no documentation.' });
+
+    const finalCheck = (await request(app).get(`/api/operational-expenses/${ok.body.expense.id}`).set(authAs(OPS_UID))).body;
+    expect(finalCheck.status).toBe('approved');
+  });
+
+  it('rejects an operational expense without blocking future submissions, and never invents a category', async () => {
+    const res = await request(app)
+      .post('/api/operational-expenses')
+      .set(authAs(OPS_UID))
+      .send({
+        documentationLevel: 'no_invoice_has_alternate_document', category: 'other', categoryOther: 'Parking validation stickers',
+        amount: 50, date: '2026-01-22', paymentMethod: 'cash', reasonForNoInvoice: 'Vendor does not issue invoices', alternateDocumentIds: ['DOC-2']
+      });
+    expect(res.status).toBe(201);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'rejected', note: 'Not a legitimate operational cost.' });
+
+    const rejected = (await request(app).get(`/api/operational-expenses/${res.body.expense.id}`).set(authAs(OPS_UID))).body;
+    expect(rejected.status).toBe('rejected');
+  });
+});

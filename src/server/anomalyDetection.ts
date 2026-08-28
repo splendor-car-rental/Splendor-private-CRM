@@ -20,9 +20,22 @@ import type { AuditLog } from '../types';
 
 /** Audit actions that represent money moving, a permission/rule changing, or two records being merged into one -- the set this module treats as "sensitive" for frequency/off-hours checks. */
 const SENSITIVE_ACTIONS: ReadonlySet<AuditLog['action']> = new Set([
-  'refund', 'merge', 'rule_change', 'kill_switch', 'approval_decision'
+  'refund', 'merge', 'rule_change', 'kill_switch', 'approval_decision',
+  // Splendor Procurement, Phase 1: every request->review->approval decision
+  // across POs, payments, balances, debts, custody/expenses, and invoices
+  // records action:'approval' -- covered here so this same, already-proven
+  // detection engine (never enforcement, just a review flag) picks up an
+  // unusual PATTERN of procurement approvals exactly like it already does
+  // for refunds/merges/rule changes, instead of a second parallel system.
+  'approval'
 ]);
-const SENSITIVE_ENTITY_TYPES: ReadonlySet<string> = new Set(['Charge', 'Deposit', 'BankImportBatch']);
+const SENSITIVE_ENTITY_TYPES: ReadonlySet<string> = new Set([
+  'Charge', 'Deposit', 'BankImportBatch',
+  'PurchaseOrder', 'Supplier', 'SupplierQuote', 'SupplierPaymentRequest', 'AdvanceSettlement',
+  'PartyOpeningBalance', 'OffsetRequest', 'CustomerDisputedAmount', 'CustomerCreditBalance',
+  'CustomerRefundRequest', 'Debt', 'EmployeeCustody', 'EmployeeExpense', 'SupplierInvoice',
+  'OperationalExpense'
+]);
 
 function isSensitive(log: AuditLog): boolean {
   return SENSITIVE_ACTIONS.has(log.action) || SENSITIVE_ENTITY_TYPES.has(log.entityType);

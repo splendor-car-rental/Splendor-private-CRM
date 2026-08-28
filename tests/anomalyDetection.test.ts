@@ -125,6 +125,30 @@ describe('detectAnomalies -- off-hours sensitive action', () => {
   });
 });
 
+describe('detectAnomalies -- Splendor Procurement Phase 1 coverage', () => {
+  it('flags high-frequency PurchaseOrder approvals by the same actor within 1 hour', () => {
+    const logs: AuditLog[] = Array.from({ length: 5 }, (_, i) =>
+      log({ timestamp: at(i * 10), action: 'approval', entityType: 'PurchaseOrder', entityId: `PO-SCR-${100 + i}` })
+    );
+    const flags = detectAnomalies(logs);
+    expect(flags.some(f => f.type === 'high_frequency_actor')).toBe(true);
+  });
+
+  it('flags an off-hours Debt approval (a procurement entity type, not just the original Charge/Deposit/BankImportBatch set)', () => {
+    const logs: AuditLog[] = [log({ timestamp: '2026-06-15T22:00:00.000Z', action: 'approval', entityType: 'Debt', entityId: 'DBT-000001' })];
+    const flags = detectAnomalies(logs);
+    expect(flags.some(f => f.type === 'off_hours_sensitive_action')).toBe(true);
+  });
+
+  it('does NOT flag ordinary daytime procurement activity below the frequency threshold', () => {
+    const logs: AuditLog[] = Array.from({ length: 2 }, (_, i) =>
+      log({ timestamp: at(i * 10), action: 'approval', entityType: 'SupplierInvoice', entityId: `SINV-00000${i}` })
+    );
+    const flags = detectAnomalies(logs);
+    expect(flags).toHaveLength(0);
+  });
+});
+
 describe('detectAnomalies -- every flag carries its evidence', () => {
   it('every flag names the supporting audit log ids, never a bare accusation', () => {
     const logs: AuditLog[] = Array.from({ length: 5 }, (_, i) =>

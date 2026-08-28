@@ -60,6 +60,9 @@ import {
   SupplierInvoiceError
 } from './src/server/supplierInvoices';
 import {
+  submitOperationalExpense, markOperationalExpenseRejected, OperationalExpenseError
+} from './src/server/operationalExpenses';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -6121,6 +6124,53 @@ app.post('/api/supplier-invoices/:id/cancel', requireRole('ceo', 'admin', 'finan
   }
 }));
 
+// ---- Operational expenses: expense-without-invoice / fully-undocumented (strict, always flagged), never auto-blocked ----
+app.get('/api/operational-expenses', (req, res) => {
+  const { operationId, status } = req.query;
+  let expenses = globalStore.operationalExpenses;
+  if (operationId) expenses = expenses.filter(e => e.operationId === operationId);
+  if (status) expenses = expenses.filter(e => e.status === status);
+  res.json(expenses);
+});
+
+app.get('/api/operational-expenses/:id', (req, res) => {
+  const expense = globalStore.operationalExpenses.find(e => e.id === req.params.id);
+  if (!expense) return res.status(404).json({ error: 'Expense not found.' });
+  res.json(expense);
+});
+
+app.post('/api/operational-expenses', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const { expense, approvalRequestId } = await submitOperationalExpense({
+      operationId: body.operationId,
+      documentationLevel: body.documentationLevel,
+      category: body.category,
+      categoryOther: body.categoryOther,
+      amount: body.amount,
+      date: body.date,
+      vendorOrPartyName: body.vendorOrPartyName,
+      reasonForNoInvoice: body.reasonForNoInvoice,
+      alternateDocumentIds: body.alternateDocumentIds,
+      paymentMethod: body.paymentMethod,
+      paymentMethodOther: body.paymentMethodOther,
+      detailedDescription: body.detailedDescription,
+      evidenceIds: body.evidenceIds,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    globalStore.operationalExpenses.unshift(expense);
+    res.status(201).json({ expense, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof OperationalExpenseError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -6337,6 +6387,27 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
         const index = globalStore.supplierInvoices.findIndex(i => i.id === decided.entityId);
         if (index !== -1) globalStore.supplierInvoices[index] = snap.data() as any;
         else globalStore.supplierInvoices.unshift(snap.data() as any);
+      }
+    }
+
+    if (decided.entityType === 'OperationalExpense') {
+      if (decision === 'rejected') {
+        try {
+          await markOperationalExpenseRejected({
+            expenseId: decided.entityId,
+            reason: decided.decisionNote || 'Rejected',
+            actor: { uid: actor.uid, name: actor.name, role: actor.role as any }
+          }, recordAudit);
+        } catch (err: any) {
+          if (!(err instanceof OperationalExpenseError)) throw err;
+        }
+      }
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('operational_expenses').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.operationalExpenses.findIndex(e => e.id === decided.entityId);
+        if (index !== -1) globalStore.operationalExpenses[index] = snap.data() as any;
+        else globalStore.operationalExpenses.unshift(snap.data() as any);
       }
     }
 
