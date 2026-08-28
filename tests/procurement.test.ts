@@ -884,3 +884,124 @@ describe('Supplier payments: post_verification vs advance tracks, mandatory Segr
     expect(missingOther.status).toBe(400);
   });
 });
+
+describe('Balances: opening balances, offsetting (mandatory reason, never automatic, blocked while disputed)', () => {
+  it('records a supplier opening balance and requires a different approver to confirm it', async () => {
+    const supplier = await registerSupplier({ legalName: 'Opening Balance Supplier LLC' });
+
+    const res = await request(app)
+      .post('/api/party-opening-balances')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, amount: 5000, direction: 'owed_by_us' });
+    expect(res.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(FINANCE_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${res.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Confirmed against supplier statement.' });
+
+    const balanceRes = await request(app).get(`/api/balances/supplier/${supplier.id}`).set(authAs(FINANCE_UID));
+    expect(balanceRes.status).toBe(200);
+    expect(balanceRes.body.direction).toBe('owed_by_us');
+    expect(balanceRes.body.netAmount).toBe(-5000);
+    expect(balanceRes.body.offsetEligibility).toBe('offsettable');
+  });
+
+  it('offsets a supplier balance with a mandatory reason and a different approver, moving it toward zero', async () => {
+    const supplier = await registerSupplier({ legalName: 'Offset Supplier LLC' });
+    const obRes = await request(app)
+      .post('/api/party-opening-balances')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, amount: 1000, direction: 'owed_to_us' });
+    await request(app)
+      .post(`/api/procurement/approvals/${obRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const missingReason = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, offsetAmount: 400 });
+    expect(missingReason.status).toBe(400);
+
+    const offsetRes = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, offsetAmount: 400, reason: 'Applied against next PO payment' });
+    expect(offsetRes.status).toBe(201);
+    expect(offsetRes.body.offsetRequest.balanceBefore).toBe(1000);
+
+    // Rejects an offset larger than the outstanding balance.
+    const tooLarge = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'supplier', partyId: supplier.id, offsetAmount: 5000, reason: 'Too much' });
+    expect(tooLarge.status).toBe(400);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${offsetRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Offset approved.' });
+
+    const balanceRes = await request(app).get(`/api/balances/supplier/${supplier.id}`).set(authAs(FINANCE_UID));
+    expect(balanceRes.body.netAmount).toBe(600);
+  });
+
+  it('blocks offsetting a customer balance while a dispute is open, and unblocks it once resolved', async () => {
+    const customerId = 'CUS-TEST-DISPUTE-1';
+    const obRes = await request(app)
+      .post('/api/party-opening-balances')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'customer', partyId: customerId, amount: 800, direction: 'owed_to_us' });
+    await request(app)
+      .post(`/api/procurement/approvals/${obRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'ok' });
+
+    const disputeRes = await request(app)
+      .post('/api/customer-disputes')
+      .set(authAs(OPS_UID))
+      .send({ customerId, amount: 800, objectionReason: 'Customer says this charge is wrong' });
+    expect(disputeRes.status).toBe(201);
+    expect(disputeRes.body.status).toBe('open');
+
+    const blockedOffset = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'customer', partyId: customerId, offsetAmount: 100, reason: 'Trying to offset while disputed' });
+    expect(blockedOffset.status).toBe(400);
+    expect(blockedOffset.body.error).toMatch(/not offsettable/i);
+
+    const resolveRes = await request(app)
+      .post(`/api/customer-disputes/${disputeRes.body.id}/resolve`)
+      .set(authAs(FINANCE_UID))
+      .send({ resolutionType: 'resolved_upheld', resolution: 'Charge confirmed correct after review.' });
+    expect(resolveRes.status).toBe(201);
+
+    const selfApprove = await request(app)
+      .post(`/api/procurement/approvals/${resolveRes.body.approvalRequestId}/decide`)
+      .set(authAs(FINANCE_UID))
+      .send({ decision: 'approved', note: 'self' });
+    expect(selfApprove.status).toBe(403);
+
+    await request(app)
+      .post(`/api/procurement/approvals/${resolveRes.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Resolution confirmed.' });
+
+    const disputesRes = await request(app).get(`/api/customer-disputes?customerId=${customerId}`).set(authAs(FINANCE_UID));
+    expect(disputesRes.body.find((d: any) => d.id === disputeRes.body.id).status).toBe('resolved_upheld');
+
+    const unblockedOffset = await request(app)
+      .post('/api/offset-requests')
+      .set(authAs(FINANCE_UID))
+      .send({ partyType: 'customer', partyId: customerId, offsetAmount: 100, reason: 'Dispute resolved, now offsetting' });
+    expect(unblockedOffset.status).toBe(201);
+  });
+});

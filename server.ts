@@ -40,6 +40,10 @@ import {
   markAdvanceSettlementCompleted, SupplierPaymentError
 } from './src/server/supplierPayments';
 import {
+  requestOpeningBalance, computePartyBalance, requestBalanceOffset,
+  raiseCustomerDispute, requestCustomerDisputeResolution, BalanceError
+} from './src/server/balances';
+import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   ProcurementApprovalError
 } from './src/server/procurementApprovals';
@@ -5505,6 +5509,145 @@ app.post('/api/advance-settlements/:id/mark-completed', requireRole('ceo', 'admi
   }
 }));
 
+// ---- Balances: supplier debit, customer credit, opening balances, offsetting ----
+app.get('/api/balances/:partyType/:partyId', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const partyType = req.params.partyType;
+  if (partyType !== 'supplier' && partyType !== 'customer') {
+    return res.status(400).json({ error: 'partyType must be "supplier" or "customer".' });
+  }
+  res.json(await computePartyBalance(partyType, req.params.partyId));
+}));
+
+app.get('/api/party-opening-balances', (req, res) => {
+  const { partyType, partyId } = req.query;
+  let balances = globalStore.partyOpeningBalances;
+  if (partyType) balances = balances.filter(b => b.partyType === partyType);
+  if (partyId) balances = balances.filter(b => b.partyId === partyId);
+  res.json(balances);
+});
+
+app.post('/api/party-opening-balances', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (body.partyType !== 'supplier' && body.partyType !== 'customer') {
+    return res.status(400).json({ error: 'partyType must be "supplier" or "customer".' });
+  }
+  if (!body.partyId) return res.status(400).json({ error: 'partyId is required.' });
+
+  try {
+    const { openingBalance, approvalRequestId } = await requestOpeningBalance({
+      partyType: body.partyType,
+      partyId: body.partyId,
+      amount: body.amount,
+      direction: body.direction,
+      offsetEligibility: body.offsetEligibility,
+      notes: body.notes,
+      recordedBy: actor.uid,
+      recordedByName: actor.name,
+      recordedByRole: actor.role as any
+    }, recordAudit);
+    globalStore.partyOpeningBalances.unshift(openingBalance);
+    res.status(201).json({ openingBalance, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof BalanceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/offset-requests', (req, res) => {
+  const { partyType, partyId } = req.query;
+  let offsets = globalStore.offsetRequests;
+  if (partyType) offsets = offsets.filter(o => o.partyType === partyType);
+  if (partyId) offsets = offsets.filter(o => o.partyId === partyId);
+  res.json(offsets);
+});
+
+app.post('/api/offset-requests', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request this offset.' });
+  }
+
+  try {
+    const { offsetRequest, approvalRequestId } = await requestBalanceOffset({
+      partyType: body.partyType,
+      partyId: body.partyId,
+      offsetAmount: body.offsetAmount,
+      linkedOperationIds: body.linkedOperationIds,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    globalStore.offsetRequests.unshift(offsetRequest);
+    res.status(201).json({ offsetRequest, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof BalanceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---- Customer disputed amounts: flags a balance non-offsettable until resolved ----
+app.get('/api/customer-disputes', (req, res) => {
+  const { customerId } = req.query;
+  let disputes = globalStore.customerDisputedAmounts;
+  if (customerId) disputes = disputes.filter(d => d.customerId === customerId);
+  res.json(disputes);
+});
+
+app.post('/api/customer-disputes', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+
+  try {
+    const dispute = await raiseCustomerDispute({
+      customerId: body.customerId,
+      amount: body.amount,
+      relatedChargeId: body.relatedChargeId,
+      relatedContractId: body.relatedContractId,
+      objectionReason: body.objectionReason,
+      raisedBy: actor.uid,
+      raisedByName: actor.name,
+      raisedByRole: actor.role as any
+    }, recordAudit);
+    globalStore.customerDisputedAmounts.unshift(dispute);
+    res.status(201).json(dispute);
+  } catch (error: any) {
+    if (error instanceof BalanceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/customer-disputes/:id/resolve', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!['resolved_upheld', 'resolved_waived', 'resolved_partial'].includes(body.resolutionType)) {
+    return res.status(400).json({ error: 'resolutionType must be resolved_upheld, resolved_waived, or resolved_partial.' });
+  }
+
+  try {
+    const { approvalRequestId } = await requestCustomerDisputeResolution({
+      disputeId: req.params.id,
+      resolutionType: body.resolutionType,
+      resolution: body.resolution,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    const index = globalStore.customerDisputedAmounts.findIndex(d => d.id === req.params.id);
+    if (index !== -1) globalStore.customerDisputedAmounts[index] = { ...globalStore.customerDisputedAmounts[index], status: 'under_review' };
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof BalanceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 // ---- Generic Procurement Approvals (Four-Eyes / Segregation of Duties for every workflow above) ----
 app.get('/api/procurement/approvals', asyncHandler(async (req, res) => {
   const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
@@ -5593,6 +5736,26 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
         const index = globalStore.advanceSettlements.findIndex(s => s.id === decided.entityId);
         if (index !== -1) globalStore.advanceSettlements[index] = snap.data() as any;
         else globalStore.advanceSettlements.unshift(snap.data() as any);
+      }
+    }
+
+    if (decided.entityType === 'OffsetRequest' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('offset_requests').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.offsetRequests.findIndex(o => o.id === decided.entityId);
+        if (index !== -1) globalStore.offsetRequests[index] = snap.data() as any;
+        else globalStore.offsetRequests.unshift(snap.data() as any);
+      }
+    }
+
+    if (decided.entityType === 'CustomerDisputedAmount' && decision === 'approved') {
+      const admin2 = admin;
+      const snap = await admin2.firestore().collection('customer_disputed_amounts').doc(decided.entityId).get();
+      if (snap.exists) {
+        const index = globalStore.customerDisputedAmounts.findIndex(d => d.id === decided.entityId);
+        if (index !== -1) globalStore.customerDisputedAmounts[index] = snap.data() as any;
+        else globalStore.customerDisputedAmounts.unshift(snap.data() as any);
       }
     }
 
