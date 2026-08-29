@@ -397,6 +397,27 @@ export interface PublicWebsiteReservationRequest {
   idempotencyKey?: string;
 }
 
+/**
+ * Same shape/intent as PublicWebsiteReservationRequest, but for the WhatsApp
+ * channel: email is optional (a WhatsApp customer's identity is their phone
+ * number, not an email address -- forcing an email here would just push
+ * customers to type a throwaway one), and pickupLocation/returnLocation are
+ * collected conversationally rather than posted as one form. Handled by the
+ * SAME reservation-creation transaction (reserveVehicleSlot) as the website
+ * path -- see SplendorConnectEngine.handleWhatsAppReservation().
+ */
+export interface WhatsAppReservationRequest {
+  vehicleId: string; // resolved from the conversation's selected vehicle -- an internal Vehicle.id, not a public slug
+  fullName: string;
+  phone: string;
+  email?: string;
+  pickupDateTime: string;
+  returnDateTime: string;
+  pickupLocation: string;
+  returnLocation: string;
+  idempotencyKey?: string;
+}
+
 export interface WebsiteReconciliationItem {
   websiteVehicleId: string;
   websiteName: string;
@@ -655,6 +676,81 @@ export interface VehicleInspection {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ----------------------------------------------------
+// WHATSAPP CONVERSATIONAL COMMERCE (Splendor Master Rule Set, Module 10)
+// ----------------------------------------------------
+// A real, persisted conversation state machine per customer phone number --
+// distinct from `whatsapp_inbound_events` (the low-level, append-only raw
+// webhook log used purely for delivery idempotency/audit) and from
+// `WhatsAppMessageLogEntry` (the Control Center's outbound broadcast log).
+// This is the CRM's own record of "where is this customer in the
+// conversation," so the bot and a human agent are always looking at the
+// exact same state.
+
+export type WhatsAppConversationState =
+  | 'NEW'
+  | 'BROWSING'
+  | 'VEHICLE_SELECTED'
+  | 'DATES_PENDING'
+  | 'LOCATION_PENDING'
+  | 'RESERVATION_CONFIRM'
+  | 'RESERVATION_CREATED'
+  | 'HUMAN_ASSISTANCE'
+  | 'CLOSED';
+
+export type WhatsAppConversationPriority = 'normal' | 'high' | 'vip';
+
+export type WhatsAppCustomerMatchStatus = 'matched' | 'unmatched' | 'ambiguous_review';
+
+/** In-progress booking details the customer is building through the chat -- never itself a Reservation; only handWhatsAppReservation() in splendorConnectEngine.ts, calling the real reservation engine, can turn this into one. */
+export interface WhatsAppConversationDraft {
+  vehicleId?: string;
+  vehiclePublicId?: string;
+  vehicleName?: string;
+  category?: VehicleCategory;
+  pickupDateTime?: string;
+  returnDateTime?: string;
+  pickupLocation?: string;
+  returnLocation?: string;
+  fullName?: string;
+  email?: string;
+}
+
+export interface WhatsAppConversation {
+  id: string; // normalized phone (digits only), also the Firestore doc id
+  phone: string;
+  customerId?: string;
+  customerName?: string;
+  customerMatchStatus: WhatsAppCustomerMatchStatus;
+  state: WhatsAppConversationState;
+  /** false once a human has taken over -- the bot goes silent (no automated replies) until a staff member explicitly hands the conversation back. */
+  botActive: boolean;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
+  priority: WhatsAppConversationPriority;
+  tags: string[];
+  draft: WhatsAppConversationDraft;
+  lastReservationId?: string;
+  lastInboundAt?: string;
+  lastOutboundAt?: string;
+  lastMessagePreview?: string;
+  /** true when the last inbound message has not yet been seen by staff (cleared by GET /api/whatsapp/conversations/:phone). Irrelevant while botActive, since the bot is already handling it. */
+  unread: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One message in a conversation's `whatsapp_conversations/{phone}/messages` subcollection -- a subcollection rather than an embedded array (unlike InspectionPhoto[] above) because a chat thread grows unboundedly over a customer's lifetime, while an inspection's photo set is small and bounded by definition. */
+export interface WhatsAppConversationMessage {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  type: 'text' | 'interactive' | 'image' | 'document' | 'system';
+  body: string;
+  sentBy?: string; // 'bot', or a staff uid for a manual reply
+  sentByName?: string;
+  timestamp: string;
 }
 
 export interface Contract {

@@ -2,7 +2,7 @@ import admin from 'firebase-admin';
 import {
   Vehicle, PlateAssignmentHistory, VehicleTimelineEvent,
   PublicVehicleDTO, WebsiteVehiclePublication, PublicWebsiteLeadRequest,
-  PublicWebsiteReservationRequest, WebsiteReconciliationItem, TollTransaction,
+  PublicWebsiteReservationRequest, WhatsAppReservationRequest, WebsiteReconciliationItem, TollTransaction,
   Contract, Reservation, Customer, Lead, AuditLog
 } from '../types';
 import { globalStore } from './dataStore';
@@ -756,6 +756,207 @@ Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.ret
       newValue: `Website reservation request for ${customer.fullName} - ${targetVehicle.make} ${targetVehicle.model} (${days} days, ${totalAmount} AED) [Pending Review]`
     });
     void auditLog;
+
+    const response = { success: true, reservationId: resId };
+    storeIdempotency(idempotencyKey, response);
+    return response;
+  }
+
+  /**
+   * Validates a WhatsApp reservation request and resolves the target
+   * vehicle by its internal id (the conversation engine already resolved a
+   * public catalog entry to a real Vehicle.id before this is called, so no
+   * slug lookup is needed here the way the website path needs one).
+   */
+  private static resolveWhatsAppReservationRequest(data: WhatsAppReservationRequest):
+    | { fullName: string; phone: string; email: string; pickupTime: number; returnTime: number; targetVehicle: Vehicle }
+    | { error: string } {
+    const fullName = (data.fullName || '').trim();
+    const phone = (data.phone || '').trim();
+    const email = (data.email || '').trim();
+
+    if (!data.vehicleId) return { error: 'A vehicle must be selected before a reservation can be created.' };
+    if (!fullName || fullName.length < 2) return { error: 'A valid full name is required.' };
+    if (!phone) return { error: 'A valid phone number is required.' };
+    if (!data.pickupDateTime || !data.returnDateTime) return { error: 'Pickup date and return date are required.' };
+
+    const pickupTime = new Date(data.pickupDateTime).getTime();
+    const returnTime = new Date(data.returnDateTime).getTime();
+    if (isNaN(pickupTime) || isNaN(returnTime)) return { error: 'Invalid pickup or return date format.' };
+    if (returnTime <= pickupTime) return { error: 'Return date must be scheduled after the pickup date.' };
+
+    const targetVehicle = globalStore.vehicles.find(v => v.id === data.vehicleId);
+    if (!targetVehicle) return { error: 'The requested vehicle could not be found.' };
+
+    if (
+      targetVehicle.lifecycleStatus === 'SOLD' ||
+      targetVehicle.lifecycleStatus === 'DISPOSED' ||
+      targetVehicle.lifecycleStatus === 'ARCHIVED' ||
+      targetVehicle.lifecycleStatus === 'TRANSFERRED' ||
+      targetVehicle.lifecycleStatus === 'INACTIVE'
+    ) {
+      return { error: 'The requested vehicle is currently out of service or unavailable for new bookings.' };
+    }
+
+    return { fullName, phone, email, pickupTime, returnTime, targetVehicle };
+  }
+
+  private static buildWhatsAppReservationCustomer(custId: string, fullName: string, phone: string, email: string, targetVehicle: Vehicle): Customer {
+    return {
+      id: custId,
+      type: 'individual',
+      fullName,
+      email, // may be '' -- a WhatsApp customer's real identity is their phone number; KYC/full profile completion happens later, same PENDING_VERIFICATION pattern as the website gateway
+      phone,
+      whatsapp: phone,
+      address: 'Dubai, UAE',
+      city: 'Dubai',
+      country: 'United Arab Emirates',
+      nationality: 'Pending Verification',
+      idType: 'passport',
+      idNumber: 'PENDING_VERIFICATION',
+      idExpiryDate: '2028-12-31',
+      licenseNumber: 'PENDING_VERIFICATION',
+      licenseCountry: 'UAE',
+      licenseExpiryDate: '2028-12-31',
+      source: 'whatsapp',
+      status: 'active',
+      ownerId: 'USR-001',
+      ownerName: 'Tariq Al-Mansoor',
+      isVIP: false,
+      tags: ['WhatsApp Conversational Booking'],
+      preferences: { favoriteCategory: targetVehicle.category },
+      notes: 'Created via the WhatsApp conversational booking flow (Module 10). Documents and full KYC pending.',
+      lifetimeValue: 0,
+      totalRentals: 0,
+      outstandingBalance: 0,
+      securityDepositsHeld: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString()
+    };
+  }
+
+  private static buildWhatsAppReservationRecord(
+    data: WhatsAppReservationRequest,
+    resId: string,
+    customer: Customer,
+    targetVehicle: Vehicle,
+    days: number,
+    dailyRate: number,
+    totalAmount: number,
+    depositAmount: number
+  ): Reservation {
+    return {
+      id: resId,
+      customerId: customer.id,
+      customerName: customer.fullName,
+      customerPhone: customer.phone,
+      vehicleId: targetVehicle.id,
+      vehicleName: `${targetVehicle.make} ${targetVehicle.model}`,
+      vehiclePlate: targetVehicle.plateNumber,
+      pickupDateTime: data.pickupDateTime,
+      returnDateTime: data.returnDateTime,
+      durationDays: days,
+      pickupLocation: data.pickupLocation,
+      returnLocation: data.returnLocation,
+      dailyRate,
+      totalAmount,
+      depositAmount,
+      depositStatus: 'pending',
+      status: 'pending', // Pending operations / concierge review -- same as a website booking; WhatsApp never auto-confirms
+      ownerId: 'USR-001',
+      ownerName: 'Tariq Al-Mansoor',
+      notes: `[WHATSAPP CONVERSATIONAL BOOKING - PENDING REVIEW]\nRequested Vehicle: ${targetVehicle.make} ${targetVehicle.model} (${targetVehicle.id})\nPickup: ${data.pickupLocation} | Return: ${data.returnLocation}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Process a reservation request confirmed through the WhatsApp
+   * conversation engine (src/server/whatsappConversation.ts). Deliberately
+   * a sibling of handlePublicReservation() above, not a copy of its
+   * booking decision: the actual conflict check + creation still goes
+   * through the SAME reserveVehicleSlot() transaction (buffer hours,
+   * temporary-hold awareness, cross-instance safety, idempotency) --
+   * WhatsApp is a second front door into the one reservation engine, never
+   * a second engine.
+   */
+  public static async handleWhatsAppReservation(data: WhatsAppReservationRequest): Promise<{
+    success: boolean;
+    reservationId?: string;
+    error?: string;
+  }> {
+    const resolved = SplendorConnectEngine.resolveWhatsAppReservationRequest(data);
+    if ('error' in resolved) {
+      return { success: false, error: resolved.error };
+    }
+    const { fullName, phone, email, pickupTime, returnTime, targetVehicle } = resolved;
+
+    const idempotencyKey = data.idempotencyKey || `wa-res:${phone}:${targetVehicle.id}:${data.pickupDateTime}:${data.returnDateTime}`;
+    const cached = checkIdempotency(idempotencyKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Customer matching by phone only -- a WhatsApp customer has no email
+    // to dedupe on. Ambiguous matches are resolved by the conversation
+    // engine BEFORE this is ever called (see matchCustomerByPhone()); by
+    // the time execution reaches here there is at most one candidate.
+    let customer = globalStore.customers.find(c => c.phone === phone);
+    if (!customer) {
+      const custId = await issueNextNumber('Customer');
+      customer = SplendorConnectEngine.buildWhatsAppReservationCustomer(custId, fullName, phone, email, targetVehicle);
+      await createDurable('customers', customer);
+      globalStore.customers.unshift(customer);
+    }
+
+    const durationMs = returnTime - pickupTime;
+    const days = Math.max(1, Math.ceil(durationMs / (1000 * 60 * 60 * 24)));
+    const dailyRate = targetVehicle.website?.dailyRate || targetVehicle.dailyRate || 5000;
+    const totalAmount = days * dailyRate;
+    const depositAmount = targetVehicle.website?.deposit || targetVehicle.minDeposit || 10000;
+
+    const resId = await issueNextNumber('Reservation');
+    let newReservation: Reservation;
+    let replayed = false;
+    try {
+      ({ doc: newReservation, replayed } = await reserveVehicleSlot(
+        { vehicleId: targetVehicle.id, startIso: data.pickupDateTime, endIso: data.returnDateTime, idempotencyKey },
+        'reservations',
+        () => SplendorConnectEngine.buildWhatsAppReservationRecord(data, resId, customer!, targetVehicle, days, dailyRate, totalAmount, depositAmount)
+      ));
+    } catch (err) {
+      if (err instanceof AvailabilityConflictError) {
+        return {
+          success: false,
+          error: 'The requested vehicle is no longer available for the selected dates. Please choose alternate dates or another vehicle.'
+        };
+      }
+      throw err;
+    }
+    if (replayed) {
+      const response = { success: true, reservationId: newReservation.id };
+      storeIdempotency(idempotencyKey, response);
+      return response;
+    }
+    globalStore.reservations.unshift(newReservation);
+
+    const auditId = await issueNextNumber('AuditLog');
+    const auditLog: AuditLog = {
+      id: auditId,
+      timestamp: new Date().toISOString(),
+      userId: 'SPLENDOR-CONNECT',
+      userName: 'WhatsApp Conversational Gateway',
+      userRole: 'sales',
+      entityType: 'Reservation',
+      entityId: resId,
+      action: 'create',
+      newValue: `WhatsApp reservation request for ${customer.fullName} (${phone}) - ${targetVehicle.make} ${targetVehicle.model} (${days} days, ${totalAmount} AED) [Pending Review]`
+    };
+    await createDurable('audit_logs', auditLog);
+    globalStore.auditLogs.unshift(auditLog);
 
     const response = { success: true, reservationId: resId };
     storeIdempotency(idempotencyKey, response);

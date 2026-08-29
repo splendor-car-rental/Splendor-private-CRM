@@ -83,6 +83,11 @@ import {
   registerInspectionPhoto, acknowledgeInspection, completeInspection, voidInspection,
   getInspection, listInspections, InspectionError
 } from './src/server/vehicleInspections';
+import {
+  processInboundWhatsAppMessage, getConversation, listConversations, listConversationMessages,
+  assignConversation, setConversationBotActive, sendManualReply, markConversationRead,
+  normalizePhone, ConversationError
+} from './src/server/whatsappConversation';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -4069,6 +4074,30 @@ async function recordWhatsAppInboundEvent(eventId: string, data: Record<string, 
   }
 }
 
+// Defense-in-depth only -- the real trust boundary is the signature check
+// below, not this. A generous per-IP cap so a compromised/leaked webhook
+// URL (still requiring a valid HMAC to do anything) can't be used to burn
+// CPU on signature verification indefinitely; legitimate Meta traffic for
+// one business number never comes close to this rate.
+const webhookRateLimitMap = new Map<string, { count: number; windowStart: number }>();
+function webhookRateLimiter(maxRequestsPerMinute: number) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const windowMs = 60 * 1000;
+    const entry = webhookRateLimitMap.get(ip);
+    if (!entry || now - entry.windowStart > windowMs) {
+      webhookRateLimitMap.set(ip, { count: 1, windowStart: now });
+      return next();
+    }
+    entry.count += 1;
+    if (entry.count > maxRequestsPerMinute) {
+      return res.sendStatus(429);
+    }
+    next();
+  };
+}
+
 // POST: every incoming customer message and every outbound delivery-status
 // update (sent/delivered/read/failed) for our number arrives here. Meta
 // requires a fast HTTP 200 on every delivery -- it retries with backoff,
@@ -4078,10 +4107,26 @@ async function recordWhatsAppInboundEvent(eventId: string, data: Record<string, 
 // itself fails, asyncHandler lets that propagate to the global error
 // middleware (a 500), which is the correct outcome here -- Meta will retry
 // the same event, and recordWhatsAppInboundEvent's idempotency key makes
-// that retry safe once the write actually succeeds. Turning incoming
-// messages into a real in-app inbox/reply flow (a UI thread view, etc.) is
-// a separate, larger feature to build once this durable log is in place.
-app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
+// that retry safe once the write actually succeeds.
+//
+// Module 10: every inbound MESSAGE (not status update) is additionally run
+// through the conversation engine (processInboundWhatsAppMessage), gated by
+// a `processedAt` flag on the SAME raw event document -- deliberately
+// separate from "is the raw event stored" (recordWhatsAppInboundEvent's own
+// 'stored'/'duplicate' result): a delivery that was durably recorded but
+// then crashed mid-processing (a transient Firestore error, say) must still
+// be reprocessed on Meta's automatic retry of that same message id, not
+// silently dropped because the raw record already existed. If
+// processInboundWhatsAppMessage itself throws, it is NOT caught here --
+// asyncHandler propagates it to a 500 exactly like a raw-persistence
+// failure, so Meta retries the whole delivery; processedAt is only ever set
+// AFTER a fully successful run, so a retry safely re-attempts exactly the
+// work that didn't finish, and skips whatever already did (each mutating
+// step inside processInboundWhatsAppMessage -- most importantly
+// SplendorConnectEngine.handleWhatsAppReservation -- is itself idempotent,
+// so even a retry that re-runs a step that actually did complete cannot
+// double-book or double-create).
+app.post('/api/whatsapp/webhook', webhookRateLimiter(300), asyncHandler(async (req, res) => {
   if (!verifyWhatsAppWebhookSignature(req)) {
     console.warn('[whatsapp webhook] rejected a delivery with a missing or invalid X-Hub-Signature-256.');
     return res.sendStatus(403);
@@ -4096,7 +4141,8 @@ app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
   if (Array.isArray(messages)) {
     for (const m of messages) {
       console.log(`[whatsapp webhook] incoming message from ${m.from}: ${m.text?.body ?? `[${m.type}]`}`);
-      await recordWhatsAppInboundEvent(`msg_${m.id}`, {
+      const eventId = `msg_${m.id}`;
+      await recordWhatsAppInboundEvent(eventId, {
         direction: 'inbound',
         messageId: m.id,
         phone: m.from,
@@ -4106,6 +4152,20 @@ app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
         receivedAt: now,
         metadata: m
       });
+
+      const eventSnap = await admin.firestore().collection('whatsapp_inbound_events').doc(eventId).get();
+      const alreadyProcessed = !!(eventSnap.data() as any)?.processedAt;
+      if (!alreadyProcessed) {
+        const interactive = m.interactive;
+        await processInboundWhatsAppMessage({
+          phone: m.from,
+          type: m.type || 'unknown',
+          text: m.text?.body,
+          interactiveReplyId: interactive?.button_reply?.id || interactive?.list_reply?.id,
+          messageId: m.id
+        }, recordAudit);
+        await updateDurable('whatsapp_inbound_events', eventId, { processedAt: new Date().toISOString() });
+      }
     }
   }
   if (Array.isArray(statuses)) {
@@ -4125,6 +4185,76 @@ app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
   }
 
   res.sendStatus(200);
+}));
+
+// ----------------------------------------------------
+// Module 10: WhatsApp Unified Inbox (Human Concierge)
+// ----------------------------------------------------
+// Every route here requires a real signed-in staff session (the global
+// requireAuth gate already covers everything under /api/ except the
+// webhook itself and the handful of paths explicitly exempted above) --
+// this is internal CRM surface, never reachable by a customer or by Meta.
+
+function conversationErrorStatus(message: string): number {
+  return message.includes('No conversation found') ? 404 : 409;
+}
+
+app.get('/api/whatsapp/conversations', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const state = typeof req.query.state === 'string' ? (req.query.state as any) : undefined;
+  const assignedEmployeeId = typeof req.query.assignedEmployeeId === 'string' ? req.query.assignedEmployeeId : undefined;
+  const rows = await listConversations({ state, assignedEmployeeId });
+  res.json(rows);
+}));
+
+app.get('/api/whatsapp/conversations/:phone', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const conversation = await getConversation(req.params.phone);
+  if (!conversation) return res.status(404).json({ error: 'No conversation found for this number.' });
+  const messages = await listConversationMessages(req.params.phone);
+  await markConversationRead(req.params.phone);
+  res.json({ ...conversation, unread: false, messages });
+}));
+
+app.post('/api/whatsapp/conversations/:phone/assign', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  try {
+    const updated = await assignConversation(req.params.phone, {
+      employeeId: req.body?.employeeId,
+      employeeName: req.body?.employeeName,
+      priority: req.body?.priority,
+      tags: req.body?.tags
+    }, actor, recordAudit);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
+}));
+
+app.post('/api/whatsapp/conversations/:phone/handoff', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  try {
+    const updated = await setConversationBotActive(req.params.phone, !!req.body?.botActive, actor, recordAudit);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
+}));
+
+app.post('/api/whatsapp/conversations/:phone/reply', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  const text = (req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Reply text is required.' });
+  try {
+    await sendManualReply(req.params.phone, text, actor, recordAudit);
+    res.status(201).json({ success: true });
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
 }));
 
 app.get('/api/custom-reminders', (req, res) => {
