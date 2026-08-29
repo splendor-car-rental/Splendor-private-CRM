@@ -34,6 +34,12 @@ import {
   decideCatalogUpdate, listCatalogUpdateRequests, VehicleCatalogError
 } from './src/server/vehicleCatalog';
 import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate';
+import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './src/server/payments';
+import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './src/server/deposits';
+import {
+  createPaymentIntent, getPaymentIntent, refundPaymentIntent, releaseSecurityDepositHold,
+  handleGatewayWebhook, PaymentIntentError
+} from './src/server/paymentIntents';
 import { detectAnomalies } from './src/server/anomalyDetection';
 import { checkOperationalHealth } from './src/server/operationalHealth';
 import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers';
@@ -241,12 +247,18 @@ app.use('/api', (req, res, next) => {
   // handshake checks hub.verify_token, and the POST delivery handler
   // verifies the X-Hub-Signature-256 HMAC below -- see that handler's
   // comment for why an exemption here is safe.
+  //
+  // /payment-gateway/webhook is the same situation for the Payment Gateway:
+  // called directly by the gateway's servers, never carrying a Firebase ID
+  // token. Its trust boundary is the HMAC signature verified inside
+  // handleGatewayWebhook() (src/server/paymentIntents.ts), not a session.
   if (
     req.path === '/health' ||
     req.path.startsWith('/public/') ||
     req.path === '/tests/run-all' ||
     req.path === '/notifications/run-checks' ||
-    req.path === '/whatsapp/webhook'
+    req.path === '/whatsapp/webhook' ||
+    req.path === '/payment-gateway/webhook'
   ) {
     return next();
   }
@@ -3129,49 +3141,7 @@ app.get('/api/deposits', (req, res) => {
 });
 
 app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
-  const newId = await issueNextNumber('Deposit');
-  const amount = Number(req.body.amount) || 0;
-  const now = new Date().toISOString();
-  const deposit = {
-    ...req.body,
-    id: newId,
-    amount,
-    appliedAmount: 0,
-    refundedAmount: 0,
-    balance: amount,
-    status: req.body.status || 'held',
-    createdAt: now,
-    updatedAt: now
-  };
-
-  const customerRef = req.body.customerId ? admin.firestore().collection('customers').doc(req.body.customerId) : null;
-  await runDurableTransaction(async (tx, db) => {
-    // Read before write -- real Firestore transactions reject a read that
-    // follows a write in the same transaction; the mocked test double
-    // doesn't enforce this ordering at all. Found via a repo-wide sweep of
-    // every transaction in this file after the same bug surfaced in the
-    // bank-reconciliation route.
-    const snap = customerRef ? await tx.get(customerRef) : null;
-    tx.create(db.collection('deposits').doc(newId), deposit);
-    if (customerRef && snap?.exists) {
-      tx.set(customerRef, { securityDepositsHeld: ((snap.data() as any).securityDepositsHeld || 0) + amount, updatedAt: now }, { merge: true });
-    }
-  });
-
-  globalStore.deposits.unshift(deposit);
-  const customer = globalStore.customers.find(c => c.id === deposit.customerId);
-  if (customer) customer.securityDepositsHeld += amount;
-
-  await recordAudit({
-    userId: req.body.actorId || 'USR-004',
-    userName: req.body.actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: newId,
-    action: 'create',
-    newValue: `Took a ${amount.toLocaleString()} AED security deposit${deposit.customerId ? ` from customer ${deposit.customerId}` : ''}.`
-  });
-
+  const deposit = await createSecurityDeposit(req.body || {}, recordAudit);
   res.status(201).json(deposit);
 }));
 
@@ -3262,64 +3232,15 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
 
 app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
   const { refundAmount, actorId, actorName } = req.body;
-  const now = new Date().toISOString();
-
-  const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
-  let updatedDeposit: any;
-  let amt = 0;
   try {
-    updatedDeposit = await runDurableTransaction(async (tx, db) => {
-      const snap = await tx.get(depositRef);
-      if (!snap.exists) throw new PersistenceError('Deposit not found');
-      const deposit = snap.data() as any;
-      amt = Number(refundAmount) || deposit.balance;
-      if (amt > deposit.balance) throw new PersistenceError('Refund amount exceeds held balance');
-
-      // Real Firestore transactions require all reads before any writes --
-      // read the customer now, before the deposit write below.
-      const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
-      const customerSnap = customerRef ? await tx.get(customerRef) : null;
-
-      const updated = {
-        ...deposit,
-        refundedAmount: deposit.refundedAmount + amt,
-        balance: deposit.balance - amt,
-        status: deposit.balance - amt === 0 ? 'refunded' : 'partially_refunded',
-        refundDate: now,
-        updatedAt: now
-      };
-      tx.set(depositRef, updated, { merge: true });
-
-      if (customerRef && customerSnap?.exists) {
-        const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-        tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-      }
-      return updated;
-    });
+    const updatedDeposit = await refundOrReleaseDeposit(req.params.id, refundAmount, { id: actorId || 'USR-004', name: actorName || 'Finance Manager' }, recordAudit);
+    res.json({ success: true, deposit: updatedDeposit });
   } catch (err) {
-    if (err instanceof PersistenceError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
+    if (err instanceof DepositError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
       return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
     }
     throw err;
   }
-
-  const index = globalStore.deposits.findIndex(d => d.id === req.params.id);
-  if (index !== -1) globalStore.deposits[index] = updatedDeposit;
-  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
-  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
-
-  await recordAudit({
-    userId: actorId || 'USR-004',
-    userName: actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: updatedDeposit.id,
-    action: 'refund',
-    newValue: `Processed deposit refund of ${amt} AED to customer ${updatedDeposit.customerName}`,
-    reason: 'Vehicle return inspection clear with no outstanding penalties'
-  });
-
-  res.json({ success: true, deposit: updatedDeposit });
 }));
 
 app.get('/api/invoices', (req, res) => {
@@ -3336,96 +3257,14 @@ app.get('/api/payments', (req, res) => {
 // double-crediting the customer. The whole payment+invoice+customer write
 // is now one atomic transaction, replayed (not repeated) on a matching key.
 app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
-  const data = req.body || {};
-  const amount = Number(data.amount) || 0;
-  if (amount <= 0) {
-    return res.status(400).json({ error: 'A positive payment amount is required.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result: payment } = await createConfirmedPayment(req.body || {}, idempotencyKey, recordAudit);
+    res.status(201).json(payment);
+  } catch (err) {
+    if (err instanceof PaymentError) return res.status(400).json({ error: err.message });
+    throw err;
   }
-  const idempotencyKey = (req.header('Idempotency-Key') || data.idempotencyKey || null) as string | null;
-
-  const newId = await issueNextNumber('Payment');
-  const receiptNum = await issueNextNumber('Receipt');
-  const now = new Date().toISOString();
-
-  const { result: payment, replayed } = await runIdempotent('payment-create', idempotencyKey, async (tx, db) => {
-    const paymentDoc = {
-      ...data,
-      id: newId,
-      amount,
-      receiptNumber: receiptNum,
-      status: 'allocated' as const,
-      receivedAt: now,
-      createdAt: now
-    };
-
-    let invoiceRef: FirebaseFirestore.DocumentReference | null = null;
-    let invoiceSnap: FirebaseFirestore.DocumentSnapshot | null = null;
-    if (data.invoiceId) {
-      invoiceRef = db.collection('invoices').doc(data.invoiceId);
-      invoiceSnap = await tx.get(invoiceRef);
-    }
-    let customerRef: FirebaseFirestore.DocumentReference | null = null;
-    let customerSnap: FirebaseFirestore.DocumentSnapshot | null = null;
-    if (data.customerId) {
-      customerRef = db.collection('customers').doc(data.customerId);
-      customerSnap = await tx.get(customerRef);
-    }
-
-    tx.create(db.collection('payments').doc(newId), paymentDoc);
-
-    if (invoiceRef && invoiceSnap?.exists) {
-      const inv = invoiceSnap.data() as any;
-      const paidAmount = inv.paidAmount + amount;
-      const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
-      tx.set(invoiceRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
-    }
-    if (customerRef && customerSnap?.exists) {
-      const cust = customerSnap.data() as any;
-      tx.set(customerRef, { outstandingBalance: Math.max(0, (cust.outstandingBalance || 0) - amount), updatedAt: now }, { merge: true });
-    }
-
-    return paymentDoc;
-  });
-
-  if (!replayed) {
-    globalStore.payments.unshift(payment as any);
-    if (data.invoiceId) {
-      const inv = globalStore.invoices.find(i => i.id === data.invoiceId);
-      if (inv) {
-        inv.paidAmount += amount;
-        inv.balanceDue = Math.max(0, inv.totalAmount - inv.paidAmount);
-        inv.status = inv.balanceDue === 0 ? 'paid' : 'partially_paid';
-      }
-    }
-    const customer = globalStore.customers.find(c => c.id === data.customerId);
-    if (customer) customer.outstandingBalance = Math.max(0, customer.outstandingBalance - amount);
-
-    await recordAudit({
-      userId: data.receivedById || 'USR-004',
-      userName: data.receivedByName || 'Faisal Al-Hashimi',
-      userRole: 'finance',
-      entityType: 'Payment',
-      entityId: newId,
-      action: 'create',
-      newValue: `Recorded payment of ${amount} AED (${data.method}) from ${data.customerName}. Receipt: ${receiptNum}`
-    });
-
-    try {
-      await dispatchNotificationEvent('payment_received',
-        `Payment of ${amount} AED received from ${data.customerName} (${data.method}). Receipt ${receiptNum}.`,
-        `تم استلام دفعة بقيمة ${amount} درهم من ${data.customerName} (${data.method}). إيصال ${receiptNum}.`
-      );
-      if (data.customerId) {
-        await dispatchCustomerNotification('customer_payment_receipt', data.customerId, data.customerName, customer?.phone,
-          `Payment received -- ${amount.toLocaleString()} AED (${data.method}). Receipt No. ${receiptNum}. Thank you.`,
-          `تم استلام دفعتكم بقيمة ${amount.toLocaleString()} درهم (${data.method}). رقم الإيصال ${receiptNum}. شكراً لكم.`);
-      }
-    } catch (err) {
-      console.error('WhatsApp dispatch failed (payment_received):', err);
-    }
-  }
-
-  res.status(201).json(payment);
 }));
 
 app.get('/api/statements/:customerId', (req, res) => {
@@ -3433,6 +3272,87 @@ app.get('/api/statements/:customerId', (req, res) => {
   if (!statement) return res.status(404).json({ error: 'Customer not found' });
   res.json(statement);
 });
+
+// ----------------------------------------------------
+// PAYMENT GATEWAY (Production-Grade Payment & Settlement Layer)
+// ----------------------------------------------------
+// Extends the existing Invoice/Payment/Deposit/LtoInstallment lifecycle --
+// see src/server/paymentIntents.ts for the full design rationale. The
+// active gateway (sandbox by default) is selected purely by the
+// PAYMENT_GATEWAY_PROVIDER environment variable -- never by anything a
+// client sends.
+app.post('/api/payment-intents', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { intent, replayed } = await createPaymentIntent(req.body || {}, { uid: actor.uid, name: actor.name }, recordAudit, idempotencyKey);
+    res.status(201).json({ ...intent, replayed });
+  } catch (error: any) {
+    if (error instanceof PaymentIntentError) return res.status(400).json({ error: error.message });
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/payment-intents/:id', asyncHandler(async (req, res) => {
+  const intent = await getPaymentIntent(req.params.id);
+  if (!intent) return res.status(404).json({ error: 'Payment intent not found.' });
+  res.json(intent);
+}));
+
+// Requests a refund of a succeeded PaymentIntent. This only ever creates a
+// 'processing' PaymentRefund record and asks the gateway to act -- the
+// underlying Invoice/Deposit/LtoInstallment is NOT touched until a
+// `refund.succeeded` webhook confirms it actually happened (see the
+// webhook handler below).
+app.post('/api/payment-intents/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    const refund = await refundPaymentIntent({ paymentIntentId: req.params.id, amount: req.body?.amount, reason: req.body?.reason }, { uid: actor.uid, name: actor.name }, recordAudit);
+    res.status(201).json(refund);
+  } catch (error: any) {
+    if (error instanceof PaymentIntentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Releases (voids) an uncaptured security-deposit authorization hold. The
+// Deposit itself only moves to 'refunded' once the gateway's
+// payment_intent.canceled webhook confirms the void.
+app.post('/api/payment-intents/:id/release', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    const intent = await releaseSecurityDepositHold(req.params.id, { uid: actor.uid, name: actor.name }, recordAudit);
+    res.json(intent);
+  } catch (error: any) {
+    if (error instanceof PaymentIntentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Called directly by the payment gateway's servers -- exempted from
+// requireAuth in the /api middleware above (see that exemption list),
+// exactly like /api/whatsapp/webhook. Its trust boundary is entirely the
+// HMAC signature verified inside handleGatewayWebhook(), not a Firebase
+// session. Always returns 200 once the delivery is durably logged (even a
+// rejected/duplicate one) so the gateway doesn't retry a delivery this
+// server has already seen -- the one exception is an invalid signature,
+// which gets a 403 so a forged delivery is never acknowledged as received.
+app.post('/api/payment-gateway/webhook', webhookRateLimiter(300), asyncHandler(async (req, res) => {
+  const rawBody: Buffer | undefined = (req as any).rawBody;
+  const signatureHeader = req.headers['x-gateway-signature'] as string | undefined;
+  if (!rawBody) return res.sendStatus(400);
+
+  const outcome = await handleGatewayWebhook(rawBody, signatureHeader, recordAudit);
+  if (!outcome.processed && outcome.reason === 'invalid_signature') {
+    console.warn('[payment gateway webhook] rejected a delivery with a missing or invalid signature.');
+    return res.sendStatus(403);
+  }
+  res.status(200).json({ received: true, ...outcome });
+}));
 
 // ----------------------------------------------------
 // 9. BANK IMPORT & RECONCILIATION

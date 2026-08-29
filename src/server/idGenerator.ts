@@ -87,7 +87,11 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   ltosettlementrequest: { prefix: 'LTOS-', digits: 6 },
 
   // Vehicle Master Profile & Verified Vehicle Catalog
-  vehiclecatalogupdaterequest: { prefix: 'VCU-', digits: 6 }
+  vehiclecatalogupdaterequest: { prefix: 'VCU-', digits: 6 },
+
+  // Payment Gateway (Production-Grade Payment & Settlement Layer)
+  paymentintent: { prefix: 'PI-', digits: 6 },
+  paymentrefund: { prefix: 'PREF-', digits: 6 }
 };
 
 export class IdGenerationError extends Error {

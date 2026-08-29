@@ -641,6 +641,72 @@ values, verified safe via an exhaustive usage search before the change.
 **RATIONALE FOR DEFERRAL**: This environment has no safe, reliable structured-data-fetching capability suited to unattended catalog discovery, and fabricating a "discovery" result would itself violate this mission's absolute anti-fabrication rule — the same honest-deferral reasoning already applied to RULE-W09/W10 in Module 13. The ingestion point that such a job would call (`proposeCatalogUpdate()` with `discoverySource:'internet_discovery'`) is real, built, and gated through the identical Four-Eyes review used for staff-submitted proposals; nothing about this deferral weakens the "never auto-publish" guarantee.
 **STATUS**: **NOT BUILT — honestly deferred**, not a hidden gap.
 
+## MODULE 16 — Payment Gateway (Production-Grade Payment & Settlement Layer)
+
+Extends the existing Invoice/Payment/Deposit/LtoInstallment lifecycle with
+a unified Payment Gateway layer -- no parallel financial ledger. The core
+discipline throughout: a PaymentIntent's status, and the real financial
+effect it triggers, only ever change in response to a signature-verified
+gateway webhook event, never a client-reported "it worked."
+
+### RULE-PG01 — Gateway adapter boundary, no secrets in code
+**REQUIREMENT**: A single adapter interface (`PaymentGatewayAdapter`) is the only place a real gateway's SDK is ever called from; the active provider is chosen purely by the `PAYMENT_GATEWAY_PROVIDER` environment variable; no card data or gateway secret is ever hardcoded.
+**RATIONALE**: `src/server/paymentGatewayAdapter.ts` defines the adapter interface plus a real, fully-functioning `sandbox` implementation (the safe default) and named stubs for `stripe`/`checkout_com`/`telr`/`network_international` that throw a specific, actionable `GatewayNotConfiguredError` naming exactly which env secret and SDK integration a real deployment needs -- never a fabricated network call pretending to succeed against nothing. Wiring in a real provider later is a scoped, one-file change plus the relevant `*_SECRET_KEY`/`*_WEBHOOK_SECRET` environment variables; zero code elsewhere in this layer changes.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG02 — PaymentIntent, never a client-trusted amount
+**REQUIREMENT**: A PaymentIntent's amount is always derived from the real linked entity's own outstanding balance (`Invoice.balanceDue`, `LtoInstallment.remainingAmount`) for `invoice_payment`/`lto_installment` purposes -- never accepted from the request body. Only `security_deposit` (which has no pre-existing entity) takes an explicit amount.
+**RATIONALE**: `resolveIntentLinkage()` in `src/server/paymentIntents.ts` re-reads the real Firestore record server-side on every intent creation; a test proves a tampered `amount` in the request body is silently ignored in favor of the real invoice balance.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — "never accepts a client-supplied amount for an invoice_payment intent".
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG03 — Idempotency
+**REQUIREMENT**: A retried "create PaymentIntent" with the same Idempotency-Key never opens a second gateway charge attempt; reusing the key for a genuinely different request is refused, not silently replayed with the wrong result.
+**RATIONALE**: Reuses the exact same durable Idempotency-Key mechanism (`runIdempotentCreate`, `src/server/idempotency.ts`) every other critical mutation in this codebase (contract creation, payment recording, LTO applications) already relies on — no second idempotency mechanism invented for this layer.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — replay returns the same intent id; a reused key with a different body gets 409.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG04 — Webhooks: signature-verified, deduplicated, the only source of truth for success
+**REQUIREMENT**: `POST /api/payment-gateway/webhook` verifies a constant-time HMAC signature before touching any data; a redelivered event (by `${provider}:${providerEventId}`) is a durable no-op, never a double-applied effect; a PaymentIntent's status only ever advances here.
+**RATIONALE**: Mirrors the exact pattern already proven in this codebase for `POST /api/whatsapp/webhook` (raw-body capture via `express.json()`'s `verify` option, `crypto.timingSafeEqual` constant-time compare, exempted from `requireAuth` in the `/api` middleware with its trust boundary enforced entirely inside the handler) -- not a new security pattern. `handleGatewayWebhook()` logs every delivery to `payment_gateway_events` keyed by the event id before applying any effect, so a second delivery of the same event is detected and skipped.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — a forged/missing signature gets 403; a correctly-signed event applies its effect exactly once even when redelivered (verified by asserting exactly one Payment record exists after two identical deliveries).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG05 — Confirmed effect reuses the existing Payment/Deposit/LtoInstallment functions, never a parallel one
+**REQUIREMENT**: A gateway-confirmed `invoice_payment`/`lto_installment`/`security_deposit` calls into the exact same functions the manual (cash/bank transfer) finance-entry routes already use.
+**RATIONALE**: `POST /api/payments`'s and `POST /api/deposits`'/`POST /api/deposits/:id/refund`'s transaction bodies were extracted (behavior-preserving -- the full pre-existing suite passed unchanged before and after) into `src/server/payments.ts` (`createConfirmedPayment`, `applyConfirmedPaymentRefund`) and `src/server/deposits.ts` (`createSecurityDeposit`, `refundOrReleaseDeposit`). The webhook handler and the manual routes now both call these same functions -- an online (gateway) payment and a manually recorded one become the literal same `Payment`/`Deposit` record, never two parallel systems. `lto_installment` confirmation reuses `recordLtoInstallmentPayment()` (already-existing LTO code) unchanged, passing the PaymentIntent's own id as the idempotency key so a redelivered webhook can never double-credit an installment.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — the resulting `Payment` record carries `gatewayPaymentIntentId` and `method:'online_link'`, is indistinguishable in shape from a manually-recorded one, and never contains a card number/CVV field; full pre-existing suite unaffected (417→426 tests, zero regressions).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG06 — Failure and retry
+**REQUIREMENT**: A failed PaymentIntent never touches the underlying Invoice/Deposit/Installment; a fresh PaymentIntent can be opened as a genuine retry once the failure is addressed.
+**RATIONALE**: `applyWebhookEvent()`'s `payment_intent.failed` branch only updates the PaymentIntent's own status/failureReason -- it never calls any of the confirmed-effect functions. Since `resolveIntentLinkage()` re-derives the amount from the real entity on every new intent, the invoice's un-reduced `balanceDue` naturally supports a full-amount retry with no manual cleanup.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — "a failed intent never touches the invoice, and a fresh retry intent can still be created".
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG07 — Refunds, webhook-confirmed
+**REQUIREMENT**: Refunding a PaymentIntent only ever creates a `pending`/`processing` `PaymentRefund` record and asks the gateway to act; the underlying Invoice/Payment/Deposit is reversed only once a `refund.succeeded` webhook confirms it. Only a `succeeded` PaymentIntent can be refunded, and a reason is mandatory.
+**RATIONALE**: `refundPaymentIntent()` never touches Invoice/Payment/Deposit state itself -- only `applyWebhookEvent()`'s `refund.succeeded` branch does, via `applyConfirmedRefundEffect()`, which dispatches to `applyConfirmedPaymentRefund()` (invoice_payment) or `refundOrReleaseDeposit()` (security_deposit) -- the same reversal logic a manual finance-entry refund uses. `PaymentRefund` is deliberately a distinct record from Procurement's `CustomerRefundRequest` (a different domain: reversing a specific prior gateway charge vs. paying out an accumulated credit balance) -- not a duplicate of it.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — the invoice/payment is provably untouched between the refund request and the confirming webhook, and correctly reversed after; missing reason and non-succeeded-intent refund attempts are both rejected with 400.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG08 — Security Deposit Hold/Release via gateway authorization
+**REQUIREMENT**: A `security_deposit` PaymentIntent's confirmed authorization becomes a real `Deposit` record (`holdType:'gateway_authorization'`) -- funds reserved, not yet taken. Releasing it voids the authorization at the gateway; the Deposit itself only moves to `refunded` once that void is itself webhook-confirmed.
+**RATIONALE**: Extends the existing `Deposit` type/lifecycle with two additive fields (`holdType`, `gatewayPaymentIntentId`) rather than a second deposit concept. `releaseSecurityDepositHold()` calls the adapter's `cancelIntent()` but does not itself change any Deposit/PaymentIntent status -- only the subsequent `payment_intent.canceled` webhook does, calling `refundOrReleaseDeposit()` for a full-balance release. A capture-from-hold path (taking the money after a valid damage claim) was deliberately left reusing the EXISTING, untouched `POST /api/deposits/:id/apply` route rather than being rebuilt here -- the mission asked specifically for Hold/Release, and `/apply` already does exactly what a capture needs (an approved-charge-gated deduction) with zero changes required.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` — the Deposit is `held` immediately after the hold is confirmed, stays `held` through the release *request* alone, and only becomes `refunded` (with the customer's `securityDepositsHeld` correctly reduced) once the cancellation webhook lands.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG09 — No raw card data, ever
+**REQUIREMENT**: No card number, CVV, or expiry is ever modeled, transmitted through, or stored by this backend.
+**RATIONALE**: `PaymentIntent`/`PaymentRefund`/`PaymentGatewayEvent` only ever carry amounts, currencies, and the gateway's own opaque reference ids (`providerIntentId`, `providerRefundId`, `clientSecret`) -- structurally, there is no field anywhere in this layer's types that could hold a PAN/CVV. Real card entry happens entirely inside the gateway's own hosted UI/SDK on the frontend (Stripe Elements, Checkout.com Frames, etc., once a real provider is wired in) -- this backend never receives it, matching standard PCI-DSS SAQ-A scope-reduction practice.
+**VERIFICATION METHOD**: `tests/paymentGateway.test.ts` asserts the resulting Payment record has no `cardNumber`/`cvv` keys; structurally confirmed by the type definitions in `src/types/index.ts` having no such fields to begin with.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-PG10 — Real gateway integration (Stripe/Checkout.com/Telr/etc.)
+**REQUIREMENT (deferred)**: An actual, live-money-moving integration with a specific real payment gateway.
+**RATIONALE FOR DEFERRAL**: This requires real, provider-issued production credentials (`STRIPE_SECRET_KEY`, `CHECKOUT_COM_SECRET_KEY`, etc.) and a business decision on which gateway Splendor contracts with -- neither exists in this environment, and fabricating a "working" integration without them would be worse than not having one (a false sense of production-readiness). `getActiveGatewayAdapter()`'s stubs for each named provider throw a specific, actionable error naming exactly what's missing; switching `PAYMENT_GATEWAY_PROVIDER` away from `sandbox` in production is a deliberate, visible action that fails loudly rather than silently doing nothing. A frontend checkout UI embedding the chosen gateway's own hosted card-entry SDK was likewise not built, since each real gateway has its own distinct SDK and building one against no real provider would be premature, fabricated UI.
+**STATUS**: **NOT BUILT — honestly deferred, requires production credentials.**
+
 ---
 
 ## Summary Table
@@ -676,7 +742,8 @@ table reflects the corrected, verified counts.
 | 13 WhatsApp | 10 | 0 | 8 | 2 |
 | 14 Lease-to-Own | 14 | 0 | 14 | 0 |
 | 15 Vehicle Master Profile | 10 | 0 | 9 | 1 |
-| **Total** | **94** | **10** | **49** | **35** |
+| 16 Payment Gateway | 10 | 0 | 9 | 1 |
+| **Total** | **104** | **10** | **58** | **36** |
 
 26 rules were genuinely implemented, tested, and committed across this
 session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08,
@@ -765,3 +832,32 @@ safe structured-data-fetching capability would itself violate the
 mission's absolute anti-fabrication rule -- the ingestion point such a job
 would call is real and already gated through the identical Four-Eyes
 review used for staff proposals.
+
+Module 16 (Payment Gateway) extends the existing Invoice/Payment/Deposit/
+LtoInstallment lifecycle with a unified checkout layer -- PG01-PG09 (the
+gateway adapter boundary, never-trust-the-client PaymentIntent amounts,
+Idempotency-Key-protected creation, signature-verified and deduplicated
+webhooks, the confirmed-effect functions extracted from and shared with
+the pre-existing manual finance-entry routes, failure/retry, webhook-
+confirmed refunds, gateway-authorization-backed Security Deposit Hold/
+Release, and the structural absence of any raw card data) are real,
+tested (9 new tests against the real Express app + mocked Firestore, on
+top of the full pre-existing 417-test suite -- 426 total, zero
+regressions, re-verified against the real Firestore emulator via
+`npm test`), and additive to every existing engine (Invoice, Payment,
+Deposit, LTO, Idempotency, Audit Trail) per the same "extend, never
+duplicate" mandate as every other module. Building this module's own
+required test coverage surfaced two real bugs in code written earlier in
+this same pass, both fixed before this module was considered complete: an
+inverted invoice-status calculation in the refund-reversal path (a fully
+refunded invoice was computing `'partially_paid'` instead of `'unpaid'`
+because `balanceDue` was checked before `paidAmount`), and a
+webhook-terminal-state guard that treated a security deposit's `succeeded`
+authorization as final and silently dropped its legitimate subsequent
+`canceled` (release) event. One rule is honestly deferred: PG10's actual
+live-money-moving integration with a specific real gateway (Stripe/
+Checkout.com/Telr/etc.) was not built, since it requires real,
+provider-issued production credentials and a business decision on which
+gateway Splendor contracts with -- neither exists in this environment, and
+each named provider's stub throws a specific, actionable error naming
+exactly what production deployment still needs.

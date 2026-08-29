@@ -1173,6 +1173,16 @@ export interface Deposit {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Payment Gateway integration (additive; a manually-collected deposit --
+   * cash/bank transfer -- never sets these). When set, this deposit's
+   * "held" funds are a real, uncaptured card authorization hold rather
+   * than money already collected -- release voids the authorization,
+   * refund captures-then-refunds. Both still only ever change `status`
+   * once a gateway webhook confirms the result.
+   */
+  holdType?: 'gateway_authorization' | 'manual';
+  gatewayPaymentIntentId?: string;
 }
 
 export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'online_link' | 'corporate_credit';
@@ -1197,6 +1207,112 @@ export interface Payment {
   receiptNumber: string;
   notes: string;
   createdAt: string;
+  /** Set only when this Payment was created from a gateway-confirmed PaymentIntent -- never when manually recorded (cash/bank transfer). */
+  gatewayPaymentIntentId?: string;
+}
+
+// ----------------------------------------------------
+// PAYMENT GATEWAY (Production-Grade Payment & Settlement Layer)
+// ----------------------------------------------------
+// Extends the existing Payment/Invoice/Deposit/LtoInstallment lifecycle --
+// no parallel financial ledger. A PaymentIntent is the server-authoritative
+// record of "we asked the gateway to charge/authorize X"; its `status`
+// only ever changes in response to a verified gateway webhook event
+// (PaymentGatewayEvent), never a client-reported "it worked". No raw card
+// data is ever modeled or stored here -- only the gateway's own opaque
+// reference ids.
+
+/** The active gateway is selected by PAYMENT_GATEWAY_PROVIDER (env), never hardcoded; 'sandbox' is the safe default with no real money movement. */
+export type PaymentGatewayProvider = 'sandbox' | 'stripe' | 'checkout_com' | 'telr' | 'network_international';
+
+/** What a PaymentIntent is for -- determines which existing entity's lifecycle a confirmed webhook advances. Deliberately narrow: only the purposes this mission asked for. */
+export type PaymentIntentPurpose = 'invoice_payment' | 'lto_installment' | 'security_deposit';
+
+export type PaymentIntentStatus =
+  | 'requires_payment' // created, awaiting the customer to complete payment at the gateway
+  | 'processing' // gateway has received a payment attempt, not yet confirmed
+  | 'requires_capture' // authorized (funds held) but not yet captured -- the security-deposit-hold state
+  | 'succeeded'
+  | 'failed'
+  | 'canceled';
+
+export interface PaymentIntent {
+  id: string; // PI-000001
+  provider: PaymentGatewayProvider;
+  providerIntentId: string; // the gateway's own opaque reference
+  purpose: PaymentIntentPurpose;
+  amount: number;
+  currency: string; // 'AED'
+  status: PaymentIntentStatus;
+  customerId?: string;
+  customerName?: string;
+  contractId?: string;
+  invoiceId?: string;
+  depositId?: string; // set once a resulting Deposit record exists (security_deposit purpose)
+  ltoInstallmentId?: string;
+  idempotencyKey?: string;
+  clientSecret?: string; // handed to the frontend gateway SDK only; never a card number/CVV
+  failureReason?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt?: string;
+  canceledAt?: string;
+}
+
+export type PaymentGatewayEventType =
+  | 'payment_intent.requires_capture'
+  | 'payment_intent.succeeded'
+  | 'payment_intent.failed'
+  | 'payment_intent.canceled'
+  | 'refund.succeeded'
+  | 'refund.failed';
+
+/**
+ * A durable log of every webhook delivery, keyed `${provider}:${providerEventId}`
+ * so a redelivered event (every real gateway retries webhooks) is a no-op,
+ * not a double-applied effect -- the idempotency mechanism for the webhook
+ * layer itself, separate from (and in addition to) the Idempotency-Key
+ * mechanism client-initiated mutations already use.
+ */
+export interface PaymentGatewayEvent {
+  id: string; // `${provider}:${providerEventId}`
+  provider: PaymentGatewayProvider;
+  providerEventId: string;
+  type: PaymentGatewayEventType;
+  providerIntentId?: string;
+  providerRefundId?: string;
+  receivedAt: string;
+  processedAt?: string;
+  processingError?: string;
+}
+
+export type PaymentRefundStatus = 'pending' | 'processing' | 'succeeded' | 'failed';
+
+/**
+ * The operational record of one gateway-processed reversal of an original
+ * PaymentIntent (invoice payment, LTO installment, or a captured security
+ * deposit). This is NOT a duplicate of CustomerRefundRequest (Procurement's
+ * credit-balance payout workflow) or of Deposit's own refund fields -- it
+ * is the async gateway-call/webhook-confirmation record for reversing a
+ * SPECIFIC prior charge, exactly analogous to what PaymentIntent is for a
+ * charge. Only a confirmed `refund.succeeded` webhook applies the actual
+ * reversal to the underlying Invoice/Deposit/LtoInstallment.
+ */
+export interface PaymentRefund {
+  id: string; // PREF-000001
+  paymentIntentId: string;
+  provider: PaymentGatewayProvider;
+  providerRefundId?: string;
+  amount: number;
+  reason: string;
+  status: PaymentRefundStatus;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  confirmedAt?: string;
+  failureReason?: string;
 }
 
 export interface Invoice {
