@@ -27,6 +27,7 @@ export interface CreateConfirmedPaymentInput {
   customerId?: string;
   customerName?: string;
   contractId?: string;
+  reservationId?: string;
   invoiceId?: string;
   amount: number;
   method: Payment['method'];
@@ -35,6 +36,8 @@ export interface CreateConfirmedPaymentInput {
   notes?: string;
   /** Set only when this Payment originates from a gateway-confirmed PaymentIntent -- never for a manually recorded payment. */
   gatewayPaymentIntentId?: string;
+  /** CRMDocument id of the proof-of-payment upload (see POST /api/upload's 'payment-proofs' folder), when one was attached at recording time. */
+  proofDocumentId?: string;
 }
 
 export async function createConfirmedPayment(
@@ -51,6 +54,15 @@ export async function createConfirmedPayment(
   const receiptNum = await issueNextNumber('Receipt');
   const now = new Date().toISOString();
 
+  // Every manually recorded payment (RULE requirement: "حالة التحقق" --
+  // verification status) starts unverified regardless of method, even when
+  // a proof file was attached at recording time -- attaching a file is not
+  // the same as a finance reviewer having actually checked it. It only
+  // ever moves to 'verified'/'rejected' via POST /api/payments/:id/verify,
+  // a distinct, human-initiated action, or via the bank reconciliation
+  // confirm flow -- never automatically here.
+  const initialVerificationStatus = 'pending_review' as const;
+
   const { result: payment, replayed } = await runIdempotent('payment-create', idempotencyKey, async (tx, db) => {
     const paymentDoc: Payment = {
       ...data,
@@ -62,6 +74,7 @@ export async function createConfirmedPayment(
       receivedAt: now,
       receiptNumber: receiptNum,
       notes: data.notes || '',
+      verificationStatus: initialVerificationStatus,
       createdAt: now
     } as unknown as Payment;
 

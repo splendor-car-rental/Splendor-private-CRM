@@ -4,13 +4,16 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle } from './src/types';
+import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { vatPortion, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
+import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/server/bankImportGuard';
+import { parseBankStatementExcel, parseBankStatementCsv, type ParsedBankStatementFile, type ParsedBankStatementRow } from './src/server/bankStatementParsers';
+import { classifyBankRow, findUnmatchedCrmPayments } from './src/server/bankReconciliation';
 import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
@@ -690,11 +693,11 @@ app.post('/api/upload', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    const { folder, fileName, fileType, dataBase64, targetUserId, customerId, inspectionId } = req.body || {};
+    const { folder, fileName, fileType, dataBase64, targetUserId, customerId, inspectionId, paymentId, bankBatchId } = req.body || {};
     if (!folder || !fileName || !dataBase64) {
       return res.status(400).json({ error: 'folder, fileName, and dataBase64 are required.' });
     }
-    if (!['avatars', 'customer-documents', 'vehicle-inspections'].includes(folder)) {
+    if (!['avatars', 'customer-documents', 'vehicle-inspections', 'payment-proofs', 'bank-statements'].includes(folder)) {
       return res.status(400).json({ error: 'Invalid upload folder.' });
     }
 
@@ -704,6 +707,22 @@ app.post('/api/upload', async (req, res) => {
         return res.status(400).json({ error: 'inspectionId is required for vehicle-inspection photo uploads.' });
       }
       storagePath = `vehicle-inspections/${inspectionId}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else if (folder === 'payment-proofs') {
+      // Proof-of-payment attachment (RULE requirement: every manually
+      // recorded payment must link to an "إثبات" / proof). Keyed by
+      // paymentId when the Payment already exists, falling back to
+      // customerId for the common "attach proof, then record the payment"
+      // order the collections UI actually uses.
+      const owner = paymentId || customerId;
+      if (!owner) {
+        return res.status(400).json({ error: 'paymentId or customerId is required for payment proof uploads.' });
+      }
+      storagePath = `payment-proofs/${owner}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else if (folder === 'bank-statements') {
+      // The original uploaded statement file, kept for audit purposes
+      // alongside the parsed BankImportBatch -- this route only stores the
+      // raw file; parsing happens separately in POST /api/bank-batches.
+      storagePath = `bank-statements/${bankBatchId || 'unassigned'}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     } else if (folder === 'avatars') {
       let ownerUid = requesterUid;
       if (targetUserId && targetUserId !== requesterUid) {
@@ -752,10 +771,10 @@ app.post('/api/upload', async (req, res) => {
       userId: requesterUid,
       userName: uploaderActor?.name || requesterUid,
       userRole: uploaderActor?.role || 'operations',
-      entityType: folder === 'avatars' ? 'Avatar' : folder === 'vehicle-inspections' ? 'InspectionPhotoFile' : 'CustomerDocument',
+      entityType: folder === 'avatars' ? 'Avatar' : folder === 'vehicle-inspections' ? 'InspectionPhotoFile' : folder === 'payment-proofs' ? 'PaymentProof' : folder === 'bank-statements' ? 'BankStatementFile' : 'CustomerDocument',
       entityId: storagePath,
       action: 'create',
-      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}${inspectionId ? ` for inspection ${inspectionId}` : ''}.`
+      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}${inspectionId ? ` for inspection ${inspectionId}` : ''}${paymentId ? ` for payment ${paymentId}` : ''}.`
     });
 
     res.json({ url, path: storagePath });
@@ -773,7 +792,7 @@ app.post('/api/upload', async (req, res) => {
 // two folders POST /api/upload itself ever writes to, both server-
 // generated (never a client-supplied filesystem/Storage path), which rules
 // out path traversal to an unrelated object in the same bucket.
-const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/', 'vehicle-inspections/', 'lease-to-own-contracts/'];
+const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/', 'vehicle-inspections/', 'lease-to-own-contracts/', 'payment-proofs/', 'bank-statements/'];
 
 app.get('/api/documents/file', asyncHandler(async (req, res) => {
   const path = String(req.query.path || '');
@@ -3267,6 +3286,48 @@ app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), requireOperati
   }
 }));
 
+// Sets a Payment's human verification status -- separate from and never
+// implied by bank reconciliation (see /api/bank-transactions/:id/reconcile):
+// a payment can be recorded and later verified (proof checked, reference
+// confirmed) purely by a finance reviewer, with no bank statement involved
+// at all. Never auto-set by any importer or matching engine.
+app.post('/api/payments/:id/verify', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+  const { verificationStatus, note } = req.body || {};
+  const VALID: ReadonlyArray<string> = ['pending_review', 'verified', 'rejected'];
+  if (!verificationStatus || !VALID.includes(verificationStatus)) {
+    return res.status(400).json({ error: `verificationStatus is required and must be one of: ${VALID.join(', ')}.` });
+  }
+  const payment = globalStore.payments.find(p => p.id === req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found.' });
+
+  const actor = await getRequesterActor(req);
+  const now = new Date().toISOString();
+  const previousStatus = payment.verificationStatus || 'pending_review';
+
+  const updates = {
+    verificationStatus,
+    verifiedBy: actor?.uid || 'USR-004',
+    verifiedByName: actor?.name || 'Finance Team',
+    verifiedAt: now,
+    verificationNote: note ? String(note).trim() : payment.verificationNote
+  };
+  await updateDurable('payments', payment.id, updates);
+  Object.assign(payment, updates);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-004',
+    userName: actor?.name || 'Finance Team',
+    userRole: actor?.role || 'finance',
+    entityType: 'Payment',
+    entityId: payment.id,
+    action: 'update',
+    previousValue: `Verification status: ${previousStatus}`,
+    newValue: `Verification status: ${verificationStatus}${note ? ` -- ${String(note).trim()}` : ''}`
+  });
+
+  res.json(payment);
+}));
+
 app.get('/api/statements/:customerId', (req, res) => {
   const statement = globalStore.getCustomerStatement(req.params.customerId);
   if (!statement) return res.status(404).json({ error: 'Customer not found' });
@@ -3365,70 +3426,130 @@ app.get('/api/bank-transactions', (req, res) => {
   res.json(globalStore.bankTransactions);
 });
 
+// Real CSV/Excel bank statement import with a preview-then-confirm flow
+// (mirrors POST /api/tolls/import exactly): a preview call (confirm !==
+// true) parses and classifies every row without writing anything or
+// burning a real BATCH-/BTX- number, so the review screen can show
+// classifications before anything is persisted. Only confirm:true writes.
+//
+// PDF-readiness (mission requirement): detectBankImportFileKind() already
+// recognizes a PDF upload; adding real PDF support later is a new
+// parseBankStatementPdfText() feeding the exact same parseGridToBankRows()
+// row shape into the exact same classification/persistence code below --
+// zero changes to this route's structure or to bankReconciliation.ts.
+//
+// Legacy compatibility: a caller that still sends a pre-parsed
+// `transactions` array (rather than a real file) is supported unchanged --
+// routed through the SAME classification engine as a real file, never a
+// second matching implementation.
 app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
-  const { fileName, bankName, accountNumber, transactions, uploadedBy } = req.body;
-  const batchSeq = await issueNextNumber('BankBatch');
-  const batchId = `BATCH-${new Date().toISOString().slice(0, 7)}-${batchSeq.replace(/\D/g, '').slice(-2).padStart(2, '0')}`;
-  
-  const parsedTxns: any[] = [];
-  (transactions || []).forEach((t: any, idx: number) => {
-    const txnId = `BTX-${batchId.slice(-4)}-${String(idx + 1).padStart(3, '0')}`;
-    
-    // Auto-match heuristic
-    const amount = Number(t.credit) || Number(t.debit) || 0;
-    const desc = (t.description || '').toUpperCase();
-    let suggestedMatch = undefined;
+  const { fileBase64, fileName, bankName, accountNumber, statementPeriod, uploadedBy, confirm, transactions } = req.body || {};
 
-    // Search for customer match in description
-    for (const cust of globalStore.customers) {
-      const nameParts = (cust.fullName || '').toUpperCase().split(' ');
-      const matched = nameParts.some(p => p.length > 3 && desc.includes(p)) || 
-                      (cust.companyName && desc.includes(cust.companyName.toUpperCase().slice(0, 8)));
-      
-      if (matched) {
-        // Find open invoice
-        const openInv = globalStore.invoices.find(i => i.customerId === cust.id && i.balanceDue > 0);
-        suggestedMatch = {
-          customerId: cust.id,
-          customerName: cust.fullName,
-          invoiceId: openInv ? openInv.id : undefined,
-          confidence: openInv && Math.abs(openInv.balanceDue - amount) < 1 ? 98 : 86,
-          rationale: `Matched customer ${cust.fullName} from bank wire description narrative.`,
-          rationaleAr: `تمت مطابقة اسم العميل ${cust.fullName} من النص المرفق بالحوالة البنكية.`
-        };
-        break;
-      }
+  let rows: ParsedBankStatementRow[];
+  let parseWarnings: string[] = [];
+  let detectedMeta: { accountNumber?: string; bankName?: string } = {};
+  let fileFormat: 'excel' | 'csv' | 'legacy' = 'legacy';
+
+  if (fileBase64) {
+    const buffer = Buffer.from(String(fileBase64).split(',').pop() || '', 'base64');
+    if (buffer.length === 0) return res.status(400).json({ error: 'Uploaded file is empty.' });
+    if (buffer.length > BANK_IMPORT_MAX_FILE_BYTES) {
+      return res.status(400).json({ error: `File is too large (${Math.round(BANK_IMPORT_MAX_FILE_BYTES / (1024 * 1024))}MB max).` });
     }
-
-    parsedTxns.push({
-      id: txnId,
-      batchId,
+    const kind = detectBankImportFileKind(buffer);
+    if (!kind) {
+      return res.status(400).json({ error: 'Unsupported or unrecognized file format. Please upload a bank statement CSV or Excel export.' });
+    }
+    if (kind === 'pdf') {
+      return res.status(400).json({ error: 'PDF bank statements are not supported yet -- please export a CSV or Excel statement from your bank instead.' });
+    }
+    let parsed: ParsedBankStatementFile;
+    try {
+      parsed = kind === 'excel' ? await parseBankStatementExcel(buffer) : await parseBankStatementCsv(buffer);
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || 'Failed to parse the uploaded file.' });
+    }
+    rows = parsed.rows;
+    parseWarnings = parsed.warnings;
+    detectedMeta = parsed.meta;
+    fileFormat = kind;
+  } else if (Array.isArray(transactions)) {
+    rows = transactions.map((t: any) => ({
       date: t.date || new Date().toISOString().split('T')[0],
-      description: t.description || 'BANK TRANSACTION',
-      reference: t.reference || `REF-${Math.floor(Math.random() * 900000 + 100000)}`,
+      description: t.description || '',
+      reference: t.reference || '',
       debit: Number(t.debit) || 0,
       credit: Number(t.credit) || 0,
-      balance: Number(t.balance) || 1500000,
-      suggestedMatch,
-      status: suggestedMatch ? 'suggested_match' : 'unmatched',
-      reconciled: false
+      balance: t.balance !== undefined ? Number(t.balance) : undefined
+    }));
+  } else {
+    return res.status(400).json({ error: 'Either fileBase64 (a real statement upload) or a transactions array is required.' });
+  }
+
+  const isConfirmed = confirm === true;
+  const batchSeq = isConfirmed ? await issueNextNumber('BankBatch') : `PREVIEW-${Date.now()}`;
+  const batchId = isConfirmed ? `BATCH-${new Date().toISOString().slice(0, 7)}-${batchSeq.replace(/\D/g, '').slice(-2).padStart(2, '0')}` : batchSeq;
+
+  // Duplicate detection checks against every transaction ever imported
+  // (all prior batches) PLUS the rows already processed earlier in this
+  // same file, so two identical rows within one upload are caught too.
+  const runningNewTxns: BankTransaction[] = [];
+  const parsedTxns: any[] = [];
+  rows.forEach((row, idx) => {
+    const txnId = isConfirmed ? `BTX-${batchId.slice(-4)}-${String(idx + 1).padStart(3, '0')}` : `PREVIEW-${idx + 1}`;
+    const result = classifyBankRow({
+      row, customers: globalStore.customers, invoices: globalStore.invoices, payments: globalStore.payments,
+      priorTransactions: [...globalStore.bankTransactions, ...runningNewTxns]
     });
+
+    const txn = {
+      id: txnId,
+      batchId,
+      date: row.date,
+      description: row.description || 'BANK TRANSACTION',
+      reference: row.reference || '',
+      debit: row.debit,
+      credit: row.credit,
+      balance: row.balance ?? 0,
+      suggestedMatch: result.suggestedMatch,
+      status: (result.classification === 'matched' ? 'suggested_match'
+        : result.classification === 'unrecorded_transfer' ? 'unmatched'
+        : 'needs_review') as BankTransactionStatus,
+      reconciled: false,
+      matchClassification: result.classification,
+      matchReason: result.reasonEn,
+      matchReasonAr: result.reasonAr,
+      ...(result.duplicateOfTransactionId ? { duplicateOfTransactionId: result.duplicateOfTransactionId } : {})
+    };
+    parsedTxns.push(txn);
+    runningNewTxns.push(txn as unknown as BankTransaction);
   });
+
+  const periodDates = rows.map(r => r.date).filter(Boolean).sort();
+  const periodStart = periodDates[0] || new Date().toISOString().slice(0, 10);
+  const periodEnd = periodDates[periodDates.length - 1] || periodStart;
+  const unmatchedCrmPayments = findUnmatchedCrmPayments(rows, globalStore.payments, periodStart, periodEnd);
 
   const batch = {
     id: batchId,
-    fileName: fileName || 'statement_import.csv',
-    bankName: bankName || 'Emirates NBD',
-    accountNumber: accountNumber || 'AE09 0260 0012 3456 7890 01',
-    statementPeriod: req.body.statementPeriod || 'Current Month',
+    fileName: fileName || (fileFormat === 'csv' ? 'statement.csv' : fileFormat === 'excel' ? 'statement.xlsx' : 'statement_import.csv'),
+    fileFormat,
+    bankName: bankName || detectedMeta.bankName || 'Unspecified Bank',
+    accountNumber: accountNumber || detectedMeta.accountNumber || '',
+    statementPeriod: statementPeriod || `${periodStart} - ${periodEnd}`,
     uploadedBy: uploadedBy || 'Finance Team',
     uploadedAt: new Date().toISOString(),
     totalTransactions: parsedTxns.length,
-    matchedCount: parsedTxns.filter(t => t.status === 'suggested_match').length,
-    unmatchedCount: parsedTxns.filter(t => t.status === 'unmatched').length,
-    duplicateCount: 0,
+    matchedCount: parsedTxns.filter(t => t.matchClassification === 'matched').length,
+    unmatchedCount: parsedTxns.filter(t => t.matchClassification === 'unrecorded_transfer').length,
+    duplicateCount: parsedTxns.filter(t => t.matchClassification === 'duplicate_transaction').length,
+    unmatchedCrmPayments,
     status: 'ready_for_review' as const
   };
+
+  if (!isConfirmed) {
+    return res.json({ preview: true, batch, transactions: parsedTxns, warnings: parseWarnings });
+  }
 
   const ops: BatchOp[] = [{ type: 'create', collection: 'bank_batches', id: batch.id, data: batch }];
   for (const t of parsedTxns) ops.push({ type: 'create', collection: 'bank_transactions', id: t.id, data: t });
@@ -3446,19 +3567,19 @@ app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOpe
     entityType: 'BankImportBatch',
     entityId: batch.id,
     action: 'create',
-    newValue: `Imported bank statement ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched).`
+    newValue: `Imported bank statement ${batch.fileName} (${parsedTxns.length} transactions -- ${batch.matchedCount} matched, ${batch.duplicateCount} duplicate, ${unmatchedCrmPayments.length} CRM payment(s) not found in the bank).`
   });
 
   try {
     await dispatchNotificationEvent('bank_statement_imported',
-      `Bank statement imported: ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched).`,
-      `تم استيراد كشف حساب بنكي: ${batch.fileName} (${parsedTxns.length} معاملة، ${batch.matchedCount} مطابقة تلقائياً).`
+      `Bank statement imported: ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched, ${batch.duplicateCount} flagged as duplicate).`,
+      `تم استيراد كشف حساب بنكي: ${batch.fileName} (${parsedTxns.length} معاملة، ${batch.matchedCount} مطابقة، ${batch.duplicateCount} مكررة).`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (bank_statement_imported):', err);
   }
 
-  res.status(201).json({ batch, transactions: parsedTxns });
+  res.status(201).json({ preview: false, batch, transactions: parsedTxns, warnings: parseWarnings });
 }));
 
 // Guards against double-reconcile (the audit's finding: reconciling twice
@@ -3488,7 +3609,7 @@ app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOpe
 // claim of who it was for the audit trail, which any authorized finance
 // user could spoof to attribute a reconciliation to someone else.
 app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
-  const { targetRecordType, targetRecordId, classification } = req.body || {};
+  const { targetRecordType, targetRecordId, classification, duplicateOverrideReason } = req.body || {};
   if (!classification || !RECEIVED_AMOUNT_CLASSIFICATIONS.includes(classification)) {
     return res.status(400).json({ error: `classification is required and must be one of: ${RECEIVED_AMOUNT_CLASSIFICATIONS.join(', ')}.` });
   }
@@ -3514,6 +3635,14 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
       if (!snap.exists) throw new PersistenceError('Bank transaction not found');
       const txn = snap.data() as any;
       if (txn.reconciled) throw new PersistenceError('This transaction has already been reconciled.');
+      // Absolute rule from the mission brief: bank-statement analysis alone
+      // may never create or confirm a payment. A row flagged as a probable
+      // duplicate of an existing transaction is exactly the case where a
+      // one-click confirm would double-count a receipt -- require an
+      // explicit, recorded human override reason before it can proceed.
+      if (txn.matchClassification === 'duplicate_transaction' && !String(duplicateOverrideReason || '').trim()) {
+        throw new PersistenceError('DUPLICATE_NEEDS_OVERRIDE');
+      }
 
       const invRef = (resolvedType === 'invoice' && targetRecordId && txn.credit > 0)
         ? db.collection('invoices').doc(targetRecordId)
@@ -3553,6 +3682,9 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
     updatedTxn = outcome.result;
     replayed = outcome.replayed;
   } catch (err) {
+    if (err instanceof PersistenceError && err.message === 'DUPLICATE_NEEDS_OVERRIDE') {
+      return res.status(409).json({ error: 'This transaction looks like a duplicate of an already-recorded bank transaction. Provide duplicateOverrideReason to confirm it anyway.' });
+    }
     if (err instanceof PersistenceError && (err.message === 'Bank transaction not found' || err.message.startsWith('This transaction'))) {
       return res.status(err.message === 'Bank transaction not found' ? 404 : 409).json({ error: err.message });
     }
@@ -3571,6 +3703,7 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
   }
 
   if (!replayed) {
+    const wasDuplicateOverride = updatedTxn.matchClassification === 'duplicate_transaction';
     await recordAudit({
       userId: actor?.uid || 'USR-004',
       userName: actor?.name || 'Unknown',
@@ -3579,8 +3712,9 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
       entityId: updatedTxn.id,
       action: 'reconcile',
       previousValue: 'Status: Pending / Suggested',
-      newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}. Classification: ${classification}.`,
-      reason: 'Approved by authorized financial reconciler'
+      newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}. Classification: ${classification}.`
+        + (wasDuplicateOverride ? ` DUPLICATE OVERRIDE: ${String(duplicateOverrideReason).trim()}` : ''),
+      reason: wasDuplicateOverride ? 'Manually confirmed despite a suspected duplicate match' : 'Approved by authorized financial reconciler'
     });
   }
 
@@ -5116,6 +5250,79 @@ app.post('/api/settings/custom-fields', requireRole('ceo', 'admin'), asyncHandle
   });
 
   res.status(201).json(field);
+}));
+
+// Manageable payment-method catalog (RULE requirement: "طرق دفع قابلة
+// للإدارة" -- manual payment recording must draw from an admin-editable
+// list, not a hardcoded one). Mirrors the Procurement payment-method-defs /
+// custom-fields pattern exactly: a small config-shaped list, seeded with
+// DEFAULT_CUSTOMER_PAYMENT_METHODS, editable (never deletable -- a method
+// already referenced by historical Payments must keep resolving) by ceo/
+// admin only.
+app.get('/api/payment-methods', (req, res) => {
+  res.json(globalStore.paymentMethods);
+});
+
+app.post('/api/payment-methods', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const { key, labelEn, labelAr, requiresReference, requiresProof } = req.body || {};
+  if (!key || !labelEn || !labelAr) {
+    return res.status(400).json({ error: 'key, labelEn, and labelAr are required.' });
+  }
+  if (globalStore.paymentMethods.some(m => m.key === key)) {
+    return res.status(409).json({ error: `Payment method "${key}" already exists.` });
+  }
+  const method = {
+    id: key,
+    key,
+    labelEn: String(labelEn).trim(),
+    labelAr: String(labelAr).trim(),
+    active: true,
+    requiresReference: !!requiresReference,
+    requiresProof: !!requiresProof
+  };
+  await createDurable('payment_methods', method);
+  globalStore.paymentMethods.push(method);
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Admin',
+    userRole: actor?.role || 'admin',
+    entityType: 'PaymentMethod',
+    entityId: method.key,
+    action: 'create',
+    newValue: `Added payment method "${method.labelEn}" / "${method.labelAr}".`
+  });
+
+  res.status(201).json(method);
+}));
+
+app.patch('/api/payment-methods/:key', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const method = globalStore.paymentMethods.find(m => m.key === req.params.key);
+  if (!method) return res.status(404).json({ error: `Payment method "${req.params.key}" not found.` });
+
+  const { labelEn, labelAr, active, requiresReference, requiresProof } = req.body || {};
+  const previous = { ...method };
+  if (labelEn !== undefined) method.labelEn = String(labelEn).trim();
+  if (labelAr !== undefined) method.labelAr = String(labelAr).trim();
+  if (active !== undefined) method.active = !!active;
+  if (requiresReference !== undefined) method.requiresReference = !!requiresReference;
+  if (requiresProof !== undefined) method.requiresProof = !!requiresProof;
+  await updateDurable('payment_methods', method.key, { ...method });
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Admin',
+    userRole: actor?.role || 'admin',
+    entityType: 'PaymentMethod',
+    entityId: method.key,
+    action: 'update',
+    previousValue: `${previous.labelEn} / active:${previous.active}`,
+    newValue: `${method.labelEn} / active:${method.active}`
+  });
+
+  res.json(method);
 }));
 
 app.get('/api/settings/numbering', (req, res) => {
@@ -7914,6 +8121,7 @@ const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   auditLogs: 'audit_logs',
   customFields: 'custom_fields',
   numberingConfigs: 'numbering_configs',
+  paymentMethods: 'payment_methods',
   notifications: 'notifications',
   tollTransactions: 'toll_transactions',
   tollImportBatches: 'toll_import_batches',
@@ -7985,7 +8193,7 @@ async function hydrateStoreFromFirestore() {
         }
 
         // For system configuration collections, preserve system defaults if Firestore collection is empty
-        if ((field === 'customFields' || field === 'numberingConfigs') && snap.empty) {
+        if ((field === 'customFields' || field === 'numberingConfigs' || field === 'paymentMethods') && snap.empty) {
           // Keep default system definitions
         } else {
           // Empty collections result in an empty dataset - never fall back to demo records

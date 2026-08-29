@@ -2,14 +2,14 @@ import React, { useState } from 'react';
 import {
   Landmark, Sparkles, UploadCloud, CheckCircle2,
   AlertCircle, ArrowRight, RefreshCw, FileSpreadsheet,
-  HelpCircle, DollarSign, ShieldCheck, Tag, History
+  HelpCircle, DollarSign, ShieldCheck, Tag, History, Copy
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { Modal } from '../common/Modal';
-import { RECEIVED_AMOUNT_CLASSIFICATIONS, type ReceivedAmountClassification, type BankTransaction } from '../../types';
+import { RECEIVED_AMOUNT_CLASSIFICATIONS, type ReceivedAmountClassification, type BankTransaction, type BankImportBatch, type BankMatchClassification } from '../../types';
 
 // FIN-002 labels -- every classification must be a real, human choice, so
 // the dropdown never has a pre-selected value; 'unclassified' is listed
@@ -24,16 +24,39 @@ const CLASSIFICATION_LABELS: Record<ReceivedAmountClassification, { en: string; 
   unclassified: { en: 'Unclassified -- genuinely unknown', ar: 'غير مصنّف -- غير معروف فعلياً' }
 };
 
+// Bank Reconciliation matching-outcome labels (distinct from the FIN-002
+// classification above): the WHY behind comparing a bank statement line to
+// what's already recorded in the CRM. Computed server-side by
+// classifyBankRow() in src/server/bankReconciliation.ts -- never guessed
+// here, and never itself a reconcile/approval action.
+const MATCH_LABELS: Record<BankMatchClassification, { en: string; ar: string; badge: 'emerald' | 'amber' | 'sky' | 'rose' | 'zinc' }> = {
+  matched: { en: 'Matched', ar: 'مطابق', badge: 'emerald' },
+  needs_review: { en: 'Needs Review', ar: 'يحتاج مراجعة', badge: 'amber' },
+  unrecorded_transfer: { en: 'Unrecorded Transfer', ar: 'تحويل غير مسجل', badge: 'sky' },
+  amount_mismatch: { en: 'Amount Mismatch', ar: 'اختلاف مبلغ', badge: 'rose' },
+  duplicate_transaction: { en: 'Duplicate Transaction', ar: 'عملية مكررة', badge: 'rose' }
+};
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 export const BankReconciliationView: React.FC = () => {
   const { language, t } = useLanguage();
   const {
     bankTransactions, bankBatches, runAutoReconciliation,
-    reconcileBankTransaction, reclassifyBankTransaction, uploadBankBatch
+    reconcileBankTransaction, reclassifyBankTransaction, previewBankImport, confirmBankImport
   } = useCRM();
 
   const [filter, setFilter] = useState<'all' | 'reconciled' | 'unmatched'>('all');
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
 
   // FIN-002: reconciling now requires an explicit classification choice --
@@ -41,6 +64,7 @@ export const BankReconciliationView: React.FC = () => {
   // guessed.
   const [confirmTxn, setConfirmTxn] = useState<BankTransaction | null>(null);
   const [confirmClassification, setConfirmClassification] = useState<ReceivedAmountClassification | ''>('');
+  const [duplicateOverrideReason, setDuplicateOverrideReason] = useState('');
   const [isConfirming, setIsConfirming] = useState(false);
 
   const [reclassifyTxn, setReclassifyTxn] = useState<BankTransaction | null>(null);
@@ -54,6 +78,16 @@ export const BankReconciliationView: React.FC = () => {
   // never exposed as real fields in the UI.
   const [importBankName, setImportBankName] = useState('Emirates NBD');
   const [importAccountNumber, setImportAccountNumber] = useState('');
+  const [importFile, setImportFile] = useState<{ fileName: string; fileBase64: string } | null>(null);
+  const [importPreview, setImportPreview] = useState<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] } | null>(null);
+  const [importError, setImportError] = useState('');
+
+  const resetImportModal = () => {
+    setImportModalOpen(false);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportError('');
+  };
 
   const handleRunReconciliation = async () => {
     setIsProcessingAI(true);
@@ -64,20 +98,39 @@ export const BankReconciliationView: React.FC = () => {
     }
   };
 
-  const handleImportSample = async () => {
+  const handleFileSelected = async (file: File) => {
+    setImportError('');
+    setImportPreview(null);
+    setIsPreviewing(true);
+    try {
+      const fileBase64 = await readFileAsBase64(file);
+      setImportFile({ fileName: file.name, fileBase64 });
+      const preview = await previewBankImport({
+        fileName: file.name,
+        fileBase64,
+        bankName: importBankName || undefined,
+        accountNumber: importAccountNumber || undefined
+      });
+      setImportPreview(preview);
+    } catch (err: any) {
+      setImportError(err?.message || 'Failed to read/parse this file.');
+      setImportFile(null);
+    } finally {
+      setIsPreviewing(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importFile) return;
     setIsImporting(true);
     try {
-      // No real file-parsing yet (the drag & drop box below is a visual
-      // placeholder) -- this generates a realistic sample statement for the
-      // bank account you specify, going through the exact same server-side
-      // AI-matching pipeline a real parsed statement would use.
-      await uploadBankBatch({
-        fileName: `${importBankName.replace(/\s+/g, '_')}_statement.csv`,
-        bankName: importBankName || 'Emirates NBD',
-        accountNumber: importAccountNumber || undefined,
-        transactions: []
+      await confirmBankImport({
+        fileName: importFile.fileName,
+        fileBase64: importFile.fileBase64,
+        bankName: importBankName || undefined,
+        accountNumber: importAccountNumber || undefined
       });
-      setImportModalOpen(false);
+      resetImportModal();
     } finally {
       setIsImporting(false);
     }
@@ -85,11 +138,16 @@ export const BankReconciliationView: React.FC = () => {
 
   const handleSubmitConfirm = async () => {
     if (!confirmTxn || !confirmClassification) return;
+    if (confirmTxn.matchClassification === 'duplicate_transaction' && !duplicateOverrideReason.trim()) return;
     setIsConfirming(true);
     try {
-      await reconcileBankTransaction(confirmTxn.id, 'invoice', confirmTxn.suggestedMatch?.invoiceId || '', confirmClassification);
+      await reconcileBankTransaction(
+        confirmTxn.id, 'invoice', confirmTxn.suggestedMatch?.invoiceId || '', confirmClassification,
+        confirmTxn.matchClassification === 'duplicate_transaction' ? duplicateOverrideReason.trim() : undefined
+      );
       setConfirmTxn(null);
       setConfirmClassification('');
+      setDuplicateOverrideReason('');
     } finally {
       setIsConfirming(false);
     }
@@ -267,6 +325,13 @@ export const BankReconciliationView: React.FC = () => {
                     </td>
                     <td className="p-4 text-center">
                       <div className="flex flex-col items-center gap-1">
+                        {!txn.reconciled && txn.matchClassification && (
+                          <span title={txn.matchReasonAr && txn.matchReason ? (language === 'ar' ? txn.matchReasonAr : txn.matchReason) : undefined}>
+                            <Badge variant={MATCH_LABELS[txn.matchClassification].badge} size="sm">
+                              {MATCH_LABELS[txn.matchClassification][language === 'ar' ? 'ar' : 'en']}
+                            </Badge>
+                          </span>
+                        )}
                         <Badge variant={txn.reconciled ? 'emerald' : txn.status === 'matched' ? 'amber' : 'zinc'} size="sm">
                           {(txn.status || '').toUpperCase()}
                         </Badge>
@@ -284,11 +349,17 @@ export const BankReconciliationView: React.FC = () => {
                     <td className="p-4 text-end">
                       {!txn.reconciled ? (
                         <button
-                          onClick={() => { setConfirmTxn(txn); setConfirmClassification(''); }}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-semibold transition-all shadow-sm"
+                          onClick={() => { setConfirmTxn(txn); setConfirmClassification(''); setDuplicateOverrideReason(''); }}
+                          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl font-semibold transition-all shadow-sm ${
+                            txn.matchClassification === 'duplicate_transaction'
+                              ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40'
+                              : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
+                          }`}
                         >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>{language === 'ar' ? 'تأكيد وترحيل' : 'Confirm & Post'}</span>
+                          {txn.matchClassification === 'duplicate_transaction' ? <Copy className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                          <span>{txn.matchClassification === 'duplicate_transaction'
+                            ? (language === 'ar' ? 'مراجعة التكرار' : 'Review Duplicate')
+                            : (language === 'ar' ? 'تأكيد وترحيل' : 'Confirm & Post')}</span>
                         </button>
                       ) : (
                         <div className="flex flex-col items-end gap-1">
@@ -313,13 +384,18 @@ export const BankReconciliationView: React.FC = () => {
         </div>
       </div>
 
-      {/* Import Modal */}
+      {/* Import Modal -- real CSV/Excel parsing, preview-then-confirm. Every
+          row is classified server-side (classifyBankRow) before anything is
+          shown here; nothing is written to Firestore until "Confirm Import"
+          is pressed, and even then no Payment/Invoice is ever touched --
+          only BankTransaction/BankImportBatch records land, exactly like
+          before this rework. */}
       <Modal
         isOpen={importModalOpen}
-        onClose={() => setImportModalOpen(false)}
+        onClose={resetImportModal}
         title={language === 'ar' ? 'استيراد كشف حساب بنكي' : 'Import Bank Statement'}
-        subtitle={language === 'ar' ? 'حدد الحساب البنكي وارفع الكشف (MT940 أو CSV)' : 'Pick the bank account, then upload its MT940 or CSV statement'}
-        maxWidth="md"
+        subtitle={language === 'ar' ? 'حدد الحساب البنكي وارفع الكشف (CSV أو Excel)' : 'Pick the bank account, then upload its CSV or Excel statement'}
+        maxWidth="lg"
       >
         <div className="space-y-4 text-xs">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -349,27 +425,110 @@ export const BankReconciliationView: React.FC = () => {
             </div>
           </div>
 
-          <div className="border-2 border-dashed border-zinc-800 rounded-2xl p-8 text-center space-y-3 bg-zinc-950/50">
-            <FileSpreadsheet className="w-10 h-10 text-[#D4AF37] mx-auto" />
-            <div>
-              <p className="font-semibold text-zinc-200">{language === 'ar' ? 'اسحب وأفلت كشف الحساب (CSV / Excel)' : 'Drag & drop bank statement CSV / Excel'}</p>
-              <p className="text-zinc-500 text-[11px] mt-0.5">
-                {language === 'ar' ? 'استيراد الملف نفسه لسه ما اتفعّلش -- الزرار تحت بيولّد كشف تجريبي واقعي لنفس الحساب اللي حددته عشان تجرب المطابقة الآلية.' : 'Real file parsing isn’t wired up yet -- the button below generates a realistic sample statement for the account above so you can try the AI matching flow.'}
-              </p>
+          {!importPreview && (
+            <div className="border-2 border-dashed border-zinc-800 rounded-2xl p-8 text-center space-y-3 bg-zinc-950/50">
+              <FileSpreadsheet className="w-10 h-10 text-[#D4AF37] mx-auto" />
+              <div>
+                <p className="font-semibold text-zinc-200">{language === 'ar' ? 'اختر كشف الحساب (CSV / Excel)' : 'Choose a bank statement file (CSV / Excel)'}</p>
+                <p className="text-zinc-500 text-[11px] mt-0.5">
+                  {language === 'ar' ? 'سيتم تحليل الملف ومطابقته آلياً، وستُعرض لك النتيجة للمراجعة قبل أي حفظ.' : 'The file is parsed and matched automatically -- you\'ll review the result below before anything is saved.'}
+                </p>
+              </div>
+              <input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                disabled={isPreviewing}
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleFileSelected(f); }}
+                className="block mx-auto text-[11px] text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-semibold file:bg-[#D4AF37] file:text-zinc-950 hover:file:brightness-110 cursor-pointer"
+              />
+              {isPreviewing && (
+                <p className="text-zinc-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> {language === 'ar' ? 'جاري التحليل والمطابقة...' : 'Parsing & matching...'}
+                </p>
+              )}
+              {importError && (
+                <p className="text-rose-400 flex items-center justify-center gap-2">
+                  <AlertCircle className="w-3.5 h-3.5" /> {importError}
+                </p>
+              )}
             </div>
-          </div>
+          )}
 
-          <div className="pt-2">
-            <button
-              onClick={handleImportSample}
-              disabled={isImporting}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-bold shadow-md hover:brightness-110 active:scale-95 transition-all disabled:opacity-60"
-            >
-              {isImporting
-                ? (language === 'ar' ? 'جاري التحميل...' : 'Loading...')
-                : (language === 'ar' ? `تحميل ومعالجة كشف ${importBankName || ''}` : `Load & Parse ${importBankName || 'Bank'} Feed`)}
-            </button>
-          </div>
+          {importPreview && (
+            <div className="space-y-3">
+              {importPreview.warnings.length > 0 && (
+                <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-300 space-y-1">
+                  {importPreview.warnings.map((w, i) => <p key={i}>&bull; {w}</p>)}
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-center">
+                  <p className="text-zinc-500 text-[10px] uppercase">{language === 'ar' ? 'إجمالي المعاملات' : 'Total Rows'}</p>
+                  <p className="font-bold text-zinc-100 text-lg">{importPreview.transactions.length}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-center">
+                  <p className="text-zinc-500 text-[10px] uppercase">{language === 'ar' ? 'مطابق' : 'Matched'}</p>
+                  <p className="font-bold text-emerald-400 text-lg">{importPreview.batch.matchedCount}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-center">
+                  <p className="text-zinc-500 text-[10px] uppercase">{language === 'ar' ? 'مكرر' : 'Duplicate'}</p>
+                  <p className="font-bold text-rose-400 text-lg">{importPreview.batch.duplicateCount}</p>
+                </div>
+              </div>
+
+              {importPreview.batch.unmatchedCrmPayments && importPreview.batch.unmatchedCrmPayments.length > 0 && (
+                <div className="p-3 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-1.5">
+                  <p className="text-sky-300 font-semibold">
+                    {language === 'ar' ? `${importPreview.batch.unmatchedCrmPayments.length} دفعة غير موجودة بالبنك` : `${importPreview.batch.unmatchedCrmPayments.length} payment(s) not found in the bank`}
+                  </p>
+                  {importPreview.batch.unmatchedCrmPayments.slice(0, 5).map(p => (
+                    <p key={p.paymentId} className="text-zinc-400 text-[11px]">
+                      {p.customerName} &middot; {p.amount.toLocaleString()} AED &middot; {language === 'ar' ? p.reasonAr : p.reasonEn}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              <div className="max-h-64 overflow-y-auto rounded-xl border border-zinc-800 divide-y divide-zinc-800/60">
+                {importPreview.transactions.slice(0, 50).map((t, i) => (
+                  <div key={i} className="p-2.5 flex items-center justify-between gap-2 text-[11px]">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-zinc-200 truncate font-mono">{t.description || '-'}</p>
+                      <p className="text-zinc-500">{t.date} &middot; {(t.credit || t.debit || 0).toLocaleString()} AED</p>
+                    </div>
+                    {t.matchClassification && (
+                      <span title={language === 'ar' ? t.matchReasonAr : t.matchReason}>
+                        <Badge variant={MATCH_LABELS[t.matchClassification].badge} size="sm">
+                          {MATCH_LABELS[t.matchClassification][language === 'ar' ? 'ar' : 'en']}
+                        </Badge>
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setImportFile(null); setImportPreview(null); }}
+                  className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
+                >
+                  {language === 'ar' ? 'اختيار ملف آخر' : 'Choose a Different File'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmImport}
+                  disabled={isImporting}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-bold shadow-md hover:brightness-110 active:scale-95 transition-all disabled:opacity-60"
+                >
+                  {isImporting
+                    ? (language === 'ar' ? 'جاري الحفظ...' : 'Saving...')
+                    : (language === 'ar' ? `تأكيد استيراد ${importPreview.transactions.length} معاملة` : `Confirm Import of ${importPreview.transactions.length} Transaction(s)`)}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -377,7 +536,7 @@ export const BankReconciliationView: React.FC = () => {
           no default is pre-selected, so a reconciler must actually choose. */}
       <Modal
         isOpen={!!confirmTxn}
-        onClose={() => { setConfirmTxn(null); setConfirmClassification(''); }}
+        onClose={() => { setConfirmTxn(null); setConfirmClassification(''); setDuplicateOverrideReason(''); }}
         title={language === 'ar' ? 'تأكيد المعاملة وتصنيفها' : 'Confirm & Classify Transaction'}
         subtitle={language === 'ar' ? 'كل مبلغ مستلم يجب أن يُصنَّف قبل ترحيله.' : 'Every received amount must be classified before it is posted.'}
         maxWidth="sm"
@@ -391,6 +550,27 @@ export const BankReconciliationView: React.FC = () => {
                 <p className="text-zinc-400">{language === 'ar' ? 'العميل المقترح:' : 'Suggested customer:'} {confirmTxn.suggestedMatch.customerName}</p>
               )}
             </div>
+
+            {confirmTxn.matchClassification === 'duplicate_transaction' && (
+              <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-500/40 space-y-2">
+                <p className="text-rose-300 font-semibold flex items-center gap-1.5">
+                  <Copy className="w-3.5 h-3.5" />
+                  {language === 'ar' ? 'تبدو هذه عملية مكررة' : 'This looks like a duplicate transaction'}
+                </p>
+                <p className="text-zinc-400">{language === 'ar' ? confirmTxn.matchReasonAr : confirmTxn.matchReason}</p>
+                <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">
+                  {language === 'ar' ? 'سبب تجاوز التكرار (إلزامي) *' : 'Reason to override the duplicate flag (required) *'}
+                </label>
+                <textarea
+                  required
+                  value={duplicateOverrideReason}
+                  onChange={e => setDuplicateOverrideReason(e.target.value)}
+                  rows={2}
+                  placeholder={language === 'ar' ? 'مثال: عمليتان منفصلتان فعلياً بنفس المبلغ والتاريخ.' : 'e.g. Two genuinely separate transactions with the same amount and date.'}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-rose-500/30 text-zinc-100 text-xs focus:outline-none focus:border-rose-400/60"
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
@@ -415,14 +595,14 @@ export const BankReconciliationView: React.FC = () => {
             <div className="pt-2 flex items-center justify-end gap-3">
               <button
                 type="button"
-                onClick={() => { setConfirmTxn(null); setConfirmClassification(''); }}
+                onClick={() => { setConfirmTxn(null); setConfirmClassification(''); setDuplicateOverrideReason(''); }}
                 className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
               >
                 {language === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 type="button"
-                disabled={!confirmClassification || isConfirming}
+                disabled={!confirmClassification || isConfirming || (confirmTxn.matchClassification === 'duplicate_transaction' && !duplicateOverrideReason.trim())}
                 onClick={handleSubmitConfirm}
                 className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50"
               >

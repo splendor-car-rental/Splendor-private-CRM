@@ -26,8 +26,8 @@ export interface UploadResult {
  */
 export async function uploadFile(
   file: File,
-  folder: 'avatars' | 'customer-documents' | 'vehicle-inspections',
-  extra?: { targetUserId?: string; customerId?: string; inspectionId?: string }
+  folder: 'avatars' | 'customer-documents' | 'vehicle-inspections' | 'payment-proofs' | 'bank-statements',
+  extra?: { targetUserId?: string; customerId?: string; inspectionId?: string; paymentId?: string; bankBatchId?: string }
 ): Promise<UploadResult> {
   const dataBase64 = await fileToBase64(file);
   const res = await apiFetch('/api/upload', {

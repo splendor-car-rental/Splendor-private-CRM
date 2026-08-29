@@ -707,6 +707,66 @@ gateway webhook event, never a client-reported "it worked."
 **RATIONALE FOR DEFERRAL**: This requires real, provider-issued production credentials (`STRIPE_SECRET_KEY`, `CHECKOUT_COM_SECRET_KEY`, etc.) and a business decision on which gateway Splendor contracts with -- neither exists in this environment, and fabricating a "working" integration without them would be worse than not having one (a false sense of production-readiness). `getActiveGatewayAdapter()`'s stubs for each named provider throw a specific, actionable error naming exactly what's missing; switching `PAYMENT_GATEWAY_PROVIDER` away from `sandbox` in production is a deliberate, visible action that fails loudly rather than silently doing nothing. A frontend checkout UI embedding the chosen gateway's own hosted card-entry SDK was likewise not built, since each real gateway has its own distinct SDK and building one against no real provider would be premature, fabricated UI.
 **STATUS**: **NOT BUILT — honestly deferred, requires production credentials.**
 
+## MODULE 17 — Collections & Bank Reconciliation
+
+Extends the existing Financial Engine (Payment/Invoice/Document/Audit) with
+a manageable manual-collection layer and a bank-statement matching engine
+-- no parallel financial ledger, no parallel document store. The core
+discipline throughout: bank-statement analysis only ever COMPUTES a
+classification and a suggestion; a Payment is only ever created or
+confirmed by an explicit human action.
+
+### RULE-BR01 — Manageable payment methods catalog
+**REQUIREMENT**: Manual payment recording must draw from an admin-editable list of payment methods (cash, POS card, bank transfer, cheque, etc.), not a hardcoded one.
+**RATIONALE**: `src/config/payments.ts`'s `DEFAULT_CUSTOMER_PAYMENT_METHODS`/`CustomerPaymentMethodDef` follows the exact same manageable-list pattern already proven by Procurement's `PROCUREMENT_PAYMENT_METHOD_DEFS` and the existing custom-fields catalog -- `globalStore.paymentMethods`, seeded from the defaults, editable via `GET/POST /api/payment-methods` and `PATCH /api/payment-methods/:key` (ceo/admin only), hydrated from and persisted to its own `payment_methods` Firestore collection with the same "preserve system defaults if empty" cold-start rule already used for `customFields`/`numberingConfigs`.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-BR02 — Manual payment recording enrichment
+**REQUIREMENT**: Every manually recorded payment links to a customer, a contract/reservation/invoice, a reference number, a proof of payment, the recording employee, and a verification status.
+**RATIONALE**: `Payment` gained additive fields only -- `reservationId` (a payment can predate any contract, e.g. a booking deposit), `proofDocumentId` (an id into the existing `CRMDocument`/Storage system, never a raw file blob on the Payment record), and `verificationStatus`/`verifiedBy`/`verifiedByName`/`verifiedAt`/`verificationNote`. `createConfirmedPayment()` now sets every new payment's `verificationStatus` to `pending_review` unconditionally -- attaching a proof file at recording time is not the same as a finance reviewer having actually checked it -- and `POST /api/payments/:id/verify` (finance/ceo/admin) is the one place that status ever changes, mirroring the existing FIN-002 reclassify-with-audit pattern. `POST /api/upload` gained two more folders (`payment-proofs`, `bank-statements`), both routed through the exact same authenticated `GET /api/documents/file` proxy every other upload folder already uses -- no new storage mechanism.
+**VERIFICATION METHOD**: `tests/bankReconciliation.test.ts` and the existing `Payment`/`CreateConfirmedPaymentInput` type surface.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-BR03 — Bank statement import: CSV/Excel first, PDF-ready by construction
+**REQUIREMENT**: Accept CSV/Excel statements now; the import layer must allow PDF to be added later without rebuilding the reconciliation engine.
+**RATIONALE**: `src/server/bankImportGuard.ts` classifies an upload by its own magic bytes (never the client-supplied filename) into `'excel' | 'csv' | 'pdf'`, mirroring `tollImportGuard.ts` exactly; a `'pdf'` upload is recognized and explicitly rejected today with a "not supported yet" message rather than silently mis-parsed. `src/server/bankStatementParsers.ts` isolates ALL column-detection/normalization logic into one shared `parseGridToBankRows(grid: string[][])` function that both `parseBankStatementExcel()` and `parseBankStatementCsv()` funnel into -- a future PDF text-extraction parser only has to produce the same plain grid (or the same `ParsedBankStatementRow[]` shape) and hand it to this one function; nothing in `bankReconciliation.ts` or the `POST /api/bank-batches` route changes.
+**VERIFICATION METHOD**: `tests/bankReconciliation.test.ts` -- CSV and Excel parsing (header-keyword detection, dr/cr-indicator columns, accounting-negative parentheses, missing-column warnings, unparseable-date skipping).
+**STATUS**: **IMPLEMENTED (this session)**; PDF parsing itself is RULE-BR09 below, honestly deferred.
+
+### RULE-BR04 — Matching/classification engine with a stated reason
+**REQUIREMENT**: Compare each bank statement line against CRM-recorded payments (amount, date, reference, customer, contract) and classify it as matched / needs review / unrecorded transfer / amount mismatch / duplicate transaction / payment not found in the bank -- each with a stated reason.
+**RATIONALE**: `src/server/bankReconciliation.ts`'s `classifyBankRow()` is a pure, read-only function (no Firestore, no globalStore mutation) producing exactly the five `BankMatchClassification` values plus a bilingual `reasonEn`/`reasonAr` for every row -- duplicate check first, then exact-reference match, then customer-identified-in-description match against open invoice balances, falling back to `unrecorded_transfer`. The sixth outcome, "دفعة غير موجودة بالبنك" (a CRM payment the statement never accounts for), is reported per-batch by `findUnmatchedCrmPayments()` on the `BankImportBatch` rather than fabricated as a nonexistent bank line. These are purely additive fields (`matchClassification`/`matchReason`/`matchReasonAr`/`duplicateOfTransactionId` on `BankTransaction`) alongside, never replacing, the pre-existing FIN-002 `receivedAmountClassification` money-type classification.
+**VERIFICATION METHOD**: `tests/bankReconciliation.test.ts` -- one test per classification outcome (exact match, reference-match-wrong-amount, ambiguous-reference, customer-match, customer-match-wrong-amount, customer-no-open-invoice, unrecorded transfer, debit-routed-to-review) plus `findUnmatchedCrmPayments` coverage.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-BR05 — Absolute rule: never auto-create or auto-confirm a payment from bank-statement analysis alone
+**REQUIREMENT (verbatim, mission brief)**: "ممنوع إنشاء أو تأكيد أي دفعة تلقائيًا بناءً على تحليل كشف البنك فقط. العمليات غير المطابقة تذهب للمراجعة والاعتماد." (Forbidden to automatically create or confirm any payment based on bank statement analysis alone; unmatched operations go to review and approval.)
+**RATIONALE**: Every `BankTransaction` created by `POST /api/bank-batches` -- confirmed or not, whatever its classification -- is written with `reconciled:false`; only a human's explicit, per-transaction `POST /api/bank-transactions/:id/reconcile` call ever sets it `true` or posts an invoice/customer-balance change. Building this rule's own test coverage surfaced a real, live violation of it: `CRMContext.tsx`'s `runAutoReconciliation()` looped over every high-confidence suggested match and called the reconcile endpoint on each one with zero human review -- a leftover from before this mission's absolute rule existed. It was rewritten to a non-mutating "N transaction(s) are ready for your review" summary; it no longer calls the reconcile endpoint under any condition.
+**VERIFICATION METHOD**: `tests/bankReconciliation.test.ts` -- "confirmed import persists transactions but NEVER a Payment" (asserts `globalStore.payments.length` is unchanged by import regardless of classification) and "never auto-confirmed by the import itself" (`txn.reconciled === false` immediately after a confirmed import, even for a `matched` row).
+**STATUS**: **IMPLEMENTED (this session)** -- including a fix to a pre-existing violation.
+
+### RULE-BR06 — Duplicate detection requires an explicit override to confirm
+**REQUIREMENT**: A transaction detected as probably duplicating an earlier one must not be reconcilable with a single click like any other row.
+**RATIONALE**: `findDuplicate()` (inside `classifyBankRow()`) checks both cross-batch (against `globalStore.bankTransactions`) and within-batch (against the rows already processed earlier in the same import) duplicates -- same date + amount, and same reference when both sides have one. `POST /api/bank-transactions/:id/reconcile` refuses (409) to reconcile a transaction whose `matchClassification === 'duplicate_transaction'` unless the request carries a non-empty `duplicateOverrideReason`, which is then recorded verbatim in the audit trail as a deliberate override, not silently dropped.
+**VERIFICATION METHOD**: `tests/bankReconciliation.test.ts` -- a within-batch duplicate (two identical rows in one file) and a cross-batch duplicate (the same statement imported twice) are both detected; reconciling either without a reason returns 409, and with one succeeds and is audited.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-BR07 — Manual approval reuses the existing reconcile/FIN-002 flow, never a parallel one
+**REQUIREMENT**: Approving a matched or reviewed transaction must post through the same financial-effect path every other reconciliation already uses.
+**RATIONALE**: No new "approve a bank transaction" endpoint was built -- the pre-existing `POST /api/bank-transactions/:id/reconcile` (FIN-002's mandatory-classification, idempotent, real-Firestore-transaction route) is reused unchanged in its financial-effect logic; this mission only added the duplicate-override gate in front of it (RULE-BR06).
+**VERIFICATION METHOD**: `tests/bankReconciliation.test.ts` -- "a plain (non-duplicate) manual reconcile posts the invoice balance -- the only path that ever does".
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-BR08 — Document/Storage and Audit reuse, never a parallel system
+**REQUIREMENT**: Proof-of-payment files and uploaded bank statements must use the existing Document/Storage and Audit Trail systems.
+**RATIONALE**: `payment-proofs/` and `bank-statements/` are two more folders on the same `POST /api/upload` -> `GET /api/documents/file` authenticated-proxy pipeline every other upload (avatars, customer documents, vehicle inspections) already uses -- no signed URL, no new bucket, no new access-control mechanism. Every route this module added (`/api/payment-methods`, `/api/payments/:id/verify`, the bank-batch import, the duplicate-override reconcile) calls the existing `recordAudit()` -- no separate collections-specific audit log.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-BR09 — PDF bank statement parsing
+**REQUIREMENT (deferred)**: Accept PDF bank statement exports, not just CSV/Excel.
+**RATIONALE FOR DEFERRAL**: The mission explicitly asked for CSV/Excel first with the import layer merely designed so PDF could be added later (see RULE-BR03) -- building PDF text-extraction now, without a real sample of the range of bank-issued PDF statement layouts this app will actually receive, risks exactly the kind of fabricated-but-untested parsing this codebase's standing anti-fabrication discipline exists to prevent. `detectBankImportFileKind()` already recognizes a PDF upload by its real magic bytes and returns a clear "not supported yet" error today, rather than silently mis-parsing or crashing.
+**STATUS**: **NOT BUILT — honestly deferred, extension point ready (see RULE-BR03).**
+
 ---
 
 ## Summary Table
@@ -743,7 +803,8 @@ table reflects the corrected, verified counts.
 | 14 Lease-to-Own | 14 | 0 | 14 | 0 |
 | 15 Vehicle Master Profile | 10 | 0 | 9 | 1 |
 | 16 Payment Gateway | 10 | 0 | 9 | 1 |
-| **Total** | **104** | **10** | **58** | **36** |
+| 17 Collections & Bank Reconciliation | 9 | 0 | 8 | 1 |
+| **Total** | **113** | **10** | **66** | **37** |
 
 26 rules were genuinely implemented, tested, and committed across this
 session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08,
@@ -861,3 +922,32 @@ provider-issued production credentials and a business decision on which
 gateway Splendor contracts with -- neither exists in this environment, and
 each named provider's stub throws a specific, actionable error naming
 exactly what production deployment still needs.
+
+Module 17 (Collections & Bank Reconciliation) extends the existing
+Financial Engine with a manageable manual-collection layer and a bank-
+statement matching engine -- BR01-BR08 (the manageable payment-methods
+catalog, manual-payment enrichment with proof/verification status, CSV/
+Excel import with a PDF-ready extension point, the five-classification
+matching engine plus the "payment not found in the bank" report, the
+absolute never-auto-confirm rule, duplicate-detection-requires-override,
+reuse of the existing FIN-002 reconcile route, and Document/Storage+Audit
+reuse) are real, tested (30 new tests -- pure unit coverage for the
+classification engine and the CSV/Excel parsers, plus route-level
+supertest coverage against the real Express app + mocked Firestore for
+import preview/confirm, duplicate override, and the manual approval flow --
+on top of the full pre-existing 426-test suite -- 456 total, zero
+regressions, re-verified against the real Firestore emulator via
+`npm test`), and additive to every existing engine (Payment, Invoice,
+Document/Storage, Audit Trail, FIN-002 reconciliation) per the same
+"extend, never duplicate" mandate as every other module. Building this
+module's own required test coverage (BR05) surfaced a real, live violation
+of this module's own absolute rule in code that predated this mission:
+`CRMContext.tsx`'s `runAutoReconciliation()` was silently auto-confirming
+every high-confidence suggested match with zero human review, one bank
+transaction at a time, in a loop -- fixed by rewriting it into a
+non-mutating review-summary function that never calls the reconcile
+endpoint. One rule is honestly deferred: BR09's PDF bank statement parsing
+was not built, since the mission explicitly asked for CSV/Excel first and
+the import layer is already structured (see BR03) so PDF support is a
+future addition to the parser layer alone, with zero changes to the
+reconciliation engine or its routes.

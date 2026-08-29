@@ -148,8 +148,9 @@ interface CRMContextType {
   applyDeposit: (depositId: string, amount: number, reason: string, chargeId: string) => Promise<Deposit>;
   refundDeposit: (depositId: string, amount: number) => Promise<Deposit>;
   
-  uploadBankBatch: (batchData: any) => Promise<void>;
-  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification) => Promise<void>;
+  previewBankImport: (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => Promise<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>;
+  confirmBankImport: (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => Promise<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>;
+  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification, duplicateOverrideReason?: string) => Promise<void>;
   reclassifyBankTransaction: (txnId: string, classification: ReceivedAmountClassification, reason: string) => Promise<void>;
   runAutoReconciliation: () => Promise<void>;
 
@@ -1048,29 +1049,51 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return data.deposit;
   };
 
-  const uploadBankBatch = async (batchData: any) => {
+  // Real CSV/Excel statement parsing (server.ts / bankStatementParsers.ts),
+  // routed through the exact same preview-then-confirm shape as the toll
+  // importer above: `confirm:false` only ever asks the server to parse and
+  // classify the file, never writes anything, so the caller can render the
+  // matched/needs-review/duplicate/etc breakdown before anyone commits to
+  // it. This is also where the mission's absolute rule actually lives on
+  // the frontend: nothing here (or in the routes it calls) ever turns a
+  // parsed row into a Payment or a reconciled BankTransaction by itself.
+  const runBankImport = async (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }, confirm: boolean) => {
     const res = await fetch('/api/bank-batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(batchData)
+      body: JSON.stringify({ ...file, confirm })
     });
-    let data: { batch: BankImportBatch & { totalTransactions: number; bankName: string } };
+    return parseApiResponse<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>(res, 'Bank statement import failed.');
+  };
+
+  const previewBankImport = async (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => {
     try {
-      data = await parseApiResponse(res, 'Failed to import bank statement.');
+      return await runBankImport(file, false);
+    } catch (err: any) {
+      showToast('Preview Failed', err.message, 'error');
+      throw err;
+    }
+  };
+
+  const confirmBankImport = async (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => {
+    let data: { batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] };
+    try {
+      data = await runBankImport(file, true);
     } catch (err: any) {
       showToast('Import Failed', err.message, 'error');
       throw err;
     }
     await fetchData();
-    showToast('Statement Imported', `Imported ${data.batch.totalTransactions} transactions from ${data.batch.bankName}.`);
+    showToast('Statement Imported', `Imported ${data.transactions.length} transaction(s) from ${data.batch.bankName}.`);
+    return data;
   };
 
-  const reconcileBankTransaction = async (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification) => {
+  const reconcileBankTransaction = async (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification, duplicateOverrideReason?: string) => {
     const idempotencyKey = crypto.randomUUID();
     const res = await fetch(`/api/bank-transactions/${txnId}/reconcile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-      body: JSON.stringify({ targetRecordType, targetRecordId, classification })
+      body: JSON.stringify({ targetRecordType, targetRecordId, classification, duplicateOverrideReason })
     });
     let data: { transaction: BankTransaction };
     try {
@@ -1102,36 +1125,32 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /**
-   * Bulk version of reconcileBankTransaction: auto-confirms every
-   * unreconciled transaction that already has a high-confidence AI
-   * suggested match (>= 90), instead of requiring one click per row.
-   * Was previously called by BankReconciliationView's "Run Auto
-   * Reconciliation" button but never actually defined -- clicking it threw
-   * "runAutoReconciliation is not a function".
+   * ABSOLUTE RULE (Bank Reconciliation mission brief): a payment/receipt
+   * may NEVER be created or confirmed automatically from bank-statement
+   * analysis alone -- every non-"matched" outcome goes to human review and
+   * approval, and even a "matched" row is only ever confirmed by an
+   * explicit, individual reconcileBankTransaction() call a person makes
+   * (see handleConfirmMatch in BankReconciliationView.tsx).
+   *
+   * This function previously violated that rule outright: it looped over
+   * every high-confidence suggested match and called
+   * reconcileBankTransaction() on each one with zero human review,
+   * silently posting invoice/customer-balance updates a person never saw.
+   * It's kept (same name, same call sites) purely as a non-mutating
+   * "surface what's ready for review" summary -- it never reconciles
+   * anything itself.
    */
   const runAutoReconciliation = async () => {
     const candidates = bankTransactions.filter(
-      t => !t.reconciled && t.suggestedMatch && t.suggestedMatch.confidence >= 90 && t.suggestedMatch.invoiceId
+      t => !t.reconciled && t.matchClassification === 'matched' && t.suggestedMatch
     );
-    let count = 0;
-    for (const txn of candidates) {
-      try {
-        // 'settlement' is not a guess here: this path only ever fires for a
-        // transaction the AI matched to a SPECIFIC existing invoiceId at
-        // >=90% confidence, so the one classification actually implied by
-        // that match is "this settles that invoice." A human reconciling
-        // manually still has to pick explicitly -- see handleConfirmMatch
-        // in BankReconciliationView.tsx.
-        await reconcileBankTransaction(txn.id, 'invoice', txn.suggestedMatch!.invoiceId!, 'settlement');
-        count += 1;
-      } catch (e) {
-        console.warn(`Auto-reconciliation skipped ${txn.id}:`, e);
-      }
-    }
-    if (count > 0) {
-      showToast('Auto-Reconciliation Complete', `Automatically reconciled ${count} high-confidence transaction(s).`);
+    if (candidates.length > 0) {
+      showToast(
+        'Review Needed',
+        `${candidates.length} transaction(s) have a high-confidence suggested match ready for your review. Confirm each one individually -- no payment is ever auto-confirmed from a bank statement alone.`
+      );
     } else {
-      showToast('Auto-Reconciliation Complete', 'No high-confidence unmatched transactions were found.');
+      showToast('No Action Needed', 'No unreconciled transactions currently have a high-confidence suggested match.');
     }
   };
 
@@ -1501,7 +1520,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
-      uploadBankBatch, reconcileBankTransaction, reclassifyBankTransaction, runAutoReconciliation,
+      previewBankImport, confirmBankImport, reconcileBankTransaction, reclassifyBankTransaction, runAutoReconciliation,
       addManualToll, updateTollTransaction, deleteTollTransaction,
       previewTollImport, confirmTollImport, updateTollPricingConfig,
       updateNotificationConfig, updateCustomerNotificationConfig,

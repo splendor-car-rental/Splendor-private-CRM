@@ -1185,14 +1185,35 @@ export interface Deposit {
   gatewayPaymentIntentId?: string;
 }
 
-export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'online_link' | 'corporate_credit';
+// Widened additively (Collections & Bank Reconciliation mission) to name
+// the specific manual methods staff actually use day-to-day -- 'card'
+// stays for backward compatibility with existing records; 'pos_card' is
+// the distinct in-person POS-terminal card path, 'cheque' and 'other' are
+// new. See src/config/payments.ts for the manageable catalog of methods
+// (labels, active/inactive, whether a reference/proof is required) that
+// this literal union is validated against.
+export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'pos_card' | 'cheque' | 'online_link' | 'corporate_credit' | 'other';
 export type PaymentStatus = 'received' | 'validated' | 'allocated' | 'refunded';
+
+/**
+ * Whether a second person has confirmed a manually-recorded payment is
+ * genuine (matches its proof, correct amount/reference) -- additive to the
+ * existing `status` lifecycle (received/validated/allocated/refunded),
+ * which already tracks allocation, not verification. A payment recorded
+ * without proof (e.g. cash handed over in person) can be verified
+ * immediately by the same recorder; one requiring proof (bank transfer,
+ * cheque, POS) is 'pending_review' until someone actually checks the
+ * attached proof against the claimed amount/reference.
+ */
+export type PaymentVerificationStatus = 'pending_review' | 'verified' | 'rejected';
 
 export interface Payment {
   id: string; // PAY-000001
   customerId: string;
   customerName: string;
   contractId?: string;
+  /** Additive -- a payment can be tied to a reservation before any contract exists yet (e.g. a booking deposit). */
+  reservationId?: string;
   invoiceId?: string;
   amount: number;
   method: PaymentMethod;
@@ -1209,6 +1230,15 @@ export interface Payment {
   createdAt: string;
   /** Set only when this Payment was created from a gateway-confirmed PaymentIntent -- never when manually recorded (cash/bank transfer). */
   gatewayPaymentIntentId?: string;
+
+  // ---- Manual payment recording enrichment (Collections & Bank Reconciliation mission) ----
+  /** Links to the existing Document system (CRMDocument.id) -- proof of payment (receipt photo, transfer confirmation, cheque scan). Never a raw file blob on the Payment record itself. */
+  proofDocumentId?: string;
+  verificationStatus?: PaymentVerificationStatus;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  verifiedAt?: string;
+  verificationNote?: string;
 }
 
 // ----------------------------------------------------
@@ -1411,6 +1441,47 @@ export interface BankTransaction {
   // not a change to the money itself.
   receivedAmountClassification?: ReceivedAmountClassification;
   classificationHistory?: ReceivedAmountClassificationEvent[];
+
+  // ---- Bank Reconciliation Engine matching classification (Collections &
+  // Bank Reconciliation mission) -- purely additive metadata computed by
+  // src/server/bankReconciliation.ts at import/refresh time. Never drives
+  // reconciliation on its own: `status`/`reconciled` above still only ever
+  // change via a human's explicit POST /api/bank-transactions/:id/reconcile
+  // call. This is the "why" shown to the reconciler, not an approval. ----
+  matchClassification?: BankMatchClassification;
+  matchReason?: string;
+  matchReasonAr?: string;
+  /** Set only when matchClassification is 'duplicate_transaction' -- the id of the earlier bank transaction this appears to repeat. */
+  duplicateOfTransactionId?: string;
+}
+
+/**
+ * The reconciler-facing outcome of comparing one bank statement line
+ * against everything already recorded in the CRM (Payments, Invoices,
+ * customers/contracts) -- distinct from `BankTransactionStatus` above,
+ * which tracks the human WORKFLOW (unmatched -> suggested -> approved ->
+ * reconciled). This is the WHY: matched, needs a human look, a transfer
+ * with nothing recorded for it yet, a recorded amount that doesn't equal
+ * the bank's amount, or a line that repeats an earlier import.
+ */
+export type BankMatchClassification =
+  | 'matched'
+  | 'needs_review'
+  | 'unrecorded_transfer'
+  | 'amount_mismatch'
+  | 'duplicate_transaction';
+
+/** A CRM-recorded Payment for the statement's period that no imported bank line could be matched to -- "دفعة غير موجودة بالبنك" (payment not found in the bank). Computed per batch, never stored as a fabricated BankTransaction (there is no bank line for it). */
+export interface UnmatchedCrmPaymentReportEntry {
+  paymentId: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  method: PaymentMethod;
+  referenceNumber: string;
+  receivedAt: string;
+  reasonAr: string;
+  reasonEn: string;
 }
 
 export interface BankImportBatch {
@@ -1421,6 +1492,8 @@ export interface BankImportBatch {
   statementPeriod: string;
   uploadedBy: string;
   uploadedAt: string;
+  /** Recorded CRM payments in this statement's period with no matching bank line -- see UnmatchedCrmPaymentReportEntry. */
+  unmatchedCrmPayments?: UnmatchedCrmPaymentReportEntry[];
   totalTransactions: number;
   matchedCount: number;
   unmatchedCount: number;
@@ -1478,12 +1551,12 @@ export interface Communication {
 export interface CRMDocument {
   id: string; // DOC-000001
   title: string;
-  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'other';
+  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'other';
   fileName: string;
   fileSize: string;
   fileType: string;
   fileUrl: string;
-  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice';
+  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch';
   relatedEntityId: string;
   relatedEntityName?: string;
   expiryDate?: string;
