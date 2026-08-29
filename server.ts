@@ -4109,7 +4109,7 @@ function webhookRateLimiter(maxRequestsPerMinute: number) {
 // the same event, and recordWhatsAppInboundEvent's idempotency key makes
 // that retry safe once the write actually succeeds.
 //
-// Module 10: every inbound MESSAGE (not status update) is additionally run
+// Module 13: every inbound MESSAGE (not status update) is additionally run
 // through the conversation engine (processInboundWhatsAppMessage), gated by
 // a `processedAt` flag on the SAME raw event document -- deliberately
 // separate from "is the raw event stored" (recordWhatsAppInboundEvent's own
@@ -4188,7 +4188,7 @@ app.post('/api/whatsapp/webhook', webhookRateLimiter(300), asyncHandler(async (r
 }));
 
 // ----------------------------------------------------
-// Module 10: WhatsApp Unified Inbox (Human Concierge)
+// Module 13: WhatsApp Unified Inbox (Human Concierge)
 // ----------------------------------------------------
 // Every route here requires a real signed-in staff session (the global
 // requireAuth gate already covers everything under /api/ except the

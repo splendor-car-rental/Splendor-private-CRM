@@ -826,7 +826,7 @@ Pickup: ${data.pickupLocation || 'Dubai Flagship Showroom'} | Return: ${data.ret
       isVIP: false,
       tags: ['WhatsApp Conversational Booking'],
       preferences: { favoriteCategory: targetVehicle.category },
-      notes: 'Created via the WhatsApp conversational booking flow (Module 10). Documents and full KYC pending.',
+      notes: 'Created via the WhatsApp conversational booking flow (Module 13). Documents and full KYC pending.',
       lifetimeValue: 0,
       totalRentals: 0,
       outstandingBalance: 0,

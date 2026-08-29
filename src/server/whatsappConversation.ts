@@ -1,4 +1,4 @@
-// WhatsApp Conversational Commerce Engine (Splendor Master Rule Set, Module 10)
+// WhatsApp Conversational Commerce Engine (Splendor Master Rule Set, Module 13)
 // -----------------------------------------------------------------------------
 // This is the piece server.ts's own webhook comment (see recordWhatsAppInboundEvent)
 // flagged as "a separate, larger feature to build once this durable log is in

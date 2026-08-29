@@ -20,7 +20,7 @@
 // custom reminders all save normally), it just doesn't actually dispatch
 // anything over WhatsApp yet.
 //
-// Module 10 (conversational commerce) added the three interactive senders
+// Module 13 (conversational commerce) added the three interactive senders
 // below. They share one Graph API call helper with the original plain-text
 // sender so the "not configured" / network-error / HTTP-error handling
 // logic exists in exactly one place. Every payload shape follows Meta's

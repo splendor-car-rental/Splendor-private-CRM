@@ -52,7 +52,7 @@ vi.mock('firebase-admin', () => {
     }
   };
 
-  const makeDocRef = (collectionName: string, id: string) => ({
+  const makeDocRef = (collectionName: string, id: string): any => ({
     id,
     __collection: collectionName,
     get: async () => {
@@ -81,7 +81,11 @@ vi.mock('firebase-admin', () => {
     },
     delete: async () => {
       collectionOf(collectionName).delete(id);
-    }
+    },
+    // A doc's subcollection is just another top-level collection keyed by
+    // "<collection>/<docId>/<subName>" -- enough for whatsappConversation.ts's
+    // messages subcollection to round-trip through set/get/orderBy/limit.
+    collection: (subName: string) => makeCollectionRef(`${collectionName}/${id}/${subName}`)
   });
 
   const makeCollectionRef = (name: string): any => ({
@@ -91,7 +95,9 @@ vi.mock('firebase-admin', () => {
       const docs = Array.from(col.entries()).map(([id, data]) => ({ id, data: () => data }));
       return { docs, size: docs.length };
     },
-    where: () => makeCollectionRef(name)
+    where: () => makeCollectionRef(name),
+    orderBy: () => makeCollectionRef(name),
+    limit: () => makeCollectionRef(name)
   });
 
   const firestoreObj: any = {
@@ -895,5 +901,98 @@ describe('Vehicle Inspection & Photo Evidence (Splendor Master Rule Set, Module 
     const allowedVoid = await request(app).post(`/api/inspections/${id}/void`).set(authAs(CEO_UID)).send({ reason: 'Started on the wrong vehicle.' });
     expect(allowedVoid.status).toBe(200);
     expect(allowedVoid.body.status).toBe('voided');
+  });
+});
+
+describe('WhatsApp Unified Inbox (Splendor Master Rule Set, Module 13)', () => {
+  // Route-level authorization + basic behavior only -- the real state
+  // machine, customer matching, and reservation-creation flow are covered
+  // against the REAL Firestore emulator in tests/whatsappConversation.test.ts
+  // (listConversations()'s .where() queries only work correctly there; this
+  // mock's .where() is a no-op passthrough, same limitation documented for
+  // listInspections() above).
+  function seedConversation(phone: string, overrides: Record<string, any> = {}) {
+    const col = adminMock.store.get('whatsapp_conversations') || new Map();
+    adminMock.store.set('whatsapp_conversations', col);
+    col.set(phone, {
+      id: phone, phone, customerMatchStatus: 'unmatched', state: 'BROWSING', botActive: true,
+      priority: 'normal', tags: [], draft: {}, unread: true,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      ...overrides
+    });
+  }
+
+  it('rejects a non-operational role from reading the inbox', async () => {
+    const res = await request(app).get('/api/whatsapp/conversations').set(authAs(FINANCE_UID));
+    expect(res.status).toBe(403);
+  });
+
+  it('lists conversations for an authorized role', async () => {
+    seedConversation('971500000100');
+    const res = await request(app).get('/api/whatsapp/conversations').set(authAs(OPS_UID));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('404s for an unknown conversation', async () => {
+    const res = await request(app).get('/api/whatsapp/conversations/971500000999').set(authAs(OPS_UID));
+    expect(res.status).toBe(404);
+  });
+
+  it('fetches a single conversation with its message thread', async () => {
+    seedConversation('971500000101');
+    const res = await request(app).get('/api/whatsapp/conversations/971500000101').set(authAs(OPS_UID));
+    expect(res.status).toBe(200);
+    expect(res.body.phone).toBe('971500000101');
+    expect(Array.isArray(res.body.messages)).toBe(true);
+  });
+
+  it('rejects assign/handoff/reply from a role without operational access', async () => {
+    seedConversation('971500000102');
+    const assign = await request(app).post('/api/whatsapp/conversations/971500000102/assign').set(authAs(FINANCE_UID)).send({ priority: 'vip' });
+    expect(assign.status).toBe(403);
+    const handoff = await request(app).post('/api/whatsapp/conversations/971500000102/handoff').set(authAs(FINANCE_UID)).send({ botActive: false });
+    expect(handoff.status).toBe(403);
+    const reply = await request(app).post('/api/whatsapp/conversations/971500000102/reply').set(authAs(FINANCE_UID)).send({ text: 'hi' });
+    expect(reply.status).toBe(403);
+  });
+
+  it('assigns priority/employee as operations, and audits the change', async () => {
+    seedConversation('971500000103');
+    const res = await request(app)
+      .post('/api/whatsapp/conversations/971500000103/assign')
+      .set(authAs(OPS_UID))
+      .send({ priority: 'vip', employeeId: 'USR-002', employeeName: 'Fleet Manager' });
+    expect(res.status).toBe(200);
+    expect(res.body.priority).toBe('vip');
+    expect(res.body.assignedEmployeeId).toBe('USR-002');
+  });
+
+  it('refuses a manual reply while the bot is still active, and accepts one once a human has taken over', async () => {
+    seedConversation('971500000104', { botActive: true });
+    const tooEarly = await request(app).post('/api/whatsapp/conversations/971500000104/reply').set(authAs(OPS_UID)).send({ text: 'hello' });
+    expect(tooEarly.status).toBe(409);
+
+    const handoff = await request(app).post('/api/whatsapp/conversations/971500000104/handoff').set(authAs(OPS_UID)).send({ botActive: false });
+    expect(handoff.status).toBe(200);
+    expect(handoff.body.botActive).toBe(false);
+    expect(handoff.body.state).toBe('HUMAN_ASSISTANCE');
+
+    const reply = await request(app).post('/api/whatsapp/conversations/971500000104/reply').set(authAs(OPS_UID)).send({ text: 'A team member will call you shortly.' });
+    expect(reply.status).toBe(201);
+  });
+
+  it('requires reply text', async () => {
+    seedConversation('971500000105', { botActive: false });
+    const res = await request(app).post('/api/whatsapp/conversations/971500000105/reply').set(authAs(OPS_UID)).send({ text: '' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returning to automation resets state to BROWSING', async () => {
+    seedConversation('971500000106', { botActive: false, state: 'HUMAN_ASSISTANCE' });
+    const res = await request(app).post('/api/whatsapp/conversations/971500000106/handoff').set(authAs(OPS_UID)).send({ botActive: true });
+    expect(res.status).toBe(200);
+    expect(res.body.botActive).toBe(true);
+    expect(res.body.state).toBe('BROWSING');
   });
 });
