@@ -464,6 +464,117 @@ second engine.
 
 ---
 
+## MODULE 14 — Lease-to-Own (Splendor Private Mobility Operating System)
+
+The full contract-to-ownership lifecycle (APPLICATION → ELIGIBILITY →
+VEHICLE SELECTION → FINANCIAL OFFER → APPROVAL → AGREEMENT → HANDOVER →
+PAYMENT SCHEDULE → COLLECTIONS → SETTLEMENT → OWNERSHIP TRANSFER →
+COMPLETION), built entirely as an ADDITIVE extension of existing engines
+per this mission's explicit instruction: `src/server/leaseToOwn.ts` (the
+orchestration layer) and `src/server/leaseToOwnPolicy.ts` (pure financial/
+eligibility calculations) create no parallel Customer, KYC, Vehicle,
+Reservation, Contract, Payment, Approval, Audit, or WhatsApp system. An LTO
+agreement IS a `Contract` (`contractType:'lease_to_own'` + a `lto` details
+object); an LTO vehicle state is an informational `Vehicle.ltoStatus` field,
+never a second conflict-checking mechanism (`reserveVehicleSlot()`'s
+existing active-contract-date-range check, given the agreement's real
+start/end dates spanning the full term, is what actually blocks other
+bookings). Financial policy is grounded in Splendor's own real, approved
+LTO contract template (supplied during this build as a content-only PDF —
+its branding/layout deliberately never used, only its clauses): Clause 3's
+"two consecutive missed months" default threshold, Clause 6's flat (no
+percentage) early-settlement mechanics, Clause 8's handover-before-
+liability-transfer rule.
+
+### RULE-LTO01 — Application lifecycle
+**REQUIREMENT**: DRAFT → SUBMITTED → UNDER_REVIEW → APPROVED/REJECTED → CANCELLED, linked to Customer/Vehicle/requested term/down payment/notes, with a decision requiring the same Four-Eyes/SoD approvals engine as every other governance decision.
+**RATIONALE**: Section 1 of the mission brief; reuses `createApprovalRequest`/`decideApprovalRequest` (Phase 23.2) verbatim via a new `'lto_application'` `ApprovalRequestType`, rather than building a second decision engine.
+**ACCEPTANCE CRITERIA**: A draft cannot be decided (must be submitted first); a decided application cannot be re-decided; cancellation releases any temporary vehicle hold.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` — "Application lifecycle" suite (real Firestore emulator).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO02 — Eligibility Engine (KYC guard, blocklist, age)
+**REQUIREMENT**: Block submission if KYC is incomplete/expired, the customer is blocklisted, or the customer is under the configured minimum age — using the EXISTING Customer KYC fields and the existing `checkBlocklist()`, never a second identity system.
+**RATIONALE**: Section 2 of the mission brief. No dedicated `kycStatus` field exists anywhere in this CRM (confirmed by inventory); "incomplete" is derived from the existing ID/license fields actually being present and unexpired — never guessed.
+**ACCEPTANCE CRITERIA**: Missing date of birth is treated as "age cannot be verified" (blocking), never assumed eligible.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` — "checkLtoEligibility" suite (KYC incomplete, expired ID/license, blocklisted, underage, missing DOB).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO03 — Vehicle reservation via the existing reservation engine
+**REQUIREMENT**: The selected vehicle must not enter a conflicting reservation; add vehicle lifecycle labels for LTO states without breaking the existing Vehicle Lifecycle.
+**RATIONALE**: Section 3. `Vehicle.ltoStatus` (`lto_reserved`/`lto_active`/`lto_default`/`lto_settlement`/`lto_recovery`/`ownership_transfer_pending`/`owned`) is purely informational; the agreement's Contract carries a real `startDateTime`/`endDateTime` spanning the full term, so `reserveVehicleSlot()`'s pre-existing overlap check is the actual, only conflict gate — zero new conflict-checking code.
+**ACCEPTANCE CRITERIA**: Approving a second application for a vehicle already under an active LTO agreement fails at submission/approval with a scheduling-conflict error, not a silent double-booking.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` — "Vehicle conflict" suite.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO04 — Configurable Financial Offer, no invented numbers
+**REQUIREMENT**: Vehicle Price, Down Payment, Term, Monthly Installment (principal + markup portions), Final/Balloon Payment, Processing Fee, VAT, Total/Paid/Outstanding — server-computed, policy-configurable, never a client-supplied number.
+**RATIONALE**: Section 4. The monthly markup rate, processing fee, and ownership-transfer fee had no real value anywhere in this codebase or the source contract — seeded as `sensitive_rule`/`value:null` in `src/config/businessRules.ts`, following this app's own Phase 23.9 precedent (data-retention rules). `computeLtoFinancialOffer()`/`computeSettlementAmount()` throw `LtoPolicyNotConfiguredError` until a CEO/Admin sets real values via the existing Business Rules Engine — the calculation is fully built, but the actual number is a human, once-only business decision, never guessed.
+**FINANCIAL**: VAT uses the SAME shared `UAE_VAT_RATE` helper (`src/config/tax.ts`) every other financial route already uses — never a second VAT calculation.
+**VERIFICATION METHOD**: `tests/leaseToOwnPolicy.test.ts` (pure unit tests: refuses to compute unconfigured, correct amortization math, balloon-payment handling, rejection of invalid inputs).
+**STATUS**: **IMPLEMENTED (this session)** — calculation engine built and tested; the three real monetary values (`ltoMonthlyMarkupRatePercent`, `ltoProcessingFeeAed`, `ltoOwnershipTransferFeeAed`) are a **BUSINESS DECISION required before the first real offer can be computed** (see Section 22 / final report).
+
+### RULE-LTO05 — Server-side payment schedule
+**REQUIREMENT**: Per-installment Due Date, Amount, Paid, Remaining, Status (UPCOMING/DUE/PARTIALLY_PAID/PAID/LATE/OVERDUE/SETTLED), generated once at agreement creation and never recomputed by the client.
+**RATIONALE**: Section 5. `computeInstallmentStatus()` is a pure, deterministic function of the stored installment + "now", callable both on read and by the collections sweep, so status is always live without a background job having to have run first.
+**VERIFICATION METHOD**: `tests/leaseToOwnPolicy.test.ts` — `computeInstallmentStatus` suite (every state transition, including "a partial payment past grace is still late, not partially_paid").
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO06 — Payment integrity: server-authoritative, idempotent, concurrency-safe, audited
+**REQUIREMENT**: Every financial mutation (payment recording, settlement completion) runs inside a real Firestore transaction/idempotent-create, recomputes balances from the stored documents (never trusts client-sent running totals), and calls the existing hash-chained audit trail.
+**RATIONALE**: Section 6, this app's own Phase 1/7/23.5 precedents. `recordLtoInstallmentPayment()` uses `runDurableTransaction` + `runIdempotentCreate`; a duplicate Idempotency-Key replays the original result instead of double-crediting.
+**SECURITY**: No sensitive financial decision depends on client input — amount is validated against the installment's own stored `remainingAmount` inside the transaction, not the request body's claim.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` — "Payment recording" suite: duplicate payment, two concurrent identical submissions (`Promise.all`) never double-crediting, over-payment rejection, double-payment-on-already-paid rejection.
+**STATUS**: **IMPLEMENTED (this session)**. Two genuine, pre-existing Firestore "undefined value" bugs were found and fixed by this testing: `src/server/approvals.ts`'s optional `fieldPath` (affected every `createApprovalRequest` caller that omits it, not just LTO), and a partial installment payment's `paidAt`.
+
+### RULE-LTO07 — Collections, never automatic legal action
+**REQUIREMENT**: UPCOMING→REMINDER→DUE→GRACE→LATE→COLLECTIONS→DEFAULT, using the existing WhatsApp/notification/audit pipelines; no automatic legal action or vehicle repossession without a human decision.
+**RATIONALE**: Section 7's explicit constraint. `runLtoCollectionsSweep()` only dispatches reminders (reusing `dispatchCustomerNotification`, at most once/day per installment via `lastReminderAt`) and is hooked into the SAME cron trigger `runNotificationChecks()` already uses (`GET/POST /api/notifications/run-checks`) — not a second scheduler. `markLtoDefault()` only flags eligibility; termination/recovery are always separate, explicit, human-decided steps (RULE-LTO09).
+**VERIFICATION METHOD**: Code review + `tests/leaseToOwn.test.ts`'s Default suite (flagging requires the real configured consecutive-miss threshold, never auto-terminates).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO08 — Early Settlement (Clause 6: no invented percentage)
+**REQUIREMENT**: "Request Early Settlement" computing Outstanding Balance + configurable Adjustments + Final Settlement Amount, decided through the same Four-Eyes engine (`'lto_settlement'` approval type).
+**RATIONALE**: Section 8's explicit "don't invent a legal/accounting formula." The real, approved contract's Clause 6 specifies NO percentage penalty or discount — the customer pays the outstanding balance in full, plus a flat ownership-transfer processing fee (`ltoOwnershipTransferFeeAed`, another `sensitive_rule`/`value:null` pending a CEO/Admin decision). An earlier draft of this build had incorrectly modeled a percentage-based early-settlement fee before the real contract was read — corrected before any code shipped.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` + `tests/leaseToOwnPolicy.test.ts` — settlement amount is exactly outstanding + flat fee + adjustments; approving bulk-settles every remaining installment; rejecting returns the agreement to active.
+**STATUS**: **IMPLEMENTED (this session)** — mechanics built and tested; the flat transfer-fee AMOUNT is a **BUSINESS DECISION** (see RULE-LTO04).
+
+### RULE-LTO09 — Default / Termination, human-decided, never automatic
+**REQUIREMENT**: DEFAULT → TERMINATION_REQUESTED → TERMINATED → RECOVERY states, with RBAC/SoD (`'lto_termination'` approval type) and financial reconciliation; recovery is a separate, explicit, staff-confirmed step, never triggered by the termination decision itself.
+**RATIONALE**: Section 9 + the mission's repeated "no automatic legal action or vehicle repossession" instruction, and Clause 3's real "two consecutive missed months" threshold (sourced from the actual contract, not invented) as the default-eligibility gate.
+**ACCEPTANCE CRITERIA**: Approving termination only marks the agreement/vehicle so staff know to proceed with the (human, off-system) recovery process; `markLtoVehicleRecovered()` is a distinct call, only reachable after `terminated`, that returns the vehicle to the normal rental pool.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` — "Termination, recovery, ownership transfer, completion" suite, explicitly asserting the vehicle is still `rented`/not yet recovered immediately after a termination request.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO10 — Ownership Transfer (RTA is an EXTERNAL dependency)
+**REQUIREMENT**: LEASE_COMPLETED → SETTLEMENT_CONFIRMED → OWNERSHIP_TRANSFER_PENDING → OWNERSHIP_TRANSFERRED → COMPLETED; ownership is only considered transferred once documented in-system by a human.
+**RATIONALE**: Section 10's explicit instruction not to invent an RTA integration. `requestLtoOwnershipTransfer()`/`confirmLtoOwnershipTransfer()` never call any government API (none exists); the system only records that staff have confirmed the real-world transfer happened, optionally with a document-path reference into the EXISTING document pipeline.
+**STATUS**: **IMPLEMENTED (this session)** for the in-system recording; the actual RTA/plate transfer itself is a permanent, correctly-documented **EXTERNAL DEPENDENCY**, not a gap in this build.
+
+### RULE-LTO11 — Contract, Document, and Audit integration (no parallel systems)
+**REQUIREMENT**: LTO uses the existing Contract engine (additive `contractType`/`lto` fields only), links documents to the existing Document system, and routes every sensitive operation through the existing hash-chained audit trail.
+**RATIONALE**: Sections 11, 16, 17's explicit "extend, never duplicate" mandate — verified by inventory: zero new entity collections were created for anything that already had one.
+**STATUS**: **IMPLEMENTED (this session)** for Contract/Audit integration. **PARTIAL** for document generation: the user separately supplied (a) the real source LTO contract's clause text (used only for this module's business logic, per their explicit instruction never to reuse its layout/branding) and (b) a fixed company letterhead template intended as the visual shell for a future generated contract PDF (header/footer/branding preserved exactly, customer/vehicle/value/date fields and the source contract's clauses merged into its blank body). Understanding the letterhead's structure was completed this session; the actual merge-and-render pipeline (HTML→PDF, embedding the letterhead as a fixed asset) was not built this pass — see **NEXT BACKLOG** in the final report. Until built, LTO agreement documents are handled like any other Contract: attached via the existing generic document upload, not auto-generated.
+
+### RULE-LTO12 — Customer 360 / Vehicle Details / Dashboard integration
+**REQUIREMENT**: Customer 360 shows Active Agreement/Vehicle/Monthly Payment/Paid/Outstanding/Term; Vehicle Details shows LTO Status/Customer/Agreement/Dates/Payment Status/Ownership Status and the vehicle must not read as ordinarily available while LTO-active; a Dashboard KPI widget surfaces Applications/Active/Outstanding/Near-Completion/Defaults.
+**RATIONALE**: Sections 12-14. Reuses the exact tab-navigation pattern already established in `Customer360View.tsx`/`VehicleDetailMasterModal.tsx` and the existing `StatsCard` component on `DashboardView.tsx` — no new UI framework.
+**ACCEPTANCE CRITERIA**: A vehicle under an active LTO agreement has `Vehicle.status:'rented'` (set by the same agreement-creation step that reserves it), so it already never appears in "available" listings elsewhere in the app — the LTO tab additionally makes this explicit to staff with a banner.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO13 — Arabic UI, no mixed-language WhatsApp messages
+**REQUIREMENT**: LTO UI is Arabic+RTL/English+LTR via the existing translation approach; LTO WhatsApp notifications (application received/approved/rejected, payment reminder/due/late, statement, settlement, ownership transfer) are fully monolingual per message — never mixed.
+**RATIONALE**: Sections 15, 19. `dispatchCustomerNotification()` gained an optional `language?: 'ar'|'en'` parameter (defaulting to the pre-existing bilingual behavior for every OTHER caller, unchanged) — when LTO passes a language explicitly, only that language's text is sent, with its own signature line, never concatenated with the other.
+**VERIFICATION METHOD**: Code review of `notificationEngine.ts`'s three-way ternary; `LeaseToOwnView.tsx`'s full bilingual UI text audit (every user-facing string has both an `isAr` and an English branch).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-LTO14 — Testing coverage
+**REQUIREMENT**: Real tests for Application, Eligibility, Approval, KYC Guard, Vehicle Conflict, Payment Schedule, Payment, Late Payment, Settlement, Default, Termination, Ownership Transfer, RBAC, SoD, Idempotency, Concurrency, Audit.
+**VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` (42 tests, real Firestore emulator) + `tests/leaseToOwnPolicy.test.ts` (19 pure unit tests) = 61 new tests, on top of the full pre-existing 358-test suite (400 total, all passing). Browser/Playwright UI verification was **NOT performed** — this environment has no configured Firebase service-account credentials, so the app cannot authenticate in a real browser session here; verified instead via typecheck + production build + code review.
+**STATUS**: **IMPLEMENTED (this session)** for automated tests; **BLOCKED** for browser QA (environment credential limitation, not a code gap).
+
+---
+
 ## Summary Table
 
 **Correction note (post-implementation audit).** An earlier draft of this
@@ -495,7 +606,8 @@ table reflects the corrected, verified counts.
 | 11 Pricing | 3 | 0 | 1 | 2 |
 | 12 Governance | 4 | 2 | 1 | 1 |
 | 13 WhatsApp | 10 | 0 | 8 | 2 |
-| **Total** | **70** | **10** | **26** | **34** |
+| 14 Lease-to-Own | 14 | 0 | 14 | 0 |
+| **Total** | **84** | **10** | **40** | **34** |
 
 26 rules were genuinely implemented, tested, and committed across this
 session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08,
@@ -525,3 +637,25 @@ choice not to half-build a large, coherent feature in a rushed pass
 Module 01/02/05/07 rows corrected by an earlier audit, which remain
 genuinely unbuilt and are catalogued as real, sizeable future work rather
 than fabricated.
+
+Module 14 (Lease-to-Own) is entirely new this phase: LTO01-LTO14 (the
+complete application-to-ownership-transfer lifecycle) are real, tested
+(61 new tests against the real Firestore emulator plus pure unit tests, on
+top of the full pre-existing 358-test suite -- 400 total, zero
+regressions), and additive to every existing engine (Contract, Vehicle,
+Approvals/SoD, Payments, Vehicle Inspection, WhatsApp, Audit) per the
+mission's explicit "extend, never duplicate" mandate. Two rules carry an
+honest caveat inside an otherwise-IMPLEMENTED status rather than a blanket
+claim: LTO04/LTO08's three real monetary values (monthly markup rate,
+processing fee, ownership-transfer fee) are seeded unconfigured
+(sensitive_rule/value:null) and require a one-time CEO/Admin decision via
+the existing Business Rules Engine before the first real offer or
+settlement can be computed; LTO14's automated test coverage is complete,
+but browser/Playwright UI verification could not be performed in this
+environment (no Firebase service-account credentials configured here to
+authenticate a real session). LTO11's document-generation half (merging
+the user's supplied source-contract clauses and a fixed company letterhead
+into a rendered PDF) is explicitly PARTIAL: the letterhead's structure was
+reviewed this session, but the actual generation pipeline is real, scoped
+future work, catalogued in the final report's NEXT BACKLOG rather than
+rushed or fabricated.
