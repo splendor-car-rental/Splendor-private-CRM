@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle
+  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -63,6 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
   const unreconciledCount = bankTransactions.filter(t => !t.reconciled).length;
   const unmatchedTollsCount = tollTransactions.filter(t => !t.contractId && !t.customerId).length;
   const activeRentalsCount = contracts.filter(c => c.status === 'active').length;
+  const activeLtoCount = contracts.filter(c => c.contractType === 'lease_to_own' && c.lto?.ltoStatus === 'active').length;
   const pendingTasksCount = tasks.filter(t => t.status === 'pending').length;
   const newLeadsCount = leads.filter(l => l.status === 'new' || l.status === 'contacted').length;
   const availableFleetCount = vehicles.filter(v => v.status === 'available').length;
@@ -115,6 +116,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           label: t('contracts'),
           icon: <FileSignature className="w-4 h-4" />,
           badge: activeRentalsCount > 0 ? `${activeRentalsCount} Active` : undefined,
+          badgeVariant: 'gold' as const
+        },
+        {
+          id: 'lease-to-own',
+          label: language === 'ar' ? 'الإيجار المنتهي بالتملك' : 'Lease-to-Own',
+          icon: <KeySquare className="w-4 h-4" />,
+          badge: activeLtoCount > 0 ? `${activeLtoCount} Active` : undefined,
           badgeVariant: 'gold' as const
         },
         {

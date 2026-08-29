@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { 
-  Users, Car, FileSignature, Landmark, 
+import {
+  Users, Car, FileSignature, Landmark,
   Sparkles, TrendingUp, AlertCircle, Calendar, ArrowRight,
   ShieldCheck, Clock, CheckCircle2, DollarSign, Database,
-  RefreshCw, Cloud, Server, Activity, ChevronRight, Zap
+  RefreshCw, Cloud, Server, Activity, ChevronRight, Zap, KeySquare
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -47,6 +47,19 @@ export const DashboardView: React.FC = () => {
   const totalPipelineValue = openLeads.reduce((sum, l) => sum + (l.estimatedValue || 0), 0);
 
   const totalCollectedRevenue = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+  // Lease-to-Own (Splendor Private Mobility Operating System) KPIs -- pure
+  // roll-ups over the already-loaded contracts array, same as every other
+  // card here; the outstanding-balance/near-completion numbers are read
+  // straight from Contract.lto, which the server keeps authoritative.
+  const ltoContracts = contracts.filter(c => c.contractType === 'lease_to_own' && c.lto);
+  const ltoActive = ltoContracts.filter(c => c.lto!.ltoStatus === 'active');
+  const ltoOutstandingTotal = ltoActive.reduce((sum, c) => sum + (c.lto!.outstandingAmount || 0), 0);
+  const ltoDefaults = ltoContracts.filter(c => c.lto!.ltoStatus === 'default').length;
+  const ltoNearCompletion = ltoActive.filter(c => {
+    const remainingMonths = Math.max(0, Math.round((new Date(c.endDateTime).getTime() - Date.now()) / (30 * 24 * 60 * 60 * 1000)));
+    return remainingMonths <= 2;
+  }).length;
 
   const fetchAiExecutiveBrief = async () => {
     setAiBriefLoading(true);
@@ -232,7 +245,7 @@ export const DashboardView: React.FC = () => {
       )}
 
       {/* Primary KPI Stats Grid (Real computed numbers) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatsCard
           title={language === 'ar' ? 'نسبة إشغال الأسطول' : 'Fleet Utilization'}
           value={`${fleetUtilizationRate}%`}
@@ -268,6 +281,15 @@ export const DashboardView: React.FC = () => {
           icon={<Users className="w-5 h-5" />}
           trend={{ value: `${customers.length} VIP Clients`, positive: true }}
           onClick={() => setActiveView('leads')}
+        />
+        <StatsCard
+          title={language === 'ar' ? 'الإيجار المنتهي بالتملك النشط' : 'Active Lease-to-Own'}
+          value={ltoActive.length}
+          subValue={`${ltoOutstandingTotal.toLocaleString()} AED Outstanding`}
+          accent={ltoDefaults > 0 ? 'rose' : 'gold'}
+          icon={<KeySquare className="w-5 h-5" />}
+          trend={{ value: ltoDefaults > 0 ? `${ltoDefaults} Default(s)` : `${ltoNearCompletion} Near Completion`, positive: ltoDefaults === 0 }}
+          onClick={() => setActiveView('lease-to-own')}
         />
       </div>
 

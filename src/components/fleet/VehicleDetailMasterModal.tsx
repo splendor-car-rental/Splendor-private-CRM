@@ -28,7 +28,8 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
 
   const vehicle = vehicles.find(v => v.id === vehicleId);
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'plates' | 'website' | 'timeline' | 'schedule'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'plates' | 'website' | 'timeline' | 'schedule' | 'lto'>('overview');
+  const vehicleLtoContract = vehicle ? contracts.find(c => c.vehicleId === vehicle.id && c.contractType === 'lease_to_own' && c.lto && c.lto.ltoStatus !== 'completed' && c.lto.ltoStatus !== 'terminated') : undefined;
 
   // Plate transfer modal state
   const [plateModalOpen, setPlateModalOpen] = useState(false);
@@ -262,6 +263,17 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
               <Calendar className="w-3.5 h-3.5" />
               <span>{isAr ? 'العقود والحجوزات' : 'Rentals & Schedule'} ({vehicleContracts.length + vehicleReservations.length})</span>
             </button>
+            {vehicleLtoContract && (
+              <button
+                onClick={() => setActiveTab('lto')}
+                className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+                  activeTab === 'lto' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
+                }`}
+              >
+                <DollarSign className="w-3.5 h-3.5" />
+                <span>{isAr ? 'الإيجار المنتهي بالتملك' : 'Lease-to-Own'}</span>
+              </button>
+            )}
           </div>
 
           {/* TAB 1: OVERVIEW */}
@@ -614,6 +626,47 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
                     <span className="font-bold text-sky-400">{(r.totalAmount || 0).toLocaleString()} AED</span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: LEASE-TO-OWN */}
+          {activeTab === 'lto' && vehicleLtoContract && (
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-300 text-[11px] flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  {isAr
+                    ? 'هذه المركبة ضمن اتفاقية إيجار منتهٍ بالتملك نشطة -- لا تظهر كمتاحة للإيجار العادي طوال مدة الاتفاقية.'
+                    : 'This vehicle is under an active Lease-to-Own agreement -- it will not appear as available for ordinary rental for the duration of the agreement.'}
+                </span>
+              </div>
+              <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-bold text-zinc-100">{vehicleLtoContract.id}</span>
+                  <Badge variant={vehicleLtoContract.lto!.ltoStatus === 'active' ? 'emerald' : vehicleLtoContract.lto!.ltoStatus === 'default' ? 'rose' : 'gold'} size="sm">
+                    {vehicleLtoContract.lto!.ltoStatus.replace(/_/g, ' ').toUpperCase()}
+                  </Badge>
+                </div>
+                <p className="text-zinc-400 text-[11px]">{vehicleLtoContract.customerName}</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'تاريخ البدء' : 'Start'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{vehicleLtoContract.startDateTime.split('T')[0]}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'تاريخ النهاية المتوقع' : 'Expected End'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{vehicleLtoContract.endDateTime.split('T')[0]}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'حالة الدفع' : 'Payment Status'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{vehicleLtoContract.lto!.paidAmount.toLocaleString()} / {vehicleLtoContract.lto!.totalContractValue.toLocaleString()} AED</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'حالة الملكية' : 'Ownership Status'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{vehicleLtoContract.lto!.ltoStatus === 'ownership_transferred' || vehicleLtoContract.lto!.ltoStatus === 'completed' ? (isAr ? 'منقولة' : 'Transferred') : (isAr ? 'لم تُنقل بعد' : 'Not yet transferred')}</p>
+                  </div>
+                </div>
               </div>
             </div>
           )}

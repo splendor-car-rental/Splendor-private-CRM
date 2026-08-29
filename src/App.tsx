@@ -30,6 +30,7 @@ import { ProcurementView } from './components/views/ProcurementView';
 import { SecurityBlocklistView } from './components/views/SecurityBlocklistView';
 import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
 import { WhatsAppInboxView } from './components/views/WhatsAppInboxView';
+import { LeaseToOwnView } from './components/views/LeaseToOwnView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -90,6 +91,8 @@ const MainLayout: React.FC = () => {
         return <SecurityBlocklistView />;
       case 'inspections':
         return <VehicleInspectionsView />;
+      case 'lease-to-own':
+        return <LeaseToOwnView />;
       case 'whatsapp-inbox':
         return <WhatsAppInboxView />;
       case 'ai-studio':

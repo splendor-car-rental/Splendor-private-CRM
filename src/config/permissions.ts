@@ -58,12 +58,13 @@ export type ViewKey =
   | 'procurement'
   | 'security'
   | 'inspections'
-  | 'whatsapp-inbox';
+  | 'whatsapp-inbox'
+  | 'lease-to-own';
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
   'contracts', 'finance', 'reconciliation', 'tolls', 'notification-center', 'tasks', 'ai-studio', 'test-suite', 'settings',
-  'procurement', 'security', 'inspections', 'whatsapp-inbox'
+  'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own'
 ];
 
 /**
@@ -85,10 +86,10 @@ const ALL_VIEWS: ViewKey[] = [
 export const ROLE_VIEWS: Record<UserRole, ViewKey[]> = {
   ceo: ALL_VIEWS,
   admin: ALL_VIEWS,
-  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections', 'whatsapp-inbox'],
-  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox'],
+  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own'],
+  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox', 'lease-to-own'],
   fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'inspections'],
-  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement']
+  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement', 'lease-to-own']
 };
 
 /** Historical/alternate ids for the same screen, used in a few nav call sites. */

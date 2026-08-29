@@ -76,7 +76,7 @@ export const Customer360View: React.FC = () => {
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
 
   // 360 Tab selection
-  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'statement' | 'comms' | 'docs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs'>('overview');
 
   // Filtered customer list
   const filteredCustomers = customers.filter(c => {
@@ -157,6 +157,7 @@ export const Customer360View: React.FC = () => {
 
   // Associated 360 records for active customer
   const customerContracts = activeCustomer ? contracts.filter(c => c.customerId === activeCustomer.id) : [];
+  const customerLtoContracts = activeCustomer ? contracts.filter(c => c.customerId === activeCustomer.id && c.contractType === 'lease_to_own' && c.lto) : [];
   const customerInvoices = activeCustomer ? invoices.filter(i => i.customerId === activeCustomer.id) : [];
   const customerDeposits = activeCustomer ? deposits.filter(d => d.customerId === activeCustomer.id) : [];
   const customerPayments = activeCustomer ? payments.filter(p => p.customerId === activeCustomer.id) : [];
@@ -456,6 +457,16 @@ export const Customer360View: React.FC = () => {
               >
                 {language === 'ar' ? 'سجل الإيجارات' : 'Rental History'} ({customerContracts.length})
               </button>
+              {customerLtoContracts.length > 0 && (
+                <button
+                  onClick={() => setActiveTab('lto')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    activeTab === 'lto' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {language === 'ar' ? 'الإيجار المنتهي بالتملك' : 'Lease-to-Own'} ({customerLtoContracts.length})
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('statement')}
                 className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
@@ -555,6 +566,50 @@ export const Customer360View: React.FC = () => {
                     </div>
                   ))
                 )}
+              </div>
+            )}
+
+            {/* TAB CONTENT: Lease-to-Own */}
+            {activeTab === 'lto' && (
+              <div className="space-y-3">
+                {customerLtoContracts.map(contract => {
+                  const lto = contract.lto!;
+                  return (
+                    <div
+                      key={contract.id}
+                      onClick={() => setActiveView('lease-to-own')}
+                      className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 hover:border-[#D4AF37]/40 transition-all cursor-pointer space-y-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-sm font-semibold text-zinc-200">{contract.vehicleName}</h4>
+                          <p className="text-xs text-zinc-400 mt-0.5">{contract.id}</p>
+                        </div>
+                        <Badge variant={lto.ltoStatus === 'active' ? 'emerald' : lto.ltoStatus === 'default' || lto.ltoStatus === 'terminated' ? 'rose' : 'gold'} size="sm">
+                          {lto.ltoStatus.replace(/_/g, ' ').toUpperCase()}
+                        </Badge>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'القسط الشهري' : 'Monthly Payment'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.monthlyInstallment.toLocaleString()} AED</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'المسدد' : 'Paid'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.paidAmount.toLocaleString()} AED</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'المتبقي' : 'Outstanding'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.outstandingAmount.toLocaleString()} AED</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'المدة (أشهر)' : 'Term (months)'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.termMonths}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
