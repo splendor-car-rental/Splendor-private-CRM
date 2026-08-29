@@ -57,12 +57,13 @@ export type ViewKey =
   | 'settings'
   | 'procurement'
   | 'security'
-  | 'inspections';
+  | 'inspections'
+  | 'whatsapp-inbox';
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
   'contracts', 'finance', 'reconciliation', 'tolls', 'notification-center', 'tasks', 'ai-studio', 'test-suite', 'settings',
-  'procurement', 'security', 'inspections'
+  'procurement', 'security', 'inspections', 'whatsapp-inbox'
 ];
 
 /**
@@ -84,8 +85,8 @@ const ALL_VIEWS: ViewKey[] = [
 export const ROLE_VIEWS: Record<UserRole, ViewKey[]> = {
   ceo: ALL_VIEWS,
   admin: ALL_VIEWS,
-  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections'],
-  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls'],
+  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections', 'whatsapp-inbox'],
+  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox'],
   fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'inspections'],
   finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement']
 };

@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing, Truck, ClipboardCheck
+  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -121,6 +121,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'inspections',
           label: language === 'ar' ? 'فحص المركبة والأدلة المصورة' : 'Vehicle Inspections',
           icon: <ClipboardCheck className="w-4 h-4" />
+        },
+        {
+          id: 'whatsapp-inbox',
+          label: language === 'ar' ? 'صندوق واتساب الموحد' : 'WhatsApp Inbox',
+          icon: <MessageCircle className="w-4 h-4" />
         }
       ]
     },
