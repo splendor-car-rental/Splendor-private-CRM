@@ -742,3 +742,158 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
     expect(res.body.discountOverridePending).toBeFalsy();
   });
 });
+
+describe('Vehicle Inspection & Photo Evidence (Splendor Master Rule Set, Module 08)', () => {
+  function seedVehicleForInspection(id: string, overrides: Record<string, any> = {}) {
+    const vehicle = { id, make: 'Test', model: 'Car', plateNumber: `P-${id}`, status: 'available', ...overrides };
+    globalStore.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  function seedContractForInspection(id: string, vehicleId: string, overrides: Record<string, any> = {}) {
+    const contract = { id, vehicleId, contractNumber: id, status: 'active', ...overrides };
+    globalStore.contracts.push(contract);
+    return contract;
+  }
+
+  it('rejects starting an inspection from a role without operational access', async () => {
+    seedVehicleForInspection('VEH-INSP-1');
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(SALES_UID))
+      .send({ vehicleId: 'VEH-INSP-1', type: 'pre_delivery' });
+    expect(res.status).toBe(403);
+  });
+
+  it('requires vehicleId and rejects an unknown vehicle', async () => {
+    const missingField = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ type: 'pre_delivery' });
+    expect(missingField.status).toBe(400);
+
+    const unknownVehicle = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-DOES-NOT-EXIST', type: 'pre_delivery' });
+    expect(unknownVehicle.status).toBe(404);
+  });
+
+  it('rejects a contract that is not actually associated with the given vehicle', async () => {
+    seedVehicleForInspection('VEH-INSP-2');
+    seedVehicleForInspection('VEH-INSP-3');
+    seedContractForInspection('CON-INSP-1', 'VEH-INSP-3');
+
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(OPS_UID))
+      .send({ vehicleId: 'VEH-INSP-2', contractId: 'CON-INSP-1', type: 'handover' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not associated/i);
+  });
+
+  it('requires a contract for a handover inspection', async () => {
+    seedVehicleForInspection('VEH-INSP-4');
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(OPS_UID))
+      .send({ vehicleId: 'VEH-INSP-4', type: 'handover' });
+    expect(res.status).toBe(400);
+  });
+
+  it('starts a draft pre_delivery inspection as operations', async () => {
+    seedVehicleForInspection('VEH-INSP-5');
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(OPS_UID))
+      .send({ vehicleId: 'VEH-INSP-5', type: 'pre_delivery' });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('draft');
+    expect(res.body.requiredPhotoCategories).toContain('front');
+
+    const fetched = await request(app).get(`/api/inspections/${res.body.id}`).set(authAs(OPS_UID));
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.id).toBe(res.body.id);
+
+    const notFound = await request(app).get('/api/inspections/INS-NOPE').set(authAs(OPS_UID));
+    expect(notFound.status).toBe(404);
+  });
+
+  it('two concurrent identical start requests with the same Idempotency-Key create exactly one inspection', async () => {
+    seedVehicleForInspection('VEH-INSP-6');
+    const body = { vehicleId: 'VEH-INSP-6', type: 'pre_delivery' };
+    const [a, b] = await Promise.all([
+      request(app).post('/api/inspections').set(authAs(OPS_UID)).set('Idempotency-Key', 'insp-concurrent-1').send(body),
+      request(app).post('/api/inspections').set(authAs(OPS_UID)).set('Idempotency-Key', 'insp-concurrent-1').send(body)
+    ]);
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    expect(a.body.id).toBe(b.body.id);
+  });
+
+  it('damage review requires a note and a decider role, and completion is blocked until every damage record is reviewed', async () => {
+    seedVehicleForInspection('VEH-INSP-7');
+    const start = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-INSP-7', type: 'in_rental' });
+    const id = start.body.id;
+
+    const damage = await request(app)
+      .post(`/api/inspections/${id}/damage`)
+      .set(authAs(OPS_UID))
+      .send({ part: 'hood', severity: 'dent', classification: 'new', description: 'Found during rental.' });
+    expect(damage.status).toBe(201);
+    const damageId = damage.body.damages[0].id;
+
+    const noteless = await request(app)
+      .put(`/api/inspections/${id}/damage/${damageId}/review`)
+      .set(authAs(CEO_UID))
+      .send({ liabilityStatus: 'customer_liable', reviewNotes: '' });
+    expect(noteless.status).toBe(400);
+
+    const wrongRole = await request(app)
+      .put(`/api/inspections/${id}/damage/${damageId}/review`)
+      .set(authAs(SALES_UID))
+      .send({ liabilityStatus: 'customer_liable', reviewNotes: 'Confirmed.' });
+    expect(wrongRole.status).toBe(403);
+
+    const beforeReview = await request(app).post(`/api/inspections/${id}/photos`).set(authAs(OPS_UID)).send({ category: 'damage', documentPath: 'vehicle-inspections/x/1.jpg', fileUrl: '/api/documents/file?path=x' });
+    expect(beforeReview.status).toBe(201);
+    const stillPending = await request(app).post(`/api/inspections/${id}/complete`).set(authAs(OPS_UID)).send({});
+    expect(stillPending.status).toBe(409);
+
+    const reviewed = await request(app)
+      .put(`/api/inspections/${id}/damage/${damageId}/review`)
+      .set(authAs(CEO_UID))
+      .send({ liabilityStatus: 'customer_liable', reviewNotes: 'Confirmed against handover photos.' });
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.damages[0].liabilityStatus).toBe('customer_liable');
+
+    const completed = await request(app).post(`/api/inspections/${id}/complete`).set(authAs(OPS_UID)).send({});
+    expect(completed.status).toBe(200);
+    expect(completed.body.status).toBe('completed');
+  });
+
+  it('a completed inspection is immutable -- no further mutation is accepted from anyone', async () => {
+    seedVehicleForInspection('VEH-INSP-8');
+    const start = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-INSP-8', type: 'in_rental' });
+    const id = start.body.id;
+    await request(app).post(`/api/inspections/${id}/photos`).set(authAs(OPS_UID)).send({ category: 'damage', documentPath: 'x', fileUrl: 'y' });
+    const completed = await request(app).post(`/api/inspections/${id}/complete`).set(authAs(OPS_UID)).send({});
+    expect(completed.body.status).toBe('completed');
+
+    const lateEdit = await request(app).patch(`/api/inspections/${id}`).set(authAs(CEO_UID)).send({ notes: 'trying to sneak in a change' });
+    expect(lateEdit.status).toBe(409);
+
+    const lateDamage = await request(app)
+      .post(`/api/inspections/${id}/damage`)
+      .set(authAs(CEO_UID))
+      .send({ part: 'hood', severity: 'dent', classification: 'new', description: 'too late' });
+    expect(lateDamage.status).toBe(409);
+  });
+
+  it('only ceo/admin may void an inspection', async () => {
+    seedVehicleForInspection('VEH-INSP-9');
+    const start = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-INSP-9', type: 'pre_delivery' });
+    const id = start.body.id;
+
+    const deniedVoid = await request(app).post(`/api/inspections/${id}/void`).set(authAs(OPS_UID)).send({ reason: 'test' });
+    expect(deniedVoid.status).toBe(403);
+
+    const allowedVoid = await request(app).post(`/api/inspections/${id}/void`).set(authAs(CEO_UID)).send({ reason: 'Started on the wrong vehicle.' });
+    expect(allowedVoid.status).toBe(200);
+    expect(allowedVoid.body.status).toBe('voided');
+  });
+});

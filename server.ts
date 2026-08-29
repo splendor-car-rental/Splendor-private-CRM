@@ -78,6 +78,11 @@ import {
 } from './src/server/procurementApprovals';
 import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
 import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance';
+import {
+  startInspection, updateInspectionDetails, addDamageMarker, reviewDamageLiability,
+  registerInspectionPhoto, acknowledgeInspection, completeInspection, voidInspection,
+  getInspection, listInspections, InspectionError
+} from './src/server/vehicleInspections';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -653,16 +658,21 @@ app.post('/api/upload', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    const { folder, fileName, fileType, dataBase64, targetUserId, customerId } = req.body || {};
+    const { folder, fileName, fileType, dataBase64, targetUserId, customerId, inspectionId } = req.body || {};
     if (!folder || !fileName || !dataBase64) {
       return res.status(400).json({ error: 'folder, fileName, and dataBase64 are required.' });
     }
-    if (!['avatars', 'customer-documents'].includes(folder)) {
+    if (!['avatars', 'customer-documents', 'vehicle-inspections'].includes(folder)) {
       return res.status(400).json({ error: 'Invalid upload folder.' });
     }
 
     let storagePath: string;
-    if (folder === 'avatars') {
+    if (folder === 'vehicle-inspections') {
+      if (!inspectionId) {
+        return res.status(400).json({ error: 'inspectionId is required for vehicle-inspection photo uploads.' });
+      }
+      storagePath = `vehicle-inspections/${inspectionId}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else if (folder === 'avatars') {
       let ownerUid = requesterUid;
       if (targetUserId && targetUserId !== requesterUid) {
         // Uploading someone else's avatar -- only CEO/Admin may do this.
@@ -710,10 +720,10 @@ app.post('/api/upload', async (req, res) => {
       userId: requesterUid,
       userName: uploaderActor?.name || requesterUid,
       userRole: uploaderActor?.role || 'operations',
-      entityType: folder === 'avatars' ? 'Avatar' : 'CustomerDocument',
+      entityType: folder === 'avatars' ? 'Avatar' : folder === 'vehicle-inspections' ? 'InspectionPhotoFile' : 'CustomerDocument',
       entityId: storagePath,
       action: 'create',
-      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}.`
+      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}${inspectionId ? ` for inspection ${inspectionId}` : ''}.`
     });
 
     res.json({ url, path: storagePath });
@@ -731,7 +741,7 @@ app.post('/api/upload', async (req, res) => {
 // two folders POST /api/upload itself ever writes to, both server-
 // generated (never a client-supplied filesystem/Storage path), which rules
 // out path traversal to an unrelated object in the same bucket.
-const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/'];
+const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/', 'vehicle-inspections/'];
 
 app.get('/api/documents/file', asyncHandler(async (req, res) => {
   const path = String(req.query.path || '');
@@ -2472,6 +2482,158 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   }
 
   res.json({ success: true, contract: updatedContract });
+}));
+
+// ----------------------------------------------------
+// VEHICLE INSPECTION & PHOTO EVIDENCE (Splendor Master Rule Set, Module 08)
+// ----------------------------------------------------
+// A standalone workflow alongside (not replacing) the handover/return
+// routes above -- see src/server/vehicleInspections.ts for why. Covers
+// pre_delivery / handover / in_rental / return / post_return, each with
+// configurable required photo evidence, damage classification
+// (pre_existing/new/uncertain, never auto-detected), and a customer
+// acknowledgement gate before completion where the type requires one.
+// InspectionError covers three different real HTTP situations under one
+// class (matching how the module itself throws): "not found" -> 404; a
+// plain missing-field validation error on THIS request -> 400; everything
+// else (the resource's current state blocks the action -- missing photo
+// evidence, an unreviewed damage record, an already-completed/voided
+// inspection) -> 409, matching this codebase's existing convention
+// (see e.g. MaintenanceError's routes) of treating "can't do this given
+// the record's current state" as a conflict rather than a bad request.
+function inspectionErrorStatus(message: string): number {
+  if (message.includes('not found')) return 404;
+  const isFieldValidation = message.includes('is required') || message.includes('requires an associated') || message.includes('must reference');
+  return isFieldValidation ? 400 : 409;
+}
+app.post('/api/inspections', requireRole('ceo', 'admin', 'operations', 'fleet'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const body = req.body || {};
+  if (!body.vehicleId) return res.status(400).json({ error: 'vehicleId is required.' });
+  const vehicle = globalStore.vehicles.find(v => v.id === body.vehicleId);
+  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found.' });
+  if (body.contractId) {
+    const contract = globalStore.contracts.find(c => c.id === body.contractId);
+    if (!contract) return res.status(404).json({ error: 'Contract not found.' });
+    if (contract.vehicleId !== body.vehicleId) {
+      return res.status(400).json({ error: 'This contract is not associated with the given vehicle.' });
+    }
+  }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
+
+  try {
+    const { result: inspection, replayed } = await startInspection({
+      vehicleId: body.vehicleId,
+      vehicleName: vehicle.plateNumber ? `${vehicle.make} ${vehicle.model}` : body.vehicleId,
+      contractId: body.contractId,
+      contractNumber: body.contractId ? globalStore.contracts.find(c => c.id === body.contractId)?.contractNumber : undefined,
+      type: body.type,
+      compareAgainstInspectionId: body.compareAgainstInspectionId
+    }, actor as any, idempotencyKey, fingerprintRequest(body), recordAudit);
+    res.status(201).json(inspection);
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof InspectionError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/inspections', asyncHandler(async (req, res) => {
+  const inspections = await listInspections({
+    vehicleId: req.query.vehicleId as string | undefined,
+    contractId: req.query.contractId as string | undefined
+  });
+  res.json(inspections);
+}));
+
+app.get('/api/inspections/:id', asyncHandler(async (req, res) => {
+  try {
+    res.json(await getInspection(req.params.id));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.patch('/api/inspections/:id', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await updateInspectionDetails(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/damage', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await addDamageMarker(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.put('/api/inspections/:id/damage/:damageId/review', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await reviewDamageLiability(req.params.id, { damageId: req.params.damageId, ...req.body }, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/photos', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await registerInspectionPhoto(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/acknowledge', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await acknowledgeInspection(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/complete', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result: inspection, replayed } = await completeInspection(req.params.id, idempotencyKey, actor as any, recordAudit);
+    res.json({ ...inspection, replayed });
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/void', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await voidInspection(req.params.id, req.body?.reason, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
 }));
 
 // Extends an active contract's end date -- e.g. a customer wants a few more

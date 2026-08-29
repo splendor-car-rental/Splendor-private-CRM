@@ -555,6 +555,108 @@ export interface ReturnInspection {
   notes?: string;
 }
 
+// ----------------------------------------------------
+// VEHICLE INSPECTION & PHOTO EVIDENCE (Splendor Master Rule Set, Module 08)
+// ----------------------------------------------------
+// A standalone entity, deliberately separate from the older embedded
+// Contract.handover/returnDetails fields above (which stay exactly as they
+// are -- this is additive, not a replacement of a working system). Every
+// point in a vehicle's lifecycle that needs documented evidence (before a
+// customer ever sees it, at handover, spot-checks during a long rental, at
+// return, and a deeper post-return review) is one InspectionType, so the
+// same data model, photo pipeline, and damage-comparison workflow serves
+// all of them instead of five bespoke ones.
+
+export type InspectionType = 'pre_delivery' | 'handover' | 'in_rental' | 'return' | 'post_return';
+
+export type InspectionStatus = 'draft' | 'completed' | 'voided';
+
+/** Never auto-derived from an image diff -- always a human's explicit judgment call. */
+export type DamageClassification = 'pre_existing' | 'new' | 'uncertain';
+
+/** Whether a piece of recorded damage should become a customer charge is a SEPARATE, reviewable decision from recording the damage itself -- recording damage never auto-creates a charge. */
+export type DamageLiabilityStatus = 'not_applicable' | 'pending_review' | 'customer_liable' | 'not_customer_liable';
+
+/** Configurable per src/config/inspectionPhotoCategories.ts -- not hardcoded into any single inspection type's validation. */
+export type InspectionPhotoCategory = 'front' | 'rear' | 'left' | 'right' | 'interior' | 'dashboard_odometer' | 'fuel_gauge' | 'damage' | 'other';
+
+export interface InspectionPhoto {
+  id: string; // INSPPH-000001
+  inspectionId: string;
+  vehicleId: string;
+  contractId?: string;
+  category: InspectionPhotoCategory;
+  /** Storage path from POST /api/upload (folder 'vehicle-inspections') -- never a raw Storage URL. */
+  documentPath: string;
+  /** GET /api/documents/file?path=... proxy URL -- what the UI actually renders/fetches. */
+  fileUrl: string;
+  /** Position within its category, 1-based -- lets the UI show "Front 1 of 3" and preserves capture order. */
+  sequence: number;
+  uploadedBy: string;
+  uploadedByName: string;
+  uploadedAt: string;
+  notes?: string;
+}
+
+export interface InspectionDamageMarker {
+  id: string;
+  part: VehicleDamageMarker['part'];
+  severity: VehicleDamageMarker['severity'];
+  classification: DamageClassification;
+  description: string;
+  photoIds: string[];
+  liabilityStatus: DamageLiabilityStatus;
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  reviewNotes?: string;
+  recordedBy: string;
+  recordedByName: string;
+  recordedAt: string;
+}
+
+export interface InspectionCustomerAcknowledgement {
+  acknowledgedAt: string;
+  /** The customer doesn't hold a login -- this records the name they gave in person/on the phone, witnessed and entered by staff. Not a signature-capture system (out of this mission's scope); see RULE-C04 for the separate, still-unbuilt OTP-signature concept. */
+  acknowledgedByName: string;
+  witnessedBy: string;
+  witnessedByName: string;
+  notes?: string;
+}
+
+export interface VehicleInspection {
+  id: string; // INSP-000001
+  vehicleId: string;
+  vehicleName: string;
+  contractId?: string;
+  contractNumber?: string;
+  type: InspectionType;
+  status: InspectionStatus;
+  inspectorId: string;
+  inspectorName: string;
+  startedAt: string;
+  completedAt?: string;
+  voidedAt?: string;
+  voidedBy?: string;
+  voidedByName?: string;
+  voidReason?: string;
+  mileage?: number;
+  fuelLevelPercent?: number;
+  exteriorCondition?: 'pristine' | 'clean' | 'fair' | 'needs_detailing';
+  interiorCondition?: 'pristine' | 'clean' | 'fair' | 'needs_detailing';
+  damages: InspectionDamageMarker[];
+  /** Snapshotted at creation from the current config default for this type -- so changing the default later never rewrites what a past inspection actually required. */
+  requiredPhotoCategories: InspectionPhotoCategory[];
+  /** Embedded, not a separate collection -- one inspection's photos are always read/written together with the inspection itself, so there's no benefit to a second collection and a real cost in cross-document consistency. */
+  photos: InspectionPhoto[];
+  /** e.g. a 'return' inspection points back at its 'handover' counterpart so the UI can render both photo sets and damage lists side by side for a human to compare. */
+  compareAgainstInspectionId?: string;
+  customerAcknowledgement?: InspectionCustomerAcknowledgement;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Contract {
   id: string; // CON-000001
   contractNumber: string;
