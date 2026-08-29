@@ -665,3 +665,80 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     expect(res.status).toBe(403);
   });
 });
+
+describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () => {
+  it('applies a discount at or below the 5% ceiling immediately, with no approval needed', async () => {
+    const res = await request(app)
+      .post('/api/quotations')
+      .set(authAs(SALES_UID))
+      .send({
+        customerName: 'Within Ceiling Client', vehicleName: 'GT3 RS', dailyRate: 2000, durationDays: 5,
+        discountAmount: 500, // 500 / 10000 = 5% exactly -- at the ceiling, not above it
+        ownerId: SALES_UID, ownerName: 'Test Sales'
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.discountAmount).toBe(500);
+    expect(res.body.discountOverridePending).toBeFalsy();
+    expect(res.body.discountApprovalId).toBeUndefined();
+  });
+
+  it('caps a non-manager discount above the ceiling and opens a pending manager-approval request', async () => {
+    const res = await request(app)
+      .post('/api/quotations')
+      .set(authAs(SALES_UID))
+      .send({
+        customerName: 'Above Ceiling Client', vehicleName: 'Cullinan', dailyRate: 3000, durationDays: 4,
+        discountAmount: 2400, // 2400 / 12000 = 20% -- well above the 5% ceiling
+        ownerId: SALES_UID, ownerName: 'Test Sales'
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.discountOverridePending).toBe(true);
+    expect(res.body.discountAmount).toBe(600); // capped at 5% of 12000
+    expect(res.body.requestedDiscountAmount).toBe(2400);
+    expect(res.body.grandTotal).toBeLessThan(12000); // the capped (safe) total, not the fully-discounted one
+    expect(res.body.discountApprovalId).toBeTruthy();
+
+    const approvals = await request(app).get('/api/procurement/approvals').set(authAs(CEO_UID));
+    const pending = approvals.body.find((a: any) => a.id === res.body.discountApprovalId);
+    expect(pending.entityType).toBe('Quotation');
+    expect(pending.action).toBe('discount_override');
+    expect(pending.status).toBe('pending');
+
+    // A different authorized decider (CEO) approves the full requested discount.
+    const decide = await request(app)
+      .post(`/api/procurement/approvals/${res.body.discountApprovalId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'VIP client, approved by sales manager.' });
+    expect(decide.status).toBe(200);
+
+    const quotations = await request(app).get('/api/quotations').set(authAs(CEO_UID));
+    const updated = quotations.body.find((q: any) => q.id === res.body.id);
+    expect(updated.discountAmount).toBe(2400);
+    expect(updated.discountOverridePending).toBe(false);
+    expect(updated.grandTotal).toBeLessThan(res.body.grandTotal); // the full discount is now reflected
+  });
+
+  it('a non-manager cannot approve their own quotation discount-override request', async () => {
+    const create = await request(app)
+      .post('/api/quotations')
+      .set(authAs(SALES_UID))
+      .send({ customerName: 'Self Approve Attempt', vehicleName: 'Urus', dailyRate: 1000, durationDays: 10, discountAmount: 3000, ownerId: SALES_UID, ownerName: 'Test Sales' });
+    expect(create.body.discountOverridePending).toBe(true);
+
+    const selfDecide = await request(app)
+      .post(`/api/procurement/approvals/${create.body.discountApprovalId}/decide`)
+      .set(authAs(SALES_UID))
+      .send({ decision: 'approved', note: 'self-approving' });
+    expect(selfDecide.status).toBe(403); // sales isn't a decider role at all, blocked before the SoD check even runs
+  });
+
+  it('ceo/admin can apply any discount immediately -- they are the manager approval, not subject to the ceiling', async () => {
+    const res = await request(app)
+      .post('/api/quotations')
+      .set(authAs(CEO_UID))
+      .send({ customerName: 'Manager Override Client', vehicleName: 'Phantom', dailyRate: 5000, durationDays: 2, discountAmount: 3000, ownerId: CEO_UID, ownerName: 'Test CEO' });
+    expect(res.status).toBe(201);
+    expect(res.body.discountAmount).toBe(3000); // full amount, 30% of 10000, applied without a ceiling check
+    expect(res.body.discountOverridePending).toBeFalsy();
+  });
+});

@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification } from './src/types';
+import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { vatPortion, applyVat } from './src/config/tax';
@@ -73,9 +73,11 @@ import {
 import { computeLateFee, requestLateFeeWaiver, LateFeeError } from './src/server/lateFees';
 import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
-  ProcurementApprovalError
+  registerApprovalHandler, ProcurementApprovalError,
+  type ProcurementApprovalRequest, type ProcurementApprovalActor
 } from './src/server/procurementApprovals';
 import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
+import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -1430,6 +1432,56 @@ app.put('/api/fleet/:id/lifecycle', requireRole('ceo', 'admin', 'fleet'), asyncH
   res.json({ success: true, vehicle: updatedVehicle });
 }));
 
+// RULE-M03 (Splendor Master Rule Set): marks a vehicle as physically at the
+// workshop right now -- flips it unavailable for new bookings and pins
+// maintenanceStatus at 'in_service' so the mileage-driven auto-recompute
+// (see computeMaintenanceScheduleUpdate, applied on every contract return)
+// never silently overwrites it back to optimal/due_soon.
+app.post('/api/fleet/:id/start-maintenance', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { reason } = req.body || {};
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to take a vehicle into maintenance.' });
+  }
+
+  let vehicle;
+  try {
+    vehicle = await startMaintenance(req.params.id, actor as any, recordAudit, String(reason).trim());
+  } catch (err) {
+    if (err instanceof MaintenanceError) return res.status(err.message.includes('not found') ? 404 : 409).json({ error: err.message });
+    throw err;
+  }
+
+  const index = globalStore.vehicles.findIndex(v => v.id === req.params.id);
+  if (index !== -1) globalStore.vehicles[index] = vehicle;
+  res.json(vehicle);
+}));
+
+// RULE-M03: records a completed service -- rolls the next-due threshold
+// forward from the service mileage and returns the vehicle to service.
+app.post('/api/fleet/:id/log-maintenance', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { mileageAtService, notes } = req.body || {};
+
+  let vehicle;
+  try {
+    vehicle = await logMaintenanceCompleted(
+      { vehicleId: req.params.id, mileageAtService: mileageAtService !== undefined ? Number(mileageAtService) : undefined, notes },
+      actor as any,
+      recordAudit
+    );
+  } catch (err) {
+    if (err instanceof MaintenanceError) return res.status(err.message.includes('not found') ? 404 : 409).json({ error: err.message });
+    throw err;
+  }
+
+  const index = globalStore.vehicles.findIndex(v => v.id === req.params.id);
+  if (index !== -1) globalStore.vehicles[index] = vehicle;
+  res.json(vehicle);
+}));
+
 // Fleet Reconciliation Report
 app.get('/api/fleet/reconciliation/report', (req, res) => {
   const report = SplendorConnectEngine.getReconciliationReport();
@@ -1726,14 +1778,36 @@ app.get('/api/quotations', (req, res) => {
 app.post('/api/quotations', asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Quotation');
   const data = req.body;
+  const actor = await getRequesterActor(req);
 
   // Calculate pricing
   const dailyRate = Number(data.dailyRate) || 0;
   const duration = Number(data.durationDays) || 1;
   const baseTotal = dailyRate * duration;
   const extraServicesTotal = (data.extraServices || []).reduce((s: number, e: any) => s + (e.included ? Number(e.price) : 0), 0);
-  const discountAmount = Number(data.discountAmount) || 0;
-  const subtotal = Math.max(0, baseTotal + extraServicesTotal - discountAmount);
+  const requestedDiscountAmount = Math.max(0, Number(data.discountAmount) || 0);
+  const preDiscountSubtotal = baseTotal + extraServicesTotal;
+  const requestedDiscountPercentage = preDiscountSubtotal > 0 ? (requestedDiscountAmount / preDiscountSubtotal) * 100 : 0;
+
+  // RULE-P01 (Splendor Master Rule Set, Blueprint item 11/REQ-BP11-5): a
+  // non-manager (anyone but ceo/admin) cannot apply a discount above the
+  // configured ceiling without a separate, logged manager sign-off. Rather
+  // than reject the quotation outright, the discount is safely CAPPED to
+  // the ceiling and applied immediately (never more than the requester is
+  // actually authorized for), while the full requested discount is held as
+  // a pending Segregation-of-Duties approval -- the same generic engine
+  // already used for Debt/CustomerRefund/EmployeeCustody/BlocklistEntry
+  // this session. If the requester's role can't be verified, the safest
+  // default is to treat them as non-manager rather than skip the check.
+  const discountCeilingPercent = getRuleValue('staffDiscountCeilingPercent', 5);
+  const isManager = actor?.role === 'ceo' || actor?.role === 'admin';
+  const needsDiscountApproval = !isManager && requestedDiscountPercentage > discountCeilingPercent;
+
+  const discountAmount = needsDiscountApproval
+    ? Math.round((preDiscountSubtotal * discountCeilingPercent) / 100 * 100) / 100
+    : requestedDiscountAmount;
+  const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
+  const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
   const vatAmount = vatPortion(subtotal);
   const grandTotal = subtotal + vatAmount;
 
@@ -1742,11 +1816,16 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
     id: newId,
     baseTotal,
     extraServicesTotal,
+    discountAmount,
+    discountPercentage,
     vatAmount,
     grandTotal,
     status: data.status || 'draft',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ...(needsDiscountApproval
+      ? { discountOverridePending: true, requestedDiscountAmount, requestedDiscountPercentage }
+      : {})
   };
   await createDurable('quotations', quote);
   globalStore.quotations.unshift(quote);
@@ -1761,8 +1840,73 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
     newValue: `Created quotation for ${quote.customerName} (${quote.vehicleName}) Total: ${grandTotal} AED`
   });
 
+  if (needsDiscountApproval && actor) {
+    const approval = await createProcurementApproval({
+      entityType: 'Quotation',
+      entityId: newId,
+      action: 'discount_override',
+      payload: { requestedDiscountAmount, requestedDiscountPercentage, discountCeilingPercent, cappedDiscountAmount: discountAmount },
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as UserRole,
+      reason: data.discountReason || `Discount of ${requestedDiscountPercentage.toFixed(1)}% requested, above the ${discountCeilingPercent}% ceiling.`
+    }, recordAudit);
+    quote.discountApprovalId = approval.id;
+    await updateDurable('quotations', newId, { discountApprovalId: approval.id });
+    const cached = globalStore.quotations.find(q => q.id === newId);
+    if (cached) cached.discountApprovalId = approval.id;
+  }
+
   res.status(201).json(quote);
 }));
+
+// RULE-P01: applying the full requested discount once a manager (a
+// different person than the requester, per the generic SoD engine's own
+// enforcement) approves it. Reads the quotation fresh inside a transaction
+// and re-derives every downstream total from it, rather than trusting
+// anything computed at request time -- the quotation's baseTotal/
+// extraServicesTotal can't have changed, but re-deriving keeps this
+// handler correct even if that assumption ever stops holding.
+registerApprovalHandler('Quotation', 'discount_override', async (request: ProcurementApprovalRequest, decider: ProcurementApprovalActor, recordAuditFn) => {
+  const quotationId = request.entityId;
+  const requestedDiscountAmount = Number(request.payload.requestedDiscountAmount) || 0;
+  const ref = admin.firestore().collection('quotations').doc(quotationId);
+
+  const updated = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new ProcurementApprovalError(`Quotation ${quotationId} not found.`);
+    const current = snap.data() as Quotation;
+    if (!current.discountOverridePending) {
+      throw new ProcurementApprovalError(`Quotation ${quotationId} has no pending discount override.`);
+    }
+    const preDiscountSubtotal = current.baseTotal + current.extraServicesTotal;
+    const discountAmount = Math.min(requestedDiscountAmount, preDiscountSubtotal);
+    const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
+    const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
+    const vatAmount = vatPortion(subtotal);
+    const grandTotal = subtotal + vatAmount;
+    const patch = {
+      discountAmount, discountPercentage, vatAmount, grandTotal,
+      discountOverridePending: false, updatedAt: new Date().toISOString()
+    };
+    tx.set(ref, patch, { merge: true });
+    return { ...current, ...patch };
+  });
+
+  const cached = globalStore.quotations.find(q => q.id === quotationId);
+  if (cached) Object.assign(cached, updated);
+
+  await recordAuditFn({
+    userId: decider.uid,
+    userName: decider.name,
+    userRole: decider.role,
+    entityType: 'Quotation',
+    entityId: quotationId,
+    action: 'approval',
+    newValue: `Discount override approved: ${updated.discountAmount} AED (${updated.discountPercentage.toFixed(1)}%). New total: ${updated.grandTotal} AED.`,
+    reason: request.reason
+  });
+});
 
 // Uses the same transactional availability gate as POST /api/reservations
 // (reserveVehicleSlot) so a quotation acceptance can't double-book a
@@ -2244,7 +2388,14 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
           status: 'available', currentCustomerId: null, currentContractId: null,
           totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now
         };
-        if (returnData.endMileage) vehicleUpdate.mileage = returnData.endMileage;
+        if (returnData.endMileage) {
+          vehicleUpdate.mileage = returnData.endMileage;
+          // RULE-M02: recompute the preventive-maintenance schedule from
+          // the newly-recorded odometer reading -- the return event is the
+          // only place mileage genuinely changes, so it's the natural
+          // (and only) trigger point, no separate polling job needed.
+          Object.assign(vehicleUpdate, computeMaintenanceScheduleUpdate(v, returnData.endMileage));
+        }
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
       }
 
@@ -2289,7 +2440,10 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
     vehicle.status = 'available';
     vehicle.currentCustomerId = undefined;
     vehicle.currentContractId = undefined;
-    if (returnData.endMileage) vehicle.mileage = returnData.endMileage;
+    if (returnData.endMileage) {
+      Object.assign(vehicle, computeMaintenanceScheduleUpdate(vehicle, returnData.endMileage));
+      vehicle.mileage = returnData.endMileage;
+    }
     vehicle.totalRevenue += updatedContract.grandTotal;
   }
   const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);

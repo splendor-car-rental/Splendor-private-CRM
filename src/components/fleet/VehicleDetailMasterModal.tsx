@@ -23,7 +23,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
 }) => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
-  const { vehicles, assignPlate, publishToWebsite, updateLifecycleStatus, contracts, reservations } = useCRM();
+  const { vehicles, assignPlate, publishToWebsite, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, contracts, reservations } = useCRM();
   const { currentUser } = useAuth();
 
   const vehicle = vehicles.find(v => v.id === vehicleId);
@@ -55,6 +55,15 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
   const [salePrice, setSalePrice] = useState(0);
   const [buyerName, setBuyerName] = useState('');
 
+  // RULE-M03: Start/log maintenance modals
+  const [startMaintenanceModalOpen, setStartMaintenanceModalOpen] = useState(false);
+  const [maintenanceReason, setMaintenanceReason] = useState('');
+  const [isStartingMaintenance, setIsStartingMaintenance] = useState(false);
+  const [logMaintenanceModalOpen, setLogMaintenanceModalOpen] = useState(false);
+  const [serviceMileage, setServiceMileage] = useState(vehicle?.mileage || 0);
+  const [serviceNotes, setServiceNotes] = useState('');
+  const [isLoggingMaintenance, setIsLoggingMaintenance] = useState(false);
+
   if (!vehicle) return null;
 
   const vehicleContracts = contracts.filter(c => c.vehicleId === vehicle.id);
@@ -73,6 +82,35 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
       console.error(err);
     } finally {
       setIsSubmittingPlate(false);
+    }
+  };
+
+  const handleStartMaintenanceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!maintenanceReason.trim()) return;
+    try {
+      setIsStartingMaintenance(true);
+      await startVehicleMaintenance(vehicle.id, maintenanceReason.trim());
+      setStartMaintenanceModalOpen(false);
+      setMaintenanceReason('');
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsStartingMaintenance(false);
+    }
+  };
+
+  const handleLogMaintenanceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsLoggingMaintenance(true);
+      await logVehicleMaintenance(vehicle.id, Number(serviceMileage), serviceNotes.trim());
+      setLogMaintenanceModalOpen(false);
+      setServiceNotes('');
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsLoggingMaintenance(false);
     }
   };
 
@@ -494,6 +532,58 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
           {/* TAB 5: SCHEDULE & CONTRACTS */}
           {activeTab === 'schedule' && (
             <div className="space-y-3">
+              {/* RULE-M01-M03: Preventive Maintenance Schedule */}
+              <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h4 className="font-bold text-zinc-200 text-xs uppercase tracking-wide">
+                    {isAr ? 'جدول الصيانة الوقائية' : 'Preventive Maintenance Schedule'}
+                  </h4>
+                  <Badge
+                    variant={vehicle.maintenanceStatus === 'in_service' ? 'amber' : vehicle.maintenanceStatus === 'due_soon' ? 'rose' : 'emerald'}
+                    size="sm"
+                  >
+                    {vehicle.maintenanceStatus === 'in_service'
+                      ? (isAr ? 'في الصيانة الآن' : 'In Service Now')
+                      : vehicle.maintenanceStatus === 'due_soon'
+                      ? (isAr ? 'الصيانة مستحقة قريباً' : 'Due Soon')
+                      : (isAr ? 'ضمن المعدل الطبيعي' : 'Optimal')}
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-[11px]">
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'العداد الحالي' : 'Current mileage'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{(vehicle.mileage || 0).toLocaleString()} km</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'آخر صيانة' : 'Last service'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{(vehicle.lastMaintenanceMileage ?? 0).toLocaleString()} km</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-500">{isAr ? 'الصيانة القادمة' : 'Next due at'}</p>
+                    <p className="font-mono text-zinc-200 font-semibold">{(vehicle.nextMaintenanceMileage || 0).toLocaleString()} km</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  {vehicle.maintenanceStatus === 'in_service' ? (
+                    <button
+                      onClick={() => { setServiceMileage(vehicle.mileage || 0); setLogMaintenanceModalOpen(true); }}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 font-medium transition-colors"
+                    >
+                      {isAr ? 'تسجيل انتهاء الصيانة' : 'Log Completed Service'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setStartMaintenanceModalOpen(true)}
+                      disabled={vehicle.status === 'rented' || vehicle.status === 'reserved'}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={vehicle.status === 'rented' || vehicle.status === 'reserved' ? (isAr ? 'المركبة قيد الإيجار حالياً' : 'Vehicle is currently rented/reserved') : undefined}
+                    >
+                      {isAr ? 'بدء الصيانة' : 'Start Maintenance'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <h4 className="font-bold text-zinc-200 text-xs uppercase tracking-wide">
                 {isAr ? 'العقود والحجوزات المرتبطة بهذه المركبة' : 'Associated Rentals & Online Bookings'}
               </h4>
@@ -675,6 +765,83 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
               className="px-4 py-2 rounded-xl bg-purple-500 text-zinc-950 font-bold hover:brightness-110"
             >
               {isAr ? 'تحديث الحالة' : 'Apply Status'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* START MAINTENANCE MODAL (RULE-M03) */}
+      <Modal
+        isOpen={startMaintenanceModalOpen}
+        onClose={() => setStartMaintenanceModalOpen(false)}
+        title={isAr ? 'بدء الصيانة' : 'Start Maintenance'}
+        subtitle={`Vehicle: ${vehicle.make} ${vehicle.model}`}
+        maxWidth="sm"
+      >
+        <form onSubmit={handleStartMaintenanceSubmit} className="space-y-4 text-xs">
+          <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-300 text-[11px]">
+            {isAr
+              ? 'ستصبح المركبة غير متاحة للحجز فوراً حتى يتم تسجيل انتهاء الصيانة.'
+              : 'The vehicle becomes unavailable for new bookings immediately, until the completed service is logged.'}
+          </div>
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'السبب *' : 'Reason *'}</label>
+            <textarea
+              required
+              rows={2}
+              value={maintenanceReason}
+              onChange={(e) => setMaintenanceReason(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+              placeholder="e.g. Scheduled 7,000 km oil & filter service"
+            />
+          </div>
+          <div className="pt-2 flex justify-end gap-2">
+            <button type="button" onClick={() => setStartMaintenanceModalOpen(false)} className="px-3 py-2 rounded-xl text-zinc-400 hover:bg-zinc-900">
+              {isAr ? 'إلغاء' : 'Cancel'}
+            </button>
+            <button type="submit" disabled={isStartingMaintenance} className="px-4 py-2 rounded-xl bg-amber-500 text-zinc-950 font-bold hover:brightness-110 disabled:opacity-50">
+              {isAr ? 'بدء الصيانة' : 'Start Maintenance'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* LOG COMPLETED MAINTENANCE MODAL (RULE-M03) */}
+      <Modal
+        isOpen={logMaintenanceModalOpen}
+        onClose={() => setLogMaintenanceModalOpen(false)}
+        title={isAr ? 'تسجيل انتهاء الصيانة' : 'Log Completed Service'}
+        subtitle={`Vehicle: ${vehicle.make} ${vehicle.model}`}
+        maxWidth="sm"
+      >
+        <form onSubmit={handleLogMaintenanceSubmit} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'قراءة العداد عند الصيانة (كم) *' : 'Odometer at service (km) *'}</label>
+            <input
+              type="number"
+              required
+              min={vehicle.lastMaintenanceMileage ?? 0}
+              value={serviceMileage}
+              onChange={(e) => setServiceMileage(Number(e.target.value))}
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+            />
+          </div>
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'ملاحظات' : 'Notes'}</label>
+            <textarea
+              rows={2}
+              value={serviceNotes}
+              onChange={(e) => setServiceNotes(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+              placeholder="e.g. Oil, filter, and brake pads replaced"
+            />
+          </div>
+          <div className="pt-2 flex justify-end gap-2">
+            <button type="button" onClick={() => setLogMaintenanceModalOpen(false)} className="px-3 py-2 rounded-xl text-zinc-400 hover:bg-zinc-900">
+              {isAr ? 'إلغاء' : 'Cancel'}
+            </button>
+            <button type="submit" disabled={isLoggingMaintenance} className="px-4 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-bold hover:brightness-110 disabled:opacity-50">
+              {isAr ? 'تسجيل الانتهاء' : 'Log Completed'}
             </button>
           </div>
         </form>

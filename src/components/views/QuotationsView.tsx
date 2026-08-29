@@ -73,6 +73,7 @@ export const QuotationsView: React.FC = () => {
     e.preventDefault();
     await createQuotation(form);
     setAddModalOpen(false);
+    setForm(prev => ({ ...prev, discountAmount: 0 }));
   };
 
   const handleConvert = async (quote: Quotation) => {
@@ -242,6 +243,19 @@ export const QuotationsView: React.FC = () => {
             {/* Grand Total Breakdown */}
             <div className="pt-4 border-t border-zinc-800 flex justify-end">
               <div className="w-72 space-y-2 text-xs">
+                {(activeQuote.discountAmount || 0) > 0 && (
+                  <div className="flex justify-between text-emerald-400">
+                    <span>Discount ({(activeQuote.discountPercentage || 0).toFixed(1)}%):</span>
+                    <span className="font-mono">-{(activeQuote.discountAmount || 0).toLocaleString()} AED</span>
+                  </div>
+                )}
+                {activeQuote.discountOverridePending && (
+                  <div className="p-2 rounded-lg bg-amber-950/30 border border-amber-500/40 text-amber-300 text-[11px]">
+                    A further discount of {(activeQuote.requestedDiscountAmount || 0).toLocaleString()} AED
+                    ({(activeQuote.requestedDiscountPercentage || 0).toFixed(1)}%) is awaiting sales-manager
+                    approval (RULE-P01) -- the total below reflects only the pre-approved, capped discount.
+                  </div>
+                )}
                 <div className="flex justify-between text-zinc-400">
                   <span>Subtotal (Net):</span>
                   <span className="font-mono text-zinc-200">{((activeQuote.baseTotal || 0) + (activeQuote.extraServicesTotal || 0) - (activeQuote.discountAmount || 0)).toLocaleString()} AED</span>
@@ -362,6 +376,20 @@ export const QuotationsView: React.FC = () => {
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">Discount (AED, before VAT)</label>
+            <input
+              type="number"
+              min="0"
+              value={form.discountAmount}
+              onChange={(e) => setForm({ ...form, discountAmount: Math.max(0, Number(e.target.value)) })}
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+            />
+            <p className="text-[10px] text-zinc-500 mt-1">
+              A discount above your role's ceiling is automatically capped and routed to a sales-manager approval -- the quotation is still created immediately at the capped, safe total (RULE-P01).
+            </p>
           </div>
 
           <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">

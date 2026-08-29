@@ -200,7 +200,7 @@ export interface VehicleTimelineEvent {
   id: string; // EVT-0001
   vehicleId: string;
   date: string;
-  action: 'CREATED' | 'PURCHASED' | 'REGISTERED' | 'PLATE_ASSIGNED' | 'PLATE_TRANSFERRED' | 'RENTAL_STARTED' | 'RENTAL_COMPLETED' | 'MAINTENANCE_LOGGED' | 'PUBLISHED_TO_WEB' | 'UNPUBLISHED_FROM_WEB' | 'FEATURED_ON_WEB' | 'PRICING_UPDATED' | 'SOLD' | 'ARCHIVED' | 'RESTORED';
+  action: 'CREATED' | 'PURCHASED' | 'REGISTERED' | 'PLATE_ASSIGNED' | 'PLATE_TRANSFERRED' | 'RENTAL_STARTED' | 'RENTAL_COMPLETED' | 'MAINTENANCE_STARTED' | 'MAINTENANCE_LOGGED' | 'PUBLISHED_TO_WEB' | 'UNPUBLISHED_FROM_WEB' | 'FEATURED_ON_WEB' | 'PRICING_UPDATED' | 'SOLD' | 'ARCHIVED' | 'RESTORED';
   previousState?: Record<string, any>;
   newState?: Record<string, any>;
   reason?: string;
@@ -439,6 +439,17 @@ export interface Quotation {
   extraServicesTotal: number;
   discountAmount: number;
   discountPercentage: number;
+  // RULE-P01 (Splendor Master Rule Set): a discount above the configured
+  // staffDiscountCeilingPercent requires sales-manager (ceo/admin) sign-off.
+  // While pending, discountAmount/discountPercentage above reflect the
+  // CAPPED (safe, already-authorized) discount actually applied to
+  // baseTotal/vatAmount/grandTotal -- requestedDiscountAmount/Percentage
+  // preserve what the requester originally asked for, applied in full only
+  // once discountApprovalId is approved.
+  discountOverridePending?: boolean;
+  discountApprovalId?: string;
+  requestedDiscountAmount?: number;
+  requestedDiscountPercentage?: number;
   vatAmount: number; // 5% UAE VAT
   grandTotal: number;
   securityDeposit: number;

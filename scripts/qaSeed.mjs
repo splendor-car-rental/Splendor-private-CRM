@@ -7,6 +7,7 @@ admin.initializeApp({ projectId: 'splendor-private-crm' });
 const users = [
   { uid: 'qa-ceo', email: 'qa-ceo@splendor.test', password: 'Passw0rd!', name: 'QA CEO', role: 'ceo' },
   { uid: 'qa-ops', email: 'qa-ops@splendor.test', password: 'Passw0rd!', name: 'QA Operations', role: 'operations' },
+  { uid: 'qa-sales', email: 'qa-sales@splendor.test', password: 'Passw0rd!', name: 'QA Sales', role: 'sales' },
 ];
 
 for (const u of users) {

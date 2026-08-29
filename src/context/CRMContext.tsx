@@ -123,6 +123,8 @@ interface CRMContextType {
   assignPlate: (vehicleId: string, plateNumber: string, plateCity: string, reason: string) => Promise<Vehicle>;
   publishToWebsite: (vehicleId: string, publication: Partial<WebsiteVehiclePublication>) => Promise<Vehicle>;
   updateLifecycleStatus: (vehicleId: string, lifecycleStatus: VehicleLifecycleStatus, reason: string, saleRecord?: any) => Promise<Vehicle>;
+  startVehicleMaintenance: (vehicleId: string, reason: string) => Promise<Vehicle>;
+  logVehicleMaintenance: (vehicleId: string, mileageAtService: number, notes: string) => Promise<Vehicle>;
   getReconciliationReport: () => Promise<WebsiteReconciliationItem[]>;
   checkVehicleAvailability: (vehicleId: string, startDate: string, endDate: string, excludeResId?: string) => Promise<{ available: boolean; conflictingRecords: any[] }>;
   
@@ -798,6 +800,45 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return updated;
   };
 
+  // RULE-M03 (Splendor Master Rule Set): starting maintenance takes a
+  // vehicle physically off the road; logging a completed service rolls the
+  // next-due mileage threshold forward again. See src/server/maintenance.ts.
+  const startVehicleMaintenance = async (vehicleId: string, reason: string) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/start-maintenance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    let updated: Vehicle;
+    try {
+      updated = await parseApiResponse<Vehicle>(res, 'Failed to start maintenance.');
+    } catch (err: any) {
+      showToast('Could Not Start Maintenance', err.message, 'error');
+      throw err;
+    }
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    showToast('Maintenance Started', `${updated.make} ${updated.model} is now marked in service.`);
+    return updated;
+  };
+
+  const logVehicleMaintenance = async (vehicleId: string, mileageAtService: number, notes: string) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/log-maintenance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mileageAtService, notes })
+    });
+    let updated: Vehicle;
+    try {
+      updated = await parseApiResponse<Vehicle>(res, 'Failed to log the completed maintenance.');
+    } catch (err: any) {
+      showToast('Could Not Log Maintenance', err.message, 'error');
+      throw err;
+    }
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    showToast('Maintenance Logged', `${updated.make} ${updated.model} is back in service. Next due at ${(updated.nextMaintenanceMileage || 0).toLocaleString()} km.`);
+    return updated;
+  };
+
   const getReconciliationReport = async (): Promise<WebsiteReconciliationItem[]> => {
     const res = await fetch('/api/fleet/reconciliation/report');
     const data = await parseApiResponse<{ report: WebsiteReconciliationItem[] }>(res, 'Failed to load reconciliation report.');
@@ -1449,7 +1490,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchData, showToast, toasts, dismissToast,
       addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer,
       addLead, updateLead, convertLeadToCustomer,
-      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability,
+      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, getReconciliationReport, checkVehicleAvailability,
       createQuotation, convertQuotationToReservation,
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,

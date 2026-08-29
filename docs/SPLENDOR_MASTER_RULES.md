@@ -239,17 +239,26 @@ states its real current status honestly.
 
 ## MODULE 09 — Maintenance
 
-### RULE-M01 — Mileage/time-based maintenance thresholds, configurable
-**REQUIREMENT**: Per-vehicle (or per-class default) maintenance thresholds (oil/filter km interval, tire/brake inspection interval, cosmetic-detail time interval) are stored and editable via the Business Rules Engine, not hard-coded.
+### RULE-M01 — Mileage-based maintenance interval, configurable
+**REQUIREMENT**: A per-fleet maintenance interval (oil/filter km interval) and an alert lead distance are stored and editable via the Business Rules Engine (`maintenanceOilFilterIntervalKm` default 7,000 km, `maintenanceAlertLeadKm` default 500 km), not hard-coded.
+**ACCEPTANCE CRITERIA**: `src/server/maintenance.ts`'s `computeMaintenanceScheduleUpdate()` reads both via `getRuleValue`.
 **STATUS**: **IMPLEMENTED (this session)**.
 
-### RULE-M02 — Auto-transition to maintenance status + booking block
-**REQUIREMENT**: When a vehicle's accumulated mileage crosses its threshold, the server automatically sets its status to `maintenance`, which `availability.ts` already honors as a hard booking block.
-**DEPENDENCIES**: RULE-M01; the existing `'maintenance'` status check in `src/server/availability.ts:76`.
-**STATUS**: **IMPLEMENTED (this session)**.
+### RULE-M02 — Mileage-driven maintenanceStatus recompute (optimal / due_soon)
+**REQUIREMENT**: A vehicle's `maintenanceStatus` auto-recomputes to `due_soon` once its mileage enters the alert lead window before the next-due threshold -- purely from the mileage updates that already happen at contract return, no separate polling job.
+**DEPENDENCIES**: RULE-M01; wired into `POST /api/contracts/:id/return` (the only place vehicle mileage genuinely changes).
+**ACCEPTANCE CRITERIA**: Never overwrites `in_service` -- that state is a human signal (RULE-M03), not mileage-driven.
+**CORRECTION (post-implementation)**: an earlier draft of this rule described an automatic hard `status:'maintenance'` booking-block triggered purely by crossing the threshold. What is actually built is narrower and deliberately so: crossing the threshold only flips the informational `maintenanceStatus` to `due_soon` (visible on the vehicle's Schedule tab); the vehicle stays bookable until a human explicitly calls Start Maintenance (RULE-M03) -- auto-blocking a vehicle's revenue the instant an odometer reading crosses a configurable number, with no human in the loop, was judged too aggressive a default for a live rental fleet without an explicit product decision, so this session chose the safer, reversible behavior (alert, not auto-block) and is documenting the gap rather than silently shipping the more aggressive one.
+**STATUS**: **IMPLEMENTED (this session)** -- as the alert-only design described above, not the auto-block design an earlier draft of this rule assumed.
 
-### RULE-M03 — Pre-threshold workshop-manager alert
-**STATUS**: **IMPLEMENTED (this session)** — configurable "alert N km before threshold" via the same rules engine, dispatched over WhatsApp.
+### RULE-M03 — Workshop start/completion workflow (human-initiated)
+**REQUIREMENT**: A ceo/admin/fleet user can explicitly take a vehicle into maintenance (`POST /api/fleet/:id/start-maintenance`) -- which sets `maintenanceStatus:'in_service'` and `status:'maintenance'`, the latter already honored by `availability.ts`'s existing hard booking-block check -- and later log the completed service (`POST /api/fleet/:id/log-maintenance`), which rolls the next-due mileage forward from the service odometer reading and returns the vehicle to `available`.
+**DEPENDENCIES**: RULE-M01/M02; the existing `'maintenance'` status check in `src/server/availability.ts`; the generic Firestore-transaction pattern (`runDurableTransaction`) for a safe read-then-write on the vehicle doc.
+**ACCEPTANCE CRITERIA**: Refuses to start maintenance on a vehicle that is `rented`/`reserved`; refuses a service-completion mileage lower than the last recorded service mileage; appends a `VehicleTimelineEvent` (`MAINTENANCE_STARTED`/`MAINTENANCE_LOGGED`) and an audit-log entry for each transition.
+**SECURITY**: Both routes are `requireRole('ceo','admin','fleet')`.
+**FINANCIAL**: None directly -- this is an operational-availability workflow, not a financial mutation.
+**VERIFICATION METHOD**: `tests/maintenance.test.ts` (real Firestore emulator, 9 tests: the pure mileage-recompute function's 4 cases, plus 5 transactional start/log-completion cases) plus a real-Chromium/Playwright pass (`scripts/qaMaintenanceVerify.mjs`) confirming the full UI round-trip: a new vehicle starts Optimal, Start Maintenance flips it to "In Service Now" and the vehicle's overall status badge to MAINTENANCE, and Log Completed Service returns it to Optimal.
+**NOTE**: no WhatsApp alert dispatch was built for `due_soon` this session (an earlier draft of the old RULE-M03 claimed this) -- the `due_soon` status is currently visible only on the vehicle's own Schedule tab; a proactive notification is a reasonable, cheap follow-up (the existing WhatsApp notification engine already used for RULE-F02/other alerts) but was not built to keep this session's scope to what was actually verified.
 
 ### RULE-M04 — Projected-mileage conflict warning for long bookings
 **STATUS**: TECHNICAL_DESIGN_REQUIRED — not built this session (needs a booking-duration-aware mileage projection, a reasonable but non-trivial addition to the booking flow; deferred, not fabricated).
@@ -288,7 +297,13 @@ states its real current status honestly.
 ## MODULE 11 — Dynamic Pricing
 
 ### RULE-P01 — Discount ceiling with escalated approval
-**REQUIREMENT**: A regular staff member cannot apply a discount above a configurable ceiling (default 5%) without a separate, SoD-compliant sales-manager approval.
+**REQUIREMENT**: A regular staff member cannot apply a discount above a configurable ceiling (default 5%, `staffDiscountCeilingPercent` in the Business Rules Engine) without a separate, SoD-compliant sales-manager approval.
+**RATIONALE**: Blueprint item 11 (REQ-BP11-5): "الموظف العادي لا يملك صلاحية الخصم بأكثر من 5%" ("a regular employee has no authority to discount more than 5%").
+**DEPENDENCIES**: Business Rules Engine (`staffDiscountCeilingPercent`); the generic Segregation-of-Duties engine (`procurementApprovals.ts`).
+**ACCEPTANCE CRITERIA**: `POST /api/quotations` computes the requested discount's percentage of the pre-discount subtotal. ceo/admin (the sales-manager rank itself) apply any discount immediately, no ceiling check. Any other role requesting above the ceiling has the quotation created immediately at the CAPPED (ceiling) discount -- the customer-facing total is never inflated waiting on a decision -- while the full requested discount is held as a pending `Quotation`/`discount_override` request in the same generic approvals inbox already used for Debt/CustomerRefund/EmployeeCustody/BlocklistEntry. Only ceo/admin can decide it (`requireRole('ceo','admin')` on `/api/procurement/approvals/:id/decide`), and the SoD engine itself still blocks the requester from deciding their own request. On approval, a transactional handler re-derives discountAmount/discountPercentage/vatAmount/grandTotal from the quotation's own stored baseTotal/extraServicesTotal (never trusting a client-supplied recomputation) and clears the pending flag.
+**SECURITY**: The ceiling check reads the requester's role from their verified Firestore profile (`getRequesterActor`), never from client-supplied data; a caller whose role can't be resolved is treated as non-manager (the safer default) rather than skipped.
+**FINANCIAL**: Never applies more than the requester is authorized for without a separate approval; the capped-then-escalated design means no financial exposure sits "pending" at the wrong (too generous) total in the meantime.
+**VERIFICATION METHOD**: `tests/coreWorkflows.test.ts` (mocked-Firestore, 4 tests: at-ceiling immediate application, above-ceiling capping + pending request, self-approval blocked, ceo/admin bypass) plus a real-Chromium/Playwright pass against the real Firestore/Auth emulators (`scripts/qaDiscountVerify.mjs`) confirming the pending-approval notice, the generic Procurement & Suppliers > Approvals inbox surfacing the request, and a different user (CEO) approving it end-to-end with the quotation's totals updating live.
 **STATUS**: **IMPLEMENTED (this session)**.
 
 ### RULE-P02 — Event/seasonal pricing calendar

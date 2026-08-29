@@ -345,6 +345,19 @@ codebase.
 
 **What is blocked.** Nothing — this can be picked up any time once decided.
 
+**RESOLVED (implemented this session, RULE-P01).** Built exactly as
+recommended: `staffDiscountCeilingPercent` (default 5%) in the Business
+Rules Engine, enforced in `POST /api/quotations`. ceo/admin apply any
+discount immediately (they are the sales-manager rank itself); anyone else
+requesting above the ceiling has the quotation created immediately at the
+capped (ceiling) discount, with the full requested discount held as a
+pending request in the existing generic Segregation-of-Duties engine
+(`procurementApprovals.ts`) — not a new primitive, per the recommendation
+above. See the `Quotation`/`discount_override` handler registered in
+`server.ts`, and `docs/SPLENDOR_MASTER_RULES.md`'s RULE-P01 for full
+acceptance criteria and verification evidence (mocked-Firestore tests plus
+a real-Chromium/Playwright pass).
+
 ---
 
 ## DECISION-11 — Priority order across the 12 Blueprint items
