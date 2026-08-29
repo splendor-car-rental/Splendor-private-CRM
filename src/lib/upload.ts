@@ -18,15 +18,16 @@ export interface UploadResult {
  * Uploads a file to the server (which stores it in Firebase Storage via
  * firebase-admin) and returns a URL to read it back. For 'avatars' this is
  * a Storage signed URL (low-sensitivity profile photos, rendered via plain
- * <img src> across the app); for 'customer-documents' (KYC scans) it's a
- * relative path to the authenticated GET /api/documents/file proxy, which
- * requires the caller's session on every access -- see /api/upload in
- * server.ts for why the two folders are treated differently.
+ * <img src> across the app); for 'customer-documents' (KYC scans) and
+ * 'vehicle-inspections' (inspection photo evidence) it's a relative path
+ * to the authenticated GET /api/documents/file proxy, which requires the
+ * caller's session on every access -- see /api/upload in server.ts for why
+ * the folders are treated differently.
  */
 export async function uploadFile(
   file: File,
-  folder: 'avatars' | 'customer-documents',
-  extra?: { targetUserId?: string; customerId?: string }
+  folder: 'avatars' | 'customer-documents' | 'vehicle-inspections',
+  extra?: { targetUserId?: string; customerId?: string; inspectionId?: string }
 ): Promise<UploadResult> {
   const dataBase64 = await fileToBase64(file);
   const res = await apiFetch('/api/upload', {

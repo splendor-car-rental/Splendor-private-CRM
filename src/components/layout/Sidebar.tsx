@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing, Truck
+  TicketCheck, BellRing, Truck, ClipboardCheck
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -116,6 +116,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <FileSignature className="w-4 h-4" />,
           badge: activeRentalsCount > 0 ? `${activeRentalsCount} Active` : undefined,
           badgeVariant: 'gold' as const
+        },
+        {
+          id: 'inspections',
+          label: language === 'ar' ? 'فحص المركبة والأدلة المصورة' : 'Vehicle Inspections',
+          icon: <ClipboardCheck className="w-4 h-4" />
         }
       ]
     },

@@ -28,6 +28,7 @@ import { TestSuiteRunnerView } from './components/views/TestSuiteRunnerView';
 import { SettingsAuditView } from './components/views/SettingsAuditView';
 import { ProcurementView } from './components/views/ProcurementView';
 import { SecurityBlocklistView } from './components/views/SecurityBlocklistView';
+import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -86,6 +87,8 @@ const MainLayout: React.FC = () => {
         return <ProcurementView />;
       case 'security':
         return <SecurityBlocklistView />;
+      case 'inspections':
+        return <VehicleInspectionsView />;
       case 'ai-studio':
       case 'ai-intelligence':
         return <AIStudioView />;
