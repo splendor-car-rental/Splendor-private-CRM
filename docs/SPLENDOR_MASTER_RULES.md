@@ -376,6 +376,94 @@ own Handover/Return buttons). Covers `pre_delivery` / `handover` /
 
 ---
 
+## MODULE 13 — WhatsApp Conversational Commerce
+
+Before this session: a real, signature-verified inbound webhook
+(`POST /api/whatsapp/webhook`) durably logged every message/status event
+(`whatsapp_inbound_events`), and a real plain-text outbound sender
+(`src/server/whatsapp.ts`) was wired into ~15 business-event notifications
+and an admin Notification/WhatsApp Control Center. Neither side did
+anything WITH an inbound message beyond storing it — the webhook's own
+code comment called turning it into a real conversation "a separate,
+larger feature to build once this durable log is in place." This module
+is that feature: a persisted conversation state machine
+(`src/server/whatsappConversation.ts`, collection `whatsapp_conversations`
++ a `messages` subcollection per phone), deliberately additive alongside
+the existing raw event log and outbound notification system, not a
+replacement for either. WhatsApp remains a communication layer only: the
+one CRM-mutating action this module can trigger (creating a reservation)
+goes through the SAME `reserveVehicleSlot()` transaction every other
+booking path already uses, via a new `SplendorConnectEngine.
+handleWhatsAppReservation()` sibling of the existing website gateway
+method — a second front door into the one reservation engine, never a
+second engine.
+
+### RULE-W01 — Webhook trust boundary + per-message processing idempotency
+**REQUIREMENT**: Every inbound delivery must be signature-verified before anything happens; a genuine Meta retry of the same message id must never re-run conversation processing (which could otherwise double-create a reservation or double-send a reply).
+**RATIONALE**: The signature check (`X-Hub-Signature-256` HMAC) already existed and is unchanged. This session added a `processedAt` flag on the SAME raw event document, checked before invoking the conversation engine and set only after it completes successfully — separate from "is the raw event stored," so a crash mid-processing is safely retried by Meta's own webhook retry instead of being silently dropped because the raw record already existed.
+**ACCEPTANCE CRITERIA**: A duplicated message id is a true no-op for conversation processing (verified both against the real Firestore emulator's underlying idempotency-key mechanism used by the reservation step, and at the webhook layer by asserting no second message is logged in `whatsapp_conversations/{phone}/messages` on a redelivery).
+**SECURITY**: Added a generous per-IP rate limiter (300/min) directly on the webhook route, ahead of signature verification, as defense-in-depth against CPU exhaustion from a flood of unsigned/mis-signed requests -- the real trust boundary remains the signature check, this only bounds wasted work under abuse.
+**VERIFICATION METHOD**: `tests/whatsappWebhook.test.ts` (real signature verification, `processedAt` gating, real duplicate-delivery no-op — mocked Firestore admin); `scripts/qaWhatsAppVerify.mjs` (a real HMAC-signed POST, exactly Meta's own trust mechanism, replayed with the same message id against the real running server).
+**STATUS**: **IMPLEMENTED (this session)** — enhancing the pre-existing signature-verification base.
+
+### RULE-W02 — Persisted conversation state machine
+**REQUIREMENT**: Each customer phone number has one real, durable conversation record moving through a defined set of states (NEW → BROWSING → VEHICLE_SELECTED → DATES_PENDING → LOCATION_PENDING → RESERVATION_CONFIRM → RESERVATION_CREATED, with HUMAN_ASSISTANCE and CLOSED reachable at any point), never inferred ad hoc from message history.
+**RATIONALE**: The Blueprint's conversation-state-machine requirement, trimmed to the states this session's conversational-commerce scope actually needs (browsing → booking → post-booking follow-up) rather than inventing states for stages this pass didn't build (contract/signature/handover/return/settlement remain served by the pre-existing outbound notification events, unchanged).
+**ACCEPTANCE CRITERIA**: An unrecognized input re-prompts instead of crashing or silently advancing; "menu"/"restart" resets to BROWSING from any state; a CLOSED conversation reopens to BROWSING on the next inbound message instead of a dead end; a customer can always reach a human (see RULE-W06) regardless of current state.
+**VERIFICATION METHOD**: `tests/whatsappConversation.test.ts` (real Firestore emulator) — 17 tests covering every transition, an unparsable-date rejection, and the universal escape hatches.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-W03 — Customer matching, never guessed
+**REQUIREMENT**: An inbound phone number is matched to an existing `Customer` by exact phone match; zero matches is a genuinely new contact (a `Customer` record is created only once a booking is actually confirmed, mirroring how the pre-existing website booking gateway already works); more than one match (phone uniqueness is not otherwise enforced in this CRM) is flagged `ambiguous_review`, never silently resolved to either candidate.
+**RATIONALE**: This mission's explicit "never guess identity" requirement.
+**SECURITY/PII**: Phone numbers and match state are only ever exposed through the authenticated Unified Inbox (RULE-W06), the same access model as every other Customer field.
+**VERIFICATION METHOD**: `tests/whatsappConversation.test.ts`'s `matchCustomerByPhone` suite (unmatched / matched / ambiguous_review).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-W04 — Reservation creation reuses the one real reservation engine
+**REQUIREMENT**: A WhatsApp-confirmed booking creates a real `Reservation` through the exact same conflict-checking, buffer-hour-aware, cross-instance-safe `reserveVehicleSlot()` transaction every other booking path (staff CRM, public website) already uses — never a parallel booking mechanism, never a direct write that bypasses availability checking.
+**RATIONALE**: This mission's explicit "WhatsApp is an interface, not a second reservation engine" mandate.
+**ACCEPTANCE CRITERIA**: `SplendorConnectEngine.handleWhatsAppReservation()` mirrors `handlePublicReservation()`'s structure (phone-based customer dedup instead of email, since a WhatsApp customer has no email to key on) but calls the identical `reserveVehicleSlot()`; a vehicle that becomes unavailable between browsing and confirming surfaces `AvailabilityConflictError` as a friendly re-prompt, never a crash; the created `Reservation.status` is always `'pending'` (concierge review), never auto-confirmed.
+**FINANCIAL**: The reservation carries a server-computed price (the exact same days/dailyRate/totalAmount/deposit formula the customer was shown in the confirmation summary — one shared `computeReservationPreview()` function, so the two can never drift) — WhatsApp never invents or lets the customer set a price.
+**SECURITY**: Idempotency key derived from (phone, vehicleId, pickup, return) — a genuine double-tap of "Confirm" (two distinct messages) creates exactly one reservation.
+**KNOWN, PRE-EXISTING, DOCUMENTED GAP**: `handleWhatsAppReservation()`'s customer-dedup-by-phone check (find-or-create) is not itself wrapped in the reservation's own transaction — this is the SAME pattern already present in the pre-existing `handlePublicReservation()`, not a new class of bug introduced here. In the narrow window of two truly simultaneous confirms for a brand-new phone number, two `Customer` records could both be created before either commits, even though the reservation itself is still created exactly once (protected by its own idempotency key). Discovered, not fixed — an app-wide customer-dedup hardening pass is outside this WhatsApp-focused mission's scope per its own instructions.
+**VERIFICATION METHOD**: `tests/whatsappConversation.test.ts` (real emulator: happy path, financial-safety assertion, real concurrent double-tap creating exactly one reservation) + `scripts/qaWhatsAppVerify.mjs` (real browser + real server: confirms the created reservation is independently visible via `GET /api/reservations`, not a shadow record).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-W05 — Interactive messaging within Meta's real limits
+**REQUIREMENT**: Vehicle category/catalog browsing uses Meta's `interactive.list` message type; the reservation confirm/cancel step uses Meta's `interactive.button` type; a pre-approved Message Template sender is available for any future outside-the-24-hour-session use. Every payload respects Meta's own documented hard limits (max 3 buttons, max 10 list rows total, title/description length caps) — validated before the call, refused locally with a clear error rather than sent to Meta and rejected.
+**RATIONALE**: The mission's explicit "use what Meta genuinely supports, document real limits, never claim unverified features."
+**VERIFICATION METHOD**: `tests/whatsappSend.test.ts` — MOCK VERIFIED: `global.fetch` is mocked and every payload's exact JSON shape is asserted against Meta's documented Cloud API schema for that message type, plus the limit-violation refusals. **LIVE META VERIFICATION: BLOCKED / UNVERIFIED** — no real WhatsApp Business Account or credentials (`WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID`) are configured in this environment (confirmed: `.env` only ever had placeholder values — see the final report's External Dependencies section), so no payload has actually been accepted by Meta's real Graph API. The payload shapes match Meta's public documentation, but that is not the same as a confirmed live send.
+**STATUS**: **IMPLEMENTED (this session)** — payload construction MOCK VERIFIED; live delivery UNVERIFIED/BLOCKED (credentials).
+
+### RULE-W06 — Human Concierge handoff + Unified Inbox
+**REQUIREMENT**: A customer can always reach a human ("agent"/"موظف"/a Human Help action, honored from any state), which turns the bot off (`botActive:false`) for that conversation and notifies staff; a staff member can also proactively take over a still-bot-active conversation; staff see one Unified Inbox (list + thread + customer/reservation context + assign/priority/tags + manual reply + Return-to-Automation) inside the existing CRM, never a separate chat application.
+**RATIONALE**: The mission's explicit Human Concierge + "no separate chat app" requirements.
+**ACCEPTANCE CRITERIA**: While `botActive:false`, a further inbound message is logged into the thread but produces NO automated reply (verified: message count check before/after); "Return to Bot" resets to BROWSING (the simplest safe re-entry point, since the customer's earlier draft may be stale) and staff can reply manually only while the bot is inactive (attempting a manual reply while the bot is still active is refused with a 409, not silently allowed to race the bot).
+**SECURITY**: All five new `/api/whatsapp/conversations*` routes require an authenticated session with `ceo`/`admin`/`operations`/`sales` role (matching who can already reach reservations/customers) — never reachable by a customer or by Meta.
+**AUDIT**: Escalation-to-human, staff takeover/return, assignment/priority changes, and manual replies each call the existing `recordAudit()` (hash-chained ledger) — no second audit mechanism.
+**VERIFICATION METHOD**: `tests/whatsappConversation.test.ts` (silence-while-human-owns-it, takeover/return state transitions) + `tests/coreWorkflows.test.ts` (route-level RBAC for all 5 routes, mocked HTTP) + `scripts/qaWhatsAppVerify.mjs` (real browser: Inbox list shows Needs Human/priority/state badges, thread renders the real bilingual message history, staff-initiated Take Over enables a reply box, a manual reply appears in the thread, Return to Bot hands it back).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-W07 — Financial safety: WhatsApp never mutates money
+**REQUIREMENT**: No code path in this module can create a charge, alter a balance, or auto-confirm a booking. A WhatsApp-originated reservation is always `status:'pending'` / `depositStatus:'pending'` — a request for concierge review, structurally identical to a pending website reservation.
+**RATIONALE**: This mission's explicit, repeated financial-safety mandate.
+**ACCEPTANCE CRITERIA**: `tests/whatsappConversation.test.ts` asserts the created reservation's `status`/`depositStatus` are both `'pending'` after a full successful booking flow — never `'confirmed'`/`'collected'`.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-W08 — Post-booking follow-up requests (extension/return/questions)
+**REQUIREMENT**: Once a reservation exists, any further customer message is routed to the concierge team as a follow-up `Task` (linked to the reservation) rather than silently ignored or, worse, WhatsApp attempting to interpret and execute a contract/financial change itself.
+**RATIONALE**: The mission's explicit "WhatsApp sends/displays/routes, never executes" instruction for extension/return/settlement-adjacent requests.
+**STATUS**: **IMPLEMENTED (this session)** — as a routing/notification mechanism only; the actual extension/return/settlement mutation still requires the existing, unmodified staff-driven Contract workflow.
+
+### RULE-W09 — Inbound document/media handling
+**STATUS**: **MISSING / NOT BUILT this session** — a real implementation would need to download media from Meta's Graph API using the access token and register it through the existing secure document pipeline (the same `vehicle-inspections`-style folder-allowlist pattern from Module 08, not the weaker generic `/api/documents` catalog). Given real Storage is confirmed network-blocked in this sandbox (see the final report's Storage Verification section) and this environment has no real Meta credentials to fetch media from in the first place, building this now would produce code with zero possible verification either way. Documented as a real, scoped, buildable gap rather than attempted half-built and unverifiable.
+
+### RULE-W10 — Proactive/marketing messaging (abandoned reservation, VIP campaigns, seasonal offers)
+**STATUS**: **MISSING / REQUIRES_PARTNER_ACCESS** — proactive outside-the-24-hour-session messaging requires Meta-approved Message Templates (the send function exists, RULE-W05, but no template has been submitted/approved) and a real opt-in tracking mechanism, neither of which exists in this codebase. Not built, per the mission's own explicit instruction not to assume proactive sending is unrestricted and not to fabricate opt-in infrastructure that isn't there.
+
+---
+
 ## Summary Table
 
 **Correction note (post-implementation audit).** An earlier draft of this
@@ -406,23 +494,34 @@ table reflects the corrected, verified counts.
 | 10 Reservation | 5 | 2 | 2 | 1 |
 | 11 Pricing | 3 | 0 | 1 | 2 |
 | 12 Governance | 4 | 2 | 1 | 1 |
-| **Total** | **60** | **10** | **18** | **32** |
+| 13 WhatsApp | 10 | 0 | 8 | 2 |
+| **Total** | **70** | **10** | **26** | **34** |
 
-18 rules were genuinely implemented, tested, and committed across this
-session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08), on
-top of 10 already-real pre-existing ones — 28 of 60 (47%) now have
-genuine, evidenced implementation. Module 08 grew from 4 to 8 rules this
-phase: I01/I02 (photo requirements, manual comparison) already existed as
-placeholders and are now genuinely built; I05-I08 (damage liability
-review, customer acknowledgement, post-completion immutability,
+26 rules were genuinely implemented, tested, and committed across this
+session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08,
+W01-W08), on top of 10 already-real pre-existing ones — 36 of 70 (51%) now
+have genuine, evidenced implementation. Module 08 grew from 4 to 8 rules
+this phase: I01/I02 (photo requirements, manual comparison) already
+existed as placeholders and are now genuinely built; I05-I08 (damage
+liability review, customer acknowledgement, post-completion immutability,
 idempotent creation/completion) are new rules this phase's Vehicle
 Inspection mission surfaced and immediately implemented, per this
 mission's standing authorization to create new rules as needed rather
 than force everything into the original four inspection placeholders.
-The 32 deferred/not-built rules are each explicitly reasoned above, not
-silently dropped: external/hardware dependency, a material
+Module 13 (WhatsApp) is entirely new this session, replacing the
+originally-drafted Module 01's WhatsApp-OTP sub-requirement's placeholder
+framing with the actual, much larger conversational-commerce mission this
+phase covered — W01-W08 (webhook idempotency hardening, the conversation
+state machine, customer matching, reservation-engine reuse, interactive
+messaging, the Human Concierge Unified Inbox, financial safety,
+post-booking follow-up routing) are real and verified; W09 (inbound
+document/media handling) and W10 (proactive/marketing messaging) are
+honestly deferred (external Storage/Meta-partner dependencies), not
+half-built. The 34 deferred/not-built rules are each explicitly reasoned
+above, not silently dropped: external/hardware dependency, a material
 financial-policy question awaiting the user (RULE-D04/D05), a deliberate
 choice not to half-build a large, coherent feature in a rushed pass
-(RULE-P02/P03, RULE-R05, RULE-I03/I04) — plus the Module 01/02/05/07 rows
-corrected by an earlier audit, which remain genuinely unbuilt and are
-catalogued as real, sizeable future work rather than fabricated.
+(RULE-P02/P03, RULE-R05, RULE-I03/I04, RULE-W09/W10) — plus the
+Module 01/02/05/07 rows corrected by an earlier audit, which remain
+genuinely unbuilt and are catalogued as real, sizeable future work rather
+than fabricated.
