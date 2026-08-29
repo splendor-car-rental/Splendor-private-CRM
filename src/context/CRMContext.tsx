@@ -27,7 +27,13 @@ import { useAuth } from './AuthContext';
 async function parseApiResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error((body && typeof body === 'object' && body.error) || fallbackMessage);
+    const error = new Error((body && typeof body === 'object' && body.error) || fallbackMessage);
+    // Carry any extra structured fields the server sent alongside `error`
+    // (e.g. the Publish Gate's `missingReasons`/`missingReasonsEn` arrays)
+    // onto the thrown Error so a specific caller can surface them, without
+    // every other caller needing to know or care that they exist.
+    if (body && typeof body === 'object') Object.assign(error, body);
+    throw error;
   }
   return body as T;
 }

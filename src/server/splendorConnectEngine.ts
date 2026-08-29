@@ -108,14 +108,21 @@ export class SplendorConnectEngine {
       fuelType: vehicle.fuelType,
       images: pub.images && pub.images.length > 0 ? pub.images : (vehicle.images || []),
       thumbnail: vehicle.thumbnail || (pub.images && pub.images[0]) || '',
-      features: pub.features || ['Bespoke Interior', 'Premium Sound System', 'Chauffeured Delivery Available'],
-      featuresAr: pub.featuresAr || ['مقصورة مخصصة فاخرة', 'نظام صوتي فائق الجودة', 'خدمة التوصيل مع سائق خاصة'],
+      // Never fabricate a features list -- SPLENDOR does not publish a spec
+      // or amenity claim about a vehicle unless it is real and confirmed
+      // (Vehicle Master Profile mission, section 18). An unconfirmed/empty
+      // features list on the publication record means the public page
+      // simply shows none, never an invented placeholder list.
+      features: pub.features && pub.features.length > 0 ? pub.features : [],
+      featuresAr: pub.featuresAr && pub.featuresAr.length > 0 ? pub.featuresAr : [],
       pricing: {
         dailyRate: pub.dailyRate || vehicle.dailyRate,
         weeklyRate: pub.weeklyRate || vehicle.weeklyRate,
         monthlyRate: pub.monthlyRate || vehicle.monthlyRate,
         deposit: pub.deposit || vehicle.minDeposit,
-        mileageAllowanceKm: pub.mileageAllowance || 250,
+        // The confirmed mileage allowance set on this vehicle's own
+        // publication record -- never a fabricated fallback number.
+        mileageAllowanceKm: pub.mileageAllowance || 0,
         currency: 'AED'
       },
       featured: !!pub.featured,

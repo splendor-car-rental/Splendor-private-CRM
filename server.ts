@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole } from './src/types';
+import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { vatPortion, applyVat } from './src/config/tax';
@@ -29,6 +29,11 @@ import {
   RuleValidationError, RuleNotEditableError, RuleForbiddenError, RuleNotFoundError
 } from './src/server/businessRules';
 import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
+import {
+  listManufacturers, listModelsForManufacturer, proposeCatalogUpdate,
+  decideCatalogUpdate, listCatalogUpdateRequests, VehicleCatalogError
+} from './src/server/vehicleCatalog';
+import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate';
 import { detectAnomalies } from './src/server/anomalyDetection';
 import { checkOperationalHealth } from './src/server/operationalHealth';
 import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers';
@@ -1341,23 +1346,50 @@ app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), as
   res.json({ success: true, vehicle: result.vehicle });
 }));
 
-// Vehicle Website Publication & Visibility Management
+// Vehicle Website Publication & Visibility Management -- the "Verified
+// Publish Gate" (Vehicle Master Profile mission, section 21). Publishing
+// (enabled:true) is blocked unless evaluateVehiclePublishReadiness()
+// confirms every required basic/technical/display/commercial field is
+// present and real; an already-published vehicle is re-verified the same
+// way on every subsequent publish-affecting edit. Unpublishing (enabled:
+// false) is always allowed -- the gate only guards what MAY be shown
+// publicly, never the ability to take something down.
 app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const vehicle = globalStore.vehicles.find(v => v.id === req.params.id);
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
 
-  const { publication, actorId, actorName } = req.body;
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+
+  const { publication } = req.body;
+  if (!publication || typeof publication !== 'object') {
+    return res.status(400).json({ error: 'publication is required.' });
+  }
   const now = new Date().toISOString();
+
+  const mergedWebsite = {
+    ...vehicle.website,
+    ...publication,
+    lastPublishedAt: now,
+    lastPublishedBy: actor.uid,
+    lastPublishedByName: actor.name
+  };
+
+  if (publication.enabled) {
+    const gate = evaluateVehiclePublishReadiness({ ...vehicle, website: mergedWebsite } as Vehicle);
+    if (!gate.ready) {
+      return res.status(400).json({
+        error: 'غير جاهز للنشر — بيانات ناقصة / تحتاج تحقق',
+        errorEn: 'Not ready to publish — missing or unverified data.',
+        missingReasons: gate.missingReasons,
+        missingReasonsEn: gate.missingReasonsEn
+      });
+    }
+  }
 
   const updatedVehicle = {
     ...vehicle,
-    website: {
-      ...vehicle.website,
-      ...publication,
-      lastPublishedAt: now,
-      lastPublishedBy: actorId || 'USR-001',
-      lastPublishedByName: actorName || 'Admin'
-    },
+    website: mergedWebsite,
     updatedAt: now,
     timeline: [
       ...(vehicle.timeline || []),
@@ -1372,8 +1404,8 @@ app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), 
           publicDailyRate: publication.dailyRate || vehicle.dailyRate
         },
         reason: publication.reason || (publication.enabled ? 'Showroom website publication updated' : 'Unpublished from public website'),
-        userId: actorId || 'USR-001',
-        userName: actorName || 'Admin',
+        userId: actor.uid,
+        userName: actor.name,
         createdAt: now
       }
     ]
@@ -1388,9 +1420,9 @@ app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), 
   if (index !== -1) globalStore.vehicles[index] = updatedVehicle as any;
 
   await recordAudit({
-    userId: actorId || 'USR-001',
-    userName: actorName || 'Admin',
-    userRole: 'admin',
+    userId: actor.uid,
+    userName: actor.name,
+    userRole: actor.role as any,
     entityType: 'Vehicle',
     entityId: vehicle.id,
     action: 'update',
@@ -1768,13 +1800,44 @@ app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(asy
   const body: Record<string, any> = { ...(req.body || {}) };
   for (const field of VEHICLE_SERVER_OWNED_FIELDS) delete body[field];
 
-  const updated = {
+  const updated: Vehicle = {
     ...prev,
     ...body,
     id: prev.id, // never let a client redirect this write to a different vehicle's document
     updatedAt: new Date().toISOString()
   };
-  await updateDurable('vehicles', updated.id, updated);
+
+  // Verified Publish Gate re-verification (Vehicle Master Profile mission,
+  // section 21.6): editing a vehicle that is already live on the public
+  // website must never leave a now-incomplete/unconfirmed record showing
+  // as published. If this edit invalidates a field the gate requires, the
+  // vehicle is automatically taken off the public website rather than
+  // continuing to serve stale "verified" data -- staff must re-publish
+  // explicitly (through the gated website-publish route) once the data is
+  // complete again.
+  let autoUnpublishedReasons: string[] | null = null;
+  if (prev.website?.enabled && updated.website?.enabled) {
+    const gate = evaluateVehiclePublishReadiness(updated);
+    if (!gate.ready) {
+      autoUnpublishedReasons = gate.missingReasons;
+      updated.website = { ...updated.website, enabled: false };
+      updated.timeline = [
+        ...(updated.timeline || []),
+        {
+          id: `EVT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          vehicleId: updated.id,
+          date: updated.updatedAt,
+          action: 'UNPUBLISHED_FROM_WEB',
+          reason: `Auto-unpublished on re-verification: ${gate.missingReasons.join('، ')}`,
+          userId: 'system',
+          userName: 'System (Publish Gate re-verification)',
+          createdAt: updated.updatedAt
+        }
+      ];
+    }
+  }
+
+  await updateDurable('vehicles', updated.id, updated as unknown as Record<string, unknown>);
   globalStore.vehicles[index] = updated;
 
   const statusChanged = prev.status !== updated.status;
@@ -1790,7 +1853,21 @@ app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(asy
     reason: statusChanged ? (req.body.statusReason || 'Fleet operational status change') : (req.body.auditReason || 'Vehicle profile update')
   });
 
-  res.json(updated);
+  if (autoUnpublishedReasons) {
+    await recordAudit({
+      userId: 'system',
+      userName: 'System (Publish Gate re-verification)',
+      userRole: 'admin',
+      entityType: 'Vehicle',
+      entityId: updated.id,
+      action: 'update',
+      previousValue: 'website.enabled: true',
+      newValue: 'website.enabled: false',
+      reason: `Auto-unpublished: this edit left required data missing/unconfirmed -- ${autoUnpublishedReasons.join('; ')}`
+    });
+  }
+
+  res.json({ ...updated, ...(autoUnpublishedReasons ? { autoUnpublishedReasons } : {}) });
 }));
 
 // ----------------------------------------------------
@@ -5024,6 +5101,75 @@ app.post('/api/approval-requests/:id/decide', requireRole('ceo', 'admin'), async
     res.json(decided);
   } catch (error: any) {
     if (error instanceof ApprovalError) return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ----------------------------------------------------
+// VEHICLE MASTER PROFILE & VERIFIED VEHICLE CATALOG
+// ----------------------------------------------------
+// Master Manufacturer/Model reference catalog (extend, never duplicate: a
+// centralized source every screen that needs a manufacturer/model list
+// reads from, instead of free-text inputs or per-screen hardcoded lists).
+// Read routes are open to any authenticated staff member browsing the Add/
+// Edit Vehicle screen; proposing and deciding updates reuse the existing
+// Four-Eyes approval engine (src/server/approvals.ts) via
+// src/server/vehicleCatalog.ts -- no parallel approval mechanism.
+app.get('/api/vehicle-catalog/manufacturers', asyncHandler(async (req, res) => {
+  res.json(await listManufacturers());
+}));
+
+app.get('/api/vehicle-catalog/models', asyncHandler(async (req, res) => {
+  const manufacturerId = req.query.manufacturerId as string;
+  if (!manufacturerId) return res.status(400).json({ error: 'manufacturerId is required.' });
+  res.json(await listModelsForManufacturer(manufacturerId));
+}));
+
+app.get('/api/vehicle-catalog/model-requests', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
+  res.json(await listCatalogUpdateRequests(status));
+}));
+
+// "الموديل غير موجود؟ طلب إضافة موديل جديد" -- any staff member can propose;
+// this only ever creates a PENDING request, never a live catalog entry.
+app.post('/api/vehicle-catalog/model-requests', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const { requestType, manufacturerName, modelName, year, trim, details, sourceNote } = req.body || {};
+  if (!['new_manufacturer', 'new_model', 'model_correction', 'model_discontinued'].includes(requestType)) {
+    return res.status(400).json({ error: 'requestType must be one of new_manufacturer, new_model, model_correction, model_discontinued.' });
+  }
+  try {
+    const request = await proposeCatalogUpdate({
+      requestType, manufacturerName, modelName, year, trim, details, sourceNote,
+      discoverySource: 'staff_request',
+      requestedBy: actor.uid, requestedByName: actor.name, requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json(request);
+  } catch (error: any) {
+    if (error instanceof VehicleCatalogError || error instanceof ApprovalError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Approve/reject a pending catalog update. Four-Eyes/SoD (decider cannot be
+// the requester) is enforced inside decideApprovalRequest, reused as-is.
+app.post('/api/vehicle-catalog/model-requests/:id/decide', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Authentication required.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') {
+    return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  }
+  try {
+    const decided = await decideCatalogUpdate(
+      req.params.id, decision, note, { uid: decider.uid, name: decider.name, role: decider.role as any }, recordAudit
+    );
+    res.json(decided);
+  } catch (error: any) {
+    if (error instanceof VehicleCatalogError || error instanceof ApprovalError) return res.status(409).json({ error: error.message });
     throw error;
   }
 }));

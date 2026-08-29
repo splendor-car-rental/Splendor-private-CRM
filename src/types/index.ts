@@ -250,6 +250,125 @@ export interface VehicleSaleRecord {
   retainedPlateCity?: string;
 }
 
+// ----------------------------------------------------
+// SPLENDOR Vehicle Master Profile & Verified Vehicle Catalog
+// ----------------------------------------------------
+// Additive classification/technical fields on top of the existing Vehicle
+// record -- none of these replace `category` (the existing rental-segment
+// field every pricing/reservation code path already reads), `fuelType`,
+// `engine`, `horsepower`, or `transmission`. They are optional so every
+// pre-existing vehicle record (which never had them) remains valid as-is.
+
+/** نوع الهيكل -- body/silhouette shape, independent of rental category. */
+export type VehicleBodyStyle =
+  | 'sedan' | 'hatchback' | 'liftback' | 'fastback' | 'coupe' | 'convertible' | 'roadster' | 'spider' | 'targa'
+  | 'wagon' | 'shooting_brake' | 'suv' | 'crossover' | 'suv_coupe' | 'mpv' | 'minivan' | 'van' | 'panel_van'
+  | 'minibus' | 'pickup' | 'truck' | 'cab_chassis' | 'limousine' | 'microcar' | 'city_car' | 'kei';
+
+/** فئة المركبة -- general market tier, distinct from the rental-pricing `category` field. */
+export type VehicleClassTier = 'economy' | 'compact' | 'midsize' | 'executive' | 'luxury' | 'ultra_luxury' | 'sport' | 'supercar' | 'hypercar';
+
+/** تصنيف SUV -- only relevant when bodyStyle is an SUV/crossover variant. */
+export type VehicleSuvClass = 'compact_suv' | 'midsize_suv' | 'large_suv' | 'luxury_suv' | 'performance_suv' | 'suv_coupe' | 'offroad_suv';
+
+/** تصنيف الأداء */
+export type VehiclePerformanceClass = 'standard' | 'high_performance' | 'sport' | 'supercar' | 'hypercar';
+
+/** قطاع التأجير -- a richer, optional companion to the existing `category` field (never replaces it). */
+export type VehicleRentalSegment =
+  | 'economy' | 'standard' | 'premium' | 'luxury' | 'ultra_luxury' | 'executive' | 'sport' | 'supercar' | 'hypercar'
+  | 'luxury_suv' | 'vip' | 'chauffeur_driven';
+
+/** الاستخدام -- one vehicle can serve more than one use case. */
+export type VehicleUsageType = 'daily' | 'business' | 'family' | 'vip' | 'chauffeur_driven' | 'luxury' | 'performance' | 'offroad' | 'commercial';
+
+export type VehicleDrivetrain = 'fwd' | 'rwd' | 'awd' | '4wd';
+
+export type VehicleRoofType = 'fixed' | 'sunroof' | 'panoramic' | 'targa' | 'soft_top' | 'retractable_hard_top' | 'folding_hard_top';
+
+/**
+ * Provenance of a reference/technical data point -- tracked internally so
+ * staff/reviewers know how trustworthy a Master Catalog field is; never
+ * shown to the public website unless explicitly appropriate.
+ */
+export type VehicleDataSourceTag = 'oem_official' | 'manufacturer_source' | 'trusted_source' | 'staff_entry' | 'actual_vehicle_data' | 'unverified';
+
+/** Master Manufacturer Catalog entry -- centralized, not a free-text field. */
+export interface VehicleManufacturer {
+  id: string; // slug, e.g. "ferrari"
+  name: string;
+  nameAr?: string;
+  countryOfOrigin?: string;
+  source: VehicleDataSourceTag;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Master Vehicle Catalog entry -- REFERENCE data for a model/generation/
+ * trim in general (per section 19, this is never assumed to be the exact
+ * spec of any one actual Splendor vehicle when a model has more than one
+ * real-world variant; the actual Vehicle record's own confirmed fields are
+ * always the source of truth for what gets published).
+ */
+export interface VehicleCatalogModel {
+  id: string; // e.g. "ferrari-296-gtb"
+  manufacturerId: string;
+  make: string;
+  model: string;
+  generation?: string;
+  productionYears?: string; // e.g. "2021-present" or "2015-2020"
+  trim?: string;
+  bodyStyle?: VehicleBodyStyle;
+  engine?: string;
+  horsepower?: number;
+  transmission?: string;
+  drivetrain?: VehicleDrivetrain;
+  fuelType?: Vehicle['fuelType'];
+  doors?: number;
+  seats?: number;
+  roofType?: VehicleRoofType;
+  countryOfOrigin?: string;
+  discontinued?: boolean;
+  source: VehicleDataSourceTag;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type VehicleCatalogRequestStatus = 'pending' | 'approved' | 'rejected';
+
+/**
+ * "الموديل غير موجود؟ طلب إضافة موديل جديد" -- a staff-submitted request to
+ * add a manufacturer/model to the Master Catalog, or a future automated
+ * discovery hit. Never enters the published catalog until a decider
+ * approves it through the existing Four-Eyes approvals engine
+ * (ApprovalRequestType 'vehicle_catalog_update').
+ */
+export interface VehicleCatalogUpdateRequest {
+  id: string; // VCU-000001
+  requestType: 'new_manufacturer' | 'new_model' | 'model_correction' | 'model_discontinued';
+  manufacturerName: string;
+  modelName?: string;
+  year?: number;
+  trim?: string;
+  details?: string;
+  sourceNote?: string; // where the staff member says this info came from
+  discoverySource: 'staff_request' | 'internet_discovery' | 'manual_admin';
+  status: VehicleCatalogRequestStatus;
+  approvalRequestId?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  resultingManufacturerId?: string;
+  resultingModelId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Vehicle {
   id: string; // VEH-0001
   vin: string;
@@ -265,8 +384,37 @@ export interface Vehicle {
   engine: string;
   horsepower: number;
   transmission: string;
-  fuelType: 'petrol' | 'electric' | 'hybrid';
-  
+  fuelType: 'petrol' | 'diesel' | 'hybrid' | 'phev' | 'electric' | 'hydrogen';
+
+  // Master Vehicle Profile classification (Vehicle Master Profile mission)
+  // -- all optional/additive; `category` above remains the field every
+  // existing pricing/reservation/public-DTO code path reads, unchanged.
+  bodyStyle?: VehicleBodyStyle;
+  vehicleClassTier?: VehicleClassTier;
+  suvClass?: VehicleSuvClass;
+  performanceClass?: VehiclePerformanceClass;
+  rentalSegment?: VehicleRentalSegment;
+  usageTypes?: VehicleUsageType[];
+
+  // Master Vehicle Profile technical specs (additive; engine/horsepower/
+  // transmission/fuelType above are unchanged and remain required).
+  drivetrain?: VehicleDrivetrain;
+  doors?: number;
+  seats?: number;
+  roofType?: VehicleRoofType;
+  countryOfOrigin?: string;
+
+  // Master Catalog linkage -- informational/reference only. Per section 19,
+  // the actual vehicle's own confirmed fields above are ALWAYS the source
+  // of truth for what gets published; this link is never used to infer or
+  // auto-fill a real vehicle's specs.
+  catalogModelId?: string;
+  generation?: string;
+  productionYears?: string;
+
+  /** Per-field-group provenance for reference/technical data -- internal only, never shown to the public unless explicitly appropriate. */
+  dataSource?: Partial<Record<'basicInfo' | 'classification' | 'technicalSpecs' | 'pricing', VehicleDataSourceTag>>;
+
   mileage: number;
   dailyRate: number;
   weeklyRate: number;
@@ -348,7 +496,7 @@ export interface PublicVehicleDTO {
   interiorColor: string;
   horsepower: number;
   transmission: string;
-  fuelType: 'petrol' | 'electric' | 'hybrid';
+  fuelType: 'petrol' | 'diesel' | 'hybrid' | 'phev' | 'electric' | 'hydrogen';
   images: string[];
   thumbnail: string;
   features: string[];
@@ -1325,7 +1473,7 @@ export interface BusinessRule {
   sourceNote?: string;
 }
 
-export type ApprovalRequestType = 'rule_change' | 'lto_application' | 'lto_settlement' | 'lto_termination';
+export type ApprovalRequestType = 'rule_change' | 'lto_application' | 'lto_settlement' | 'lto_termination' | 'vehicle_catalog_update';
 export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export interface ApprovalRequest {

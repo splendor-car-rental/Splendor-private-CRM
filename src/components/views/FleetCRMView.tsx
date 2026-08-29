@@ -10,10 +10,11 @@ import { Vehicle, VehicleCategory, VehicleStatus } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { VehicleDetailMasterModal } from '../fleet/VehicleDetailMasterModal';
+import { AddVehicleModal } from '../modals/AddVehicleModal';
 
 export const FleetCRMView: React.FC = () => {
   const { language, t } = useLanguage();
-  const { vehicles, contracts, addVehicle, updateVehicle, checkVehicleAvailability, selectedVehicleId, setSelectedVehicleId } = useCRM();
+  const { vehicles, contracts, checkVehicleAvailability, selectedVehicleId, setSelectedVehicleId } = useCRM();
 
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -28,41 +29,12 @@ export const FleetCRMView: React.FC = () => {
   const [testEndDate, setTestEndDate] = useState(new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0] + 'T10:00:00Z');
   const [availResult, setAvailResult] = useState<any>(null);
 
-  // Add form
-  const [form, setForm] = useState({
-    make: 'Ferrari',
-    model: 'Purosangue V12',
-    year: 2025,
-    category: 'executive_suv' as VehicleCategory,
-    exteriorColor: 'Rosso Corsa',
-    plateNumber: 'DXB P 888',
-    plateCity: 'Dubai',
-    vin: 'ZFF888PUR9990001',
-    dailyRate: 9500,
-    weeklyRate: 58000,
-    monthlyRate: 190000,
-    minDeposit: 20000,
-    mileage: 1200,
-    fuelType: 'petrol' as const,
-    transmission: 'automatic' as const,
-    horsepower: 715,
-    status: 'available' as VehicleStatus,
-    thumbnail: 'https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80',
-    images: ['https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80']
-  });
-
   const activeVehicle = vehicles.find(v => v.id === selectedVehicleId) || null;
 
   const handleTestAvailability = async () => {
     if (!testVehicleId) return;
     const res = await checkVehicleAvailability(testVehicleId, testStartDate, testEndDate);
     setAvailResult(res);
-  };
-
-  const handleAddSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await addVehicle(form);
-    setAddModalOpen(false);
   };
 
   const filteredVehicles = vehicles.filter(v => {
@@ -311,97 +283,13 @@ export const FleetCRMView: React.FC = () => {
         </div>
       </Modal>
 
-      {/* Add Vehicle Modal */}
-      <Modal
+      {/* Add Vehicle Modal -- shared Vehicle Master Profile add flow, the
+          same component Header.tsx uses; this view no longer keeps its own
+          separate/duplicate add-vehicle form. */}
+      <AddVehicleModal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
-        title="Add Supercar to Fleet"
-        subtitle="Register vehicle specs, plate, and rate structure"
-        maxWidth="2xl"
-      >
-        <form onSubmit={handleAddSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Make *</label>
-              <input
-                type="text"
-                required
-                value={form.make}
-                onChange={(e) => setForm({ ...form, make: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Model *</label>
-              <input
-                type="text"
-                required
-                value={form.model}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Year</label>
-              <input
-                type="number"
-                value={form.year}
-                onChange={(e) => setForm({ ...form, year: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Plate Number *</label>
-              <input
-                type="text"
-                required
-                value={form.plateNumber}
-                onChange={(e) => setForm({ ...form, plateNumber: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Daily Rate (AED) *</label>
-              <input
-                type="number"
-                required
-                value={form.dailyRate}
-                onChange={(e) => setForm({ ...form, dailyRate: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Security Deposit (AED) *</label>
-              <input
-                type="number"
-                required
-                value={form.minDeposit}
-                onChange={(e) => setForm({ ...form, minDeposit: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => setAddModalOpen(false)}
-              className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
-            >
-              Save Supercar
-            </button>
-          </div>
-        </form>
-      </Modal>
+      />
     </div>
   );
 };

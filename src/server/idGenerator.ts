@@ -84,7 +84,10 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   // Lease-to-Own (Splendor Private Mobility Operating System)
   ltoapplication: { prefix: 'LTOA-', digits: 6 },
   ltoinstallment: { prefix: 'LTOI-', digits: 6 },
-  ltosettlementrequest: { prefix: 'LTOS-', digits: 6 }
+  ltosettlementrequest: { prefix: 'LTOS-', digits: 6 },
+
+  // Vehicle Master Profile & Verified Vehicle Catalog
+  vehiclecatalogupdaterequest: { prefix: 'VCU-', digits: 6 }
 };
 
 export class IdGenerationError extends Error {

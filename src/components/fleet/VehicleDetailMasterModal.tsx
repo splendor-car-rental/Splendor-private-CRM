@@ -1,16 +1,26 @@
 import React, { useState } from 'react';
-import { 
-  History, Globe, Shield, Tag, Calendar, User, Clock, 
-  ArrowRightLeft, AlertCircle, CheckCircle2, ExternalLink, 
-  DollarSign, Eye, EyeOff, Sparkles, Plus, AlertTriangle
+import {
+  History, Globe, Shield, Tag, Calendar, User, Clock,
+  ArrowRightLeft, AlertCircle, CheckCircle2, ExternalLink,
+  DollarSign, Eye, EyeOff, Sparkles, Plus, AlertTriangle, Wrench, Save
 } from 'lucide-react';
-import { Vehicle, PlateAssignmentHistory, VehicleTimelineEvent, WebsiteVisibility, VehicleLifecycleStatus } from '../../types';
+import {
+  Vehicle, PlateAssignmentHistory, VehicleTimelineEvent, WebsiteVisibility, VehicleLifecycleStatus,
+  VehicleBodyStyle, VehicleClassTier, VehicleSuvClass, VehiclePerformanceClass, VehicleRentalSegment,
+  VehicleUsageType, VehicleDrivetrain, VehicleRoofType
+} from '../../types';
 import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
+import {
+  VEHICLE_BODY_STYLES, VEHICLE_CLASS_TIERS, VEHICLE_SUV_CLASSES, VEHICLE_PERFORMANCE_CLASSES,
+  VEHICLE_RENTAL_SEGMENTS, VEHICLE_USAGE_TYPES, VEHICLE_DRIVETRAINS, VEHICLE_FUEL_TYPES, VEHICLE_ROOF_TYPES,
+  isSuvBodyStyle
+} from '../../config/vehicleClassification';
+import { evaluateVehiclePublishReadiness } from '../../server/vehiclePublishGate';
 
 interface VehicleDetailMasterModalProps {
   vehicleId: string | null;
@@ -23,13 +33,51 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
 }) => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
-  const { vehicles, assignPlate, publishToWebsite, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, contracts, reservations } = useCRM();
+  const { vehicles, assignPlate, publishToWebsite, updateVehicle, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, contracts, reservations } = useCRM();
   const { currentUser } = useAuth();
 
   const vehicle = vehicles.find(v => v.id === vehicleId);
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'plates' | 'website' | 'timeline' | 'schedule' | 'lto'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'classification' | 'technical' | 'plates' | 'website' | 'timeline' | 'schedule' | 'lto'>('overview');
   const vehicleLtoContract = vehicle ? contracts.find(c => c.vehicleId === vehicle.id && c.contractType === 'lease_to_own' && c.lto && c.lto.ltoStatus !== 'completed' && c.lto.ltoStatus !== 'terminated') : undefined;
+
+  // Basic Info edit state (Vehicle Master Profile mission) -- editable,
+  // saved through the same generic updateVehicle() every other vehicle
+  // edit already goes through; nothing here is a parallel storage path.
+  const [editMake, setEditMake] = useState(vehicle?.make || '');
+  const [editModel, setEditModel] = useState(vehicle?.model || '');
+  const [editYear, setEditYear] = useState(vehicle?.year || 0);
+  const [editTrim, setEditTrim] = useState(vehicle?.trim || '');
+  const [editExteriorColor, setEditExteriorColor] = useState(vehicle?.exteriorColor || '');
+  const [editInteriorColor, setEditInteriorColor] = useState(vehicle?.interiorColor || '');
+  const [editCountryOfOrigin, setEditCountryOfOrigin] = useState(vehicle?.countryOfOrigin || '');
+  const [isSavingBasicInfo, setIsSavingBasicInfo] = useState(false);
+
+  // Classification edit state
+  const [editBodyStyle, setEditBodyStyle] = useState<VehicleBodyStyle | undefined>(vehicle?.bodyStyle);
+  const [editVehicleClassTier, setEditVehicleClassTier] = useState<VehicleClassTier | undefined>(vehicle?.vehicleClassTier);
+  const [editSuvClass, setEditSuvClass] = useState<VehicleSuvClass | undefined>(vehicle?.suvClass);
+  const [editPerformanceClass, setEditPerformanceClass] = useState<VehiclePerformanceClass | undefined>(vehicle?.performanceClass);
+  const [editRentalSegment, setEditRentalSegment] = useState<VehicleRentalSegment | undefined>(vehicle?.rentalSegment);
+  const [editUsageTypes, setEditUsageTypes] = useState<VehicleUsageType[]>(vehicle?.usageTypes || []);
+  const [isSavingClassification, setIsSavingClassification] = useState(false);
+
+  // Technical specs edit state
+  const [editEngine, setEditEngine] = useState(vehicle?.engine || '');
+  const [editHorsepower, setEditHorsepower] = useState(vehicle?.horsepower || 0);
+  const [editTransmission, setEditTransmission] = useState(vehicle?.transmission || '');
+  const [editFuelType, setEditFuelType] = useState<Vehicle['fuelType']>(vehicle?.fuelType || 'petrol');
+  const [editDrivetrain, setEditDrivetrain] = useState<VehicleDrivetrain | undefined>(vehicle?.drivetrain);
+  const [editDoors, setEditDoors] = useState<number | undefined>(vehicle?.doors);
+  const [editSeats, setEditSeats] = useState<number | undefined>(vehicle?.seats);
+  const [editRoofType, setEditRoofType] = useState<VehicleRoofType | undefined>(vehicle?.roofType);
+  const [isSavingTechnical, setIsSavingTechnical] = useState(false);
+
+  // Verified Publish Gate -- real-time client-side preview using the exact
+  // same evaluateVehiclePublishReadiness() the server enforces, so staff see
+  // precisely what is blocking publish before they even press Save.
+  const publishGatePreview = vehicle ? evaluateVehiclePublishReadiness(vehicle) : null;
+  const [publishGateError, setPublishGateError] = useState<{ missingReasons: string[]; missingReasonsEn: string[] } | null>(null);
 
   // Plate transfer modal state
   const [plateModalOpen, setPlateModalOpen] = useState(false);
@@ -118,6 +166,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
   const handleSaveWebsitePublish = async () => {
     try {
       setIsSavingWeb(true);
+      setPublishGateError(null);
       await publishToWebsite(vehicle.id, {
         enabled: webEnabled,
         visibility: webVisibility,
@@ -132,9 +181,66 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
       });
     } catch (err: any) {
       console.error(err);
+      // The Verified Publish Gate rejects an incomplete/unconfirmed publish
+      // with a `missingReasons` array attached to the thrown Error (see
+      // parseApiResponse in CRMContext.tsx) -- surface it exactly, never a
+      // generic failure message, so staff know precisely what to fix.
+      if (Array.isArray(err?.missingReasons)) {
+        setPublishGateError({ missingReasons: err.missingReasons, missingReasonsEn: err.missingReasonsEn || [] });
+      }
     } finally {
       setIsSavingWeb(false);
     }
+  };
+
+  const handleSaveBasicInfo = async () => {
+    if (!vehicle) return;
+    try {
+      setIsSavingBasicInfo(true);
+      await updateVehicle(vehicle.id, {
+        make: editMake, model: editModel, year: Number(editYear), trim: editTrim,
+        exteriorColor: editExteriorColor, interiorColor: editInteriorColor, countryOfOrigin: editCountryOfOrigin
+      });
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsSavingBasicInfo(false);
+    }
+  };
+
+  const handleSaveClassification = async () => {
+    if (!vehicle) return;
+    try {
+      setIsSavingClassification(true);
+      await updateVehicle(vehicle.id, {
+        bodyStyle: editBodyStyle, vehicleClassTier: editVehicleClassTier,
+        suvClass: isSuvBodyStyle(editBodyStyle) ? editSuvClass : undefined,
+        performanceClass: editPerformanceClass, rentalSegment: editRentalSegment, usageTypes: editUsageTypes
+      });
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsSavingClassification(false);
+    }
+  };
+
+  const handleSaveTechnical = async () => {
+    if (!vehicle) return;
+    try {
+      setIsSavingTechnical(true);
+      await updateVehicle(vehicle.id, {
+        engine: editEngine, horsepower: Number(editHorsepower), transmission: editTransmission,
+        fuelType: editFuelType, drivetrain: editDrivetrain, doors: editDoors, seats: editSeats, roofType: editRoofType
+      });
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsSavingTechnical(false);
+    }
+  };
+
+  const toggleEditUsageType = (usage: VehicleUsageType) => {
+    setEditUsageTypes(prev => prev.includes(usage) ? prev.filter(u => u !== usage) : [...prev, usage]);
   };
 
   const handleUpdateLifecycle = async (e: React.FormEvent) => {
@@ -228,6 +334,23 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
               {isAr ? 'نظرة عامة ومواصفات' : 'Specs & Financials'}
             </button>
             <button
+              onClick={() => setActiveTab('classification')}
+              className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
+                activeTab === 'classification' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
+              }`}
+            >
+              {isAr ? 'التصنيف' : 'Classification'}
+            </button>
+            <button
+              onClick={() => setActiveTab('technical')}
+              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+                activeTab === 'technical' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
+              }`}
+            >
+              <Wrench className="w-3.5 h-3.5" />
+              <span>{isAr ? 'المواصفات الفنية' : 'Technical Specs'}</span>
+            </button>
+            <button
               onClick={() => setActiveTab('plates')}
               className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === 'plates' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
@@ -313,6 +436,193 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
                     <span className="text-zinc-500 text-[10px]">Current Location</span>
                     <p className="text-zinc-200 font-medium mt-0.5">{vehicle.currentLocation || 'Flagship Showroom'}</p>
                   </div>
+                </div>
+              </div>
+
+              {/* Editable Basic Info -- Vehicle Master Profile mission: every
+                  existing field stays, edited through the same updateVehicle()
+                  every other vehicle mutation already uses. */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <h4 className="font-bold text-zinc-200 text-xs uppercase tracking-wider">
+                  {isAr ? 'تعديل المعلومات الأساسية' : 'Edit Basic Info'}
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'الشركة المصنعة' : 'Manufacturer'}</label>
+                    <input type="text" value={editMake} onChange={e => setEditMake(e.target.value)} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'الموديل' : 'Model'}</label>
+                    <input type="text" value={editModel} onChange={e => setEditModel(e.target.value)} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'سنة الصنع' : 'Model Year'}</label>
+                    <input type="number" value={editYear} onChange={e => setEditYear(Number(e.target.value))} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'الفئة/التجهيز' : 'Trim'}</label>
+                    <input type="text" value={editTrim} onChange={e => setEditTrim(e.target.value)} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'اللون الخارجي' : 'Exterior Color'}</label>
+                    <input type="text" value={editExteriorColor} onChange={e => setEditExteriorColor(e.target.value)} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'اللون الداخلي' : 'Interior Color'}</label>
+                    <input type="text" value={editInteriorColor} onChange={e => setEditInteriorColor(e.target.value)} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-500 text-[10px] mb-1">{isAr ? 'بلد الصنع' : 'Country of Origin'}</label>
+                    <input type="text" value={editCountryOfOrigin} onChange={e => setEditCountryOfOrigin(e.target.value)} className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleSaveBasicInfo}
+                    disabled={isSavingBasicInfo}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#D4AF37] text-zinc-950 font-bold text-[11px] hover:brightness-110 disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSavingBasicInfo ? (isAr ? 'جارٍ الحفظ...' : 'Saving...') : (isAr ? 'حفظ المعلومات الأساسية' : 'Save Basic Info')}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: CLASSIFICATION */}
+          {activeTab === 'classification' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'نوع الهيكل' : 'Body Style'}</label>
+                    <select value={editBodyStyle || ''} onChange={e => setEditBodyStyle((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                      {VEHICLE_BODY_STYLES.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'مستوى الفئة' : 'Vehicle Class Tier'}</label>
+                    <select value={editVehicleClassTier || ''} onChange={e => setEditVehicleClassTier((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                      {VEHICLE_CLASS_TIERS.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                  {isSuvBodyStyle(editBodyStyle) && (
+                    <div>
+                      <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'تصنيف الدفع الرباعي' : 'SUV Classification'}</label>
+                      <select value={editSuvClass || ''} onChange={e => setEditSuvClass((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                        <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                        {VEHICLE_SUV_CLASSES.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'تصنيف الأداء' : 'Performance Classification'}</label>
+                    <select value={editPerformanceClass || ''} onChange={e => setEditPerformanceClass((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                      {VEHICLE_PERFORMANCE_CLASSES.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'فئة التأجير' : 'Rental Segment'}</label>
+                    <select value={editRentalSegment || ''} onChange={e => setEditRentalSegment((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                      {VEHICLE_RENTAL_SEGMENTS.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'أنواع الاستخدام' : 'Usage Types'}</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {VEHICLE_USAGE_TYPES.map(o => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => toggleEditUsageType(o.value)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] border transition-all ${
+                          editUsageTypes.includes(o.value) ? 'bg-[#D4AF37]/20 text-[#f5d97f] border-[#D4AF37]/40' : 'text-zinc-400 border-zinc-800 hover:bg-zinc-900'
+                        }`}
+                      >
+                        {isAr ? o.labelAr : o.labelEn}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleSaveClassification}
+                    disabled={isSavingClassification}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#D4AF37] text-zinc-950 font-bold text-[11px] hover:brightness-110 disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSavingClassification ? (isAr ? 'جارٍ الحفظ...' : 'Saving...') : (isAr ? 'حفظ التصنيف' : 'Save Classification')}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: TECHNICAL SPECS */}
+          {activeTab === 'technical' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'المحرك' : 'Engine'}</label>
+                    <input type="text" value={editEngine} onChange={e => setEditEngine(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'القدرة الحصانية (HP)' : 'Horsepower (HP)'}</label>
+                    <input type="number" value={editHorsepower} onChange={e => setEditHorsepower(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'ناقل الحركة' : 'Transmission'}</label>
+                    <input type="text" value={editTransmission} onChange={e => setEditTransmission(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'نظام الدفع' : 'Drivetrain'}</label>
+                    <select value={editDrivetrain || ''} onChange={e => setEditDrivetrain((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                      {VEHICLE_DRIVETRAINS.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'نوع الوقود/الدفع' : 'Fuel / Powertrain'}</label>
+                    <select value={editFuelType} onChange={e => setEditFuelType(e.target.value as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      {VEHICLE_FUEL_TYPES.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'نوع السقف' : 'Roof Type'}</label>
+                    <select value={editRoofType || ''} onChange={e => setEditRoofType((e.target.value || undefined) as any)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+                      <option value="">{isAr ? '— غير محدد —' : '— Not set —'}</option>
+                      {VEHICLE_ROOF_TYPES.map(o => <option key={o.value} value={o.value}>{isAr ? o.labelAr : o.labelEn}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'عدد الأبواب' : 'Doors'}</label>
+                    <input type="number" value={editDoors ?? ''} onChange={e => setEditDoors(e.target.value ? Number(e.target.value) : undefined)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[11px] font-medium mb-1">{isAr ? 'عدد المقاعد' : 'Seats'}</label>
+                    <input type="number" value={editSeats ?? ''} onChange={e => setEditSeats(e.target.value ? Number(e.target.value) : undefined)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleSaveTechnical}
+                    disabled={isSavingTechnical}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#D4AF37] text-zinc-950 font-bold text-[11px] hover:brightness-110 disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSavingTechnical ? (isAr ? 'جارٍ الحفظ...' : 'Saving...') : (isAr ? 'حفظ المواصفات الفنية' : 'Save Technical Specs')}</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -496,6 +806,38 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
                     className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
                   />
                 </div>
+
+                {/* Verified Publish Gate -- real-time preview using the vehicle's
+                    CURRENT saved data (evaluateVehiclePublishReadiness), plus
+                    the server's own rejection detail if the last publish
+                    attempt was blocked. Never lets the toggle above imply
+                    publish is possible when required data is missing. */}
+                {publishGatePreview && !publishGatePreview.ready && (
+                  <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-rose-300 text-[11px] space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{isAr ? 'غير جاهز للنشر — بيانات ناقصة / تحتاج تحقق' : 'Not ready to publish — missing or unverified data'}</span>
+                    </div>
+                    <ul className="list-disc ps-5 space-y-0.5">
+                      {(isAr ? publishGatePreview.missingReasons : publishGatePreview.missingReasonsEn).map((reason, i) => (
+                        <li key={i}>{reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {publishGateError && (
+                  <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-rose-300 text-[11px] space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{isAr ? 'تم رفض النشر من قبل النظام:' : 'Publish rejected by the server:'}</span>
+                    </div>
+                    <ul className="list-disc ps-5 space-y-0.5">
+                      {(isAr ? publishGateError.missingReasons : (publishGateError.missingReasonsEn.length ? publishGateError.missingReasonsEn : publishGateError.missingReasons)).map((reason, i) => (
+                        <li key={i}>{reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 <div className="pt-2 flex justify-end">
                   <button

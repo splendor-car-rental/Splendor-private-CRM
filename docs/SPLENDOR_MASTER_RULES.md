@@ -573,6 +573,74 @@ liability-transfer rule.
 **VERIFICATION METHOD**: `tests/leaseToOwn.test.ts` (42 tests, real Firestore emulator) + `tests/leaseToOwnPolicy.test.ts` (19 pure unit tests) = 61 new tests, on top of the full pre-existing 358-test suite (400 total, all passing). Browser/Playwright UI verification was **NOT performed** — this environment has no configured Firebase service-account credentials, so the app cannot authenticate in a real browser session here; verified instead via typecheck + production build + code review.
 **STATUS**: **IMPLEMENTED (this session)** for automated tests; **BLOCKED** for browser QA (environment credential limitation, not a code gap).
 
+## MODULE 15 — Vehicle Master Profile & Verified Vehicle Catalog
+
+Upgrades the existing Add/Edit Vehicle screens and the existing
+"Publish to Website" control into a Vehicle Master Profile, per the
+mission's core principle: **"Extend, Never Duplicate" (طوّر الموجود ولا
+تستبدله)**. Zero existing fields were removed, renamed, or reinterpreted;
+zero parallel Vehicle entity/storage/API was created. Every new field on
+`Vehicle` is additive-optional; the existing `fuelType` union was widened
+(not replaced) to add `diesel`/`hydrogen` alongside its three pre-existing
+values, verified safe via an exhaustive usage search before the change.
+
+### RULE-VMP01 — No parallel Vehicle entity, storage, or API
+**REQUIREMENT**: All new data reuses the existing `Vehicle` type, the existing `POST /api/fleet` / `PUT /api/fleet/:id` routes, and the existing Firestore `vehicles` collection.
+**RATIONALE**: The generic `PUT /api/fleet/:id` merge route and the `VEHICLE_SERVER_OWNED_FIELDS` denylist (Phase 12 mass-assignment hardening) already pass through any new field name unmodified — confirmed by inventory before writing a single line of new route code. No new Vehicle-shaped collection exists anywhere in this change.
+**VERIFICATION METHOD**: `tests/vehicleMasterProfile.test.ts` — Add flow and Edit-flow-zero-data-loss tests exercise the unmodified generic routes with the new fields.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP02 — Master Manufacturer/Model Catalog, cascading, never cross-leaking
+**REQUIREMENT**: Manufacturer is a centralized catalog (`src/config/vehicleCatalog.ts` seed + `src/server/vehicleCatalog.ts` hydration), not free text; Model dropdowns are strictly filtered to the selected manufacturer's own models.
+**RATIONALE**: Mirrors the exact static-defaults-plus-Firestore-approved-additions hydration pattern already established by `businessRules.ts`'s `hydrateBusinessRules()` — no new architecture invented. Seed data covers 16 real, curated manufacturers (Ferrari, Lamborghini, Rolls-Royce, Bentley, Aston Martin, McLaren, Bugatti, Porsche, Mercedes-Benz, BMW, Audi, Land Rover, Cadillac, Nissan, Maserati, GMC) with ~2-4 real models each — a genuine, non-exhaustive starting set, not a worldwide claim.
+**ACCEPTANCE CRITERIA**: `GET /api/vehicle-catalog/models?manufacturerId=X` never returns a model belonging to a different manufacturer.
+**VERIFICATION METHOD**: `tests/vehicleMasterProfile.test.ts` — asserts a Ferrari query never returns Lamborghini's "Revuelto" and vice versa.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP03 — Catalog updates: Discovery → Verification → Review → Approval → Master Catalog, never blind
+**REQUIREMENT**: A staff-submitted "model not found, request to add" (or a future automated discovery hit) only ever creates a PENDING record; it is never written to the readable catalog until a DIFFERENT authorized person approves it.
+**RATIONALE**: Reuses the existing Four-Eyes/Segregation-of-Duties approval engine (`src/server/approvals.ts`, `createApprovalRequest`/`decideApprovalRequest`) with one new `ApprovalRequestType` value (`'vehicle_catalog_update'`) — the exact same SoD check (decider can never be the requester) every other approval type in this system already enforces, not a second approval mechanism. `discoverySource: 'internet_discovery'` is schema-ready for a future automated discovery job, but every hit still lands as PENDING — the internet is discovery-only, never a publish authorization, per the mission's explicit rule.
+**VERIFICATION METHOD**: `tests/vehicleMasterProfile.test.ts` — proves a proposal stays pending and invisible to `GET /api/vehicle-catalog/models`, that the requester cannot self-approve, that a different CEO's approval makes it visible, and that a rejection never enters the catalog.
+**STATUS**: **IMPLEMENTED (this session)** for the manual propose/review/approve flow. **DEFERRED**: an actual automated internet-discovery job (crawling manufacturer sites) was not built — this environment has no safe, reliable structured-data-fetching capability for that, and inventing scraped "discoveries" would itself violate the mission's anti-fabrication rule. The ingestion point (`discoverySource: 'internet_discovery'`, still gated through the identical approval flow) is real and ready for a future job to call.
+
+### RULE-VMP04 — Centralized classification dropdowns
+**REQUIREMENT**: Body Style (26 types), Vehicle Class Tier (9), SUV Classification (7, shown only when relevant), Performance Classification (5), Rental Segment (12), Usage Type (9), Drivetrain (4), Powertrain/Fuel (6), Roof Type (7) — one bilingual source of truth, never a second copy per screen.
+**RATIONALE**: `src/config/vehicleClassification.ts` — a single `ClassificationOption<T>` pattern with `*_BY_VALUE` lookup maps, imported identically by the Add Vehicle modal and the Edit (VehicleDetailMasterModal) screen. `isSuvBodyStyle()` gates the SUV-specific dropdown so it never appears for a sedan/coupe.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP05 — Technical Specifications as an independent tab
+**REQUIREMENT**: Engine, horsepower, transmission, drivetrain, powertrain/fuel, doors, seats, roof type editable as their own tab, additive to the pre-existing engine/horsepower/transmission/fuelType fields.
+**RATIONALE**: Added to both the Add Vehicle modal (`Technical Specs` tab) and `VehicleDetailMasterModal` (`technical` tab) — existing fields (engine/horsepower/transmission/fuelType) keep their pre-existing meaning and required-ness; the new fields (drivetrain/doors/seats/roofType) are additive-optional.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP06 — Verified Publish Gate: never publish unconfirmed data
+**REQUIREMENT**: "نشر على الموقع" is blocked unless confirmed basic data, technical data, required photos, and commercial data are all present; blocked publish returns the exact list of what is missing ("غير جاهز للنشر — بيانات ناقصة / تحتاج تحقق"); editing an already-published vehicle's core data re-verifies before it stays published.
+**RATIONALE**: `src/server/vehiclePublishGate.ts`'s `evaluateVehiclePublishReadiness()` is a single pure function reused THREE times: (1) server-side in `PUT /api/fleet/:id/website-publish` before accepting `enabled:true`; (2) server-side in the generic `PUT /api/fleet/:id` route, which now auto-unpublishes (with a system-authored audit entry and timeline event) if a subsequent edit leaves a published vehicle's required data incomplete; (3) client-side in `VehicleDetailMasterModal`'s website tab for real-time staff feedback, imported directly since the module has zero Node-only dependencies. One function, three call sites — never three separate implementations that could drift apart. The route was also hardened to use the caller's real, token-verified identity (`getRequesterActor`) instead of a client-supplied `actorId`/`actorName`, closing a spoofable-audit-trail gap found during this work.
+**ACCEPTANCE CRITERIA**: Complete+confirmed vehicle → publish succeeds; incomplete data → 400 with itemized reasons; unconfirmed data → blocked the same way; editing a published vehicle's exterior color to blank auto-unpublishes it.
+**VERIFICATION METHOD**: `tests/vehicleMasterProfile.test.ts` — all four scenarios exercised at the HTTP layer against the real route.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP07 — Public API never fabricates data or leaks internal fields
+**REQUIREMENT**: The public vehicle DTO never invents a features list, a mileage-allowance fallback, or any other unconfirmed spec, and never exposes purchase price, financing party, or profitability score.
+**RATIONALE**: Found and fixed a real pre-existing bug in `SplendorConnectEngine.toPublicVehicleDTO()`: it previously defaulted `features`/`featuresAr` to a hardcoded marketing placeholder list ("Bespoke Interior", "Premium Sound System", "Chauffeured Delivery Available") whenever a vehicle had none configured, and defaulted `mileageAllowanceKm` to a fabricated `250` whenever the real value was falsy — both direct violations of this mission's anti-fabrication rule, now returning the real (possibly empty/zero) confirmed value instead. Internal financial fields were already structurally excluded from the DTO's field list before this session; that property is now covered by an explicit regression test rather than an unverified assumption.
+**VERIFICATION METHOD**: `tests/vehicleMasterProfile.test.ts` — asserts an empty features array (not the old placeholder text) and asserts `purchasePrice`/`financingParty`/`profitabilityScore`/`vin`/`plateNumber` are all `undefined` on the returned DTO even when present on the source vehicle.
+**STATUS**: **IMPLEMENTED (this session)** — bug found and fixed, not merely audited.
+
+### RULE-VMP08 — UI consolidation: one Add/Edit Vehicle flow, not two
+**REQUIREMENT**: A single tabbed (Basic Info / Classification / Technical Specs / Rental & Pricing) Add Vehicle flow used from every entry point.
+**RATIONALE**: `FleetCRMView.tsx` previously carried its own separate, simpler inline "Add Vehicle" form (Make/Model/Year/Plate/DailyRate/Deposit only) alongside the fuller `AddVehicleModal.tsx` already used from `Header.tsx` — a pre-existing "extend, never duplicate" violation found during exploration. `AddVehicleModal.tsx` was upgraded in place into the full tabbed Master Profile flow (cascading Manufacturer→Model dropdowns sourced from the new catalog API, a "Model not found? Request to add new model" affordance, and the new classification/technical tabs), and `FleetCRMView.tsx`'s duplicate inline form was deleted in favor of reusing the same component.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP09 — Testing coverage
+**REQUIREMENT**: Real tests for the Add flow, the Edit flow (zero data loss on reopen), Catalog propose/approve/reject (including blocking unconfirmed data from entering the catalog), and the Publish Gate (success/blocked/re-verification/no-internal-leak).
+**VERIFICATION METHOD**: `tests/vehicleMasterProfile.test.ts` — 11 new tests, all against the real Express app via `supertest` with a mocked Firestore (the same isolation pattern as `tests/massAssignment.test.ts`), on top of the full pre-existing 406-test suite (417 total, zero regressions, verified via `npm test` against the real Firestore emulator).
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-VMP10 — Automated internet catalog discovery
+**REQUIREMENT (deferred)**: A background job that discovers new manufacturers/models/generations from the internet and feeds them into the review queue.
+**RATIONALE FOR DEFERRAL**: This environment has no safe, reliable structured-data-fetching capability suited to unattended catalog discovery, and fabricating a "discovery" result would itself violate this mission's absolute anti-fabrication rule — the same honest-deferral reasoning already applied to RULE-W09/W10 in Module 13. The ingestion point that such a job would call (`proposeCatalogUpdate()` with `discoverySource:'internet_discovery'`) is real, built, and gated through the identical Four-Eyes review used for staff-submitted proposals; nothing about this deferral weakens the "never auto-publish" guarantee.
+**STATUS**: **NOT BUILT — honestly deferred**, not a hidden gap.
+
 ---
 
 ## Summary Table
@@ -607,7 +675,8 @@ table reflects the corrected, verified counts.
 | 12 Governance | 4 | 2 | 1 | 1 |
 | 13 WhatsApp | 10 | 0 | 8 | 2 |
 | 14 Lease-to-Own | 14 | 0 | 14 | 0 |
-| **Total** | **84** | **10** | **40** | **34** |
+| 15 Vehicle Master Profile | 10 | 0 | 9 | 1 |
+| **Total** | **94** | **10** | **49** | **35** |
 
 26 rules were genuinely implemented, tested, and committed across this
 session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08,
@@ -670,3 +739,29 @@ genuinely unautomated piece is the Firebase Storage upload step inside
 `generateLtoContractDocument()`, for the same pre-existing reason every
 other document-upload code path in this codebase is untested here: no
 working Storage emulator in this environment.
+
+Module 15 (Vehicle Master Profile & Verified Vehicle Catalog) upgrades the
+existing Add/Edit Vehicle screens and the existing website-publish control
+without deleting, renaming, or reinterpreting a single existing field --
+VMP01-VMP09 (no parallel Vehicle storage, the cascading Manufacturer/Model
+catalog, the Four-Eyes-gated propose/approve flow, the nine centralized
+classification dropdowns, the Technical Specs tab, the Verified Publish
+Gate reused at three call sites, the anti-fabrication fix to the public
+DTO, the Add-Vehicle UI consolidation, and the new test suite) are real,
+tested (11 new tests against the real Express app + mocked Firestore, on
+top of the full pre-existing 406-test suite -- 417 total, zero
+regressions), and additive to every existing engine (Vehicle, Approvals/
+SoD, Business Rules hydration pattern, Public DTO/Website) per the same
+"extend, never duplicate" mandate as every other module. This phase also
+found and fixed two real pre-existing bugs while building the mission's
+own required checks, not as separate work: `toPublicVehicleDTO()`'s
+fabricated default features list and mileage-allowance fallback (a direct
+violation of this module's own anti-fabrication rule, now fixed), and the
+website-publish route's use of a client-supplied, spoofable actor identity
+in its audit trail (now the real, token-verified requester). One rule is
+honestly deferred: VMP10's automated internet catalog-discovery job was
+not built, since fabricating a "discovery" result in an environment with no
+safe structured-data-fetching capability would itself violate the
+mission's absolute anti-fabrication rule -- the ingestion point such a job
+would call is real and already gated through the identical Four-Eyes
+review used for staff proposals.
