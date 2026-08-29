@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Car, Plus, Search, Filter, Calendar, ShieldCheck, 
   AlertTriangle, Gauge, Zap, Fuel, DollarSign, 
-  CheckCircle2, Wrench, ChevronRight, X
+  CheckCircle2, Wrench, ChevronRight, X, Edit3
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -10,9 +10,11 @@ import { Vehicle, VehicleCategory, VehicleStatus } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { VehicleDetailMasterModal } from '../fleet/VehicleDetailMasterModal';
+import { AddVehicleModal } from '../modals/AddVehicleModal';
+import { EditVehicleModal } from '../modals/EditVehicleModal';
 
 export const FleetCRMView: React.FC = () => {
-  const { language, t } = useLanguage();
+  const { language, t, getStatusLabel, getCategoryLabel } = useLanguage();
   const { vehicles, contracts, addVehicle, updateVehicle, checkVehicleAvailability, selectedVehicleId, setSelectedVehicleId } = useCRM();
 
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -20,6 +22,7 @@ export const FleetCRMView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [availabilityModalOpen, setAvailabilityModalOpen] = useState(false);
 
   // Availability tester state
@@ -28,41 +31,12 @@ export const FleetCRMView: React.FC = () => {
   const [testEndDate, setTestEndDate] = useState(new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0] + 'T10:00:00Z');
   const [availResult, setAvailResult] = useState<any>(null);
 
-  // Add form
-  const [form, setForm] = useState({
-    make: 'Ferrari',
-    model: 'Purosangue V12',
-    year: 2025,
-    category: 'executive_suv' as VehicleCategory,
-    exteriorColor: 'Rosso Corsa',
-    plateNumber: 'DXB P 888',
-    plateCity: 'Dubai',
-    vin: 'ZFF888PUR9990001',
-    dailyRate: 9500,
-    weeklyRate: 58000,
-    monthlyRate: 190000,
-    minDeposit: 20000,
-    mileage: 1200,
-    fuelType: 'petrol' as const,
-    transmission: 'automatic' as const,
-    horsepower: 715,
-    status: 'available' as VehicleStatus,
-    thumbnail: 'https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80',
-    images: ['https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80']
-  });
-
   const activeVehicle = vehicles.find(v => v.id === selectedVehicleId) || null;
 
   const handleTestAvailability = async () => {
     if (!testVehicleId) return;
     const res = await checkVehicleAvailability(testVehicleId, testStartDate, testEndDate);
     setAvailResult(res);
-  };
-
-  const handleAddSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await addVehicle(form);
-    setAddModalOpen(false);
   };
 
   const filteredVehicles = vehicles.filter(v => {
@@ -121,7 +95,7 @@ export const FleetCRMView: React.FC = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search make, model, plate, VIN..."
+            placeholder={language === 'ar' ? 'بحث بالماركة، الطراز، رقم اللوحة، أو الهيكل...' : 'Search make, model, plate, VIN...'}
             className="w-full pl-9 pr-4 py-2 rounded-xl bg-zinc-950/80 border border-zinc-800 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-[#D4AF37]/50"
           />
         </div>
@@ -136,7 +110,7 @@ export const FleetCRMView: React.FC = () => {
                 categoryFilter === cat ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 border border-zinc-800 hover:bg-zinc-800'
               }`}
             >
-              {cat.replace('_', ' ')}
+              {cat === 'all' ? (language === 'ar' ? 'الكل' : 'All') : getCategoryLabel(cat)}
             </button>
           ))}
         </div>
@@ -146,11 +120,11 @@ export const FleetCRMView: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredVehicles.map(vehicle => {
           const statusBadge = {
-            available: <Badge variant="emerald" size="sm">Available</Badge>,
-            rented: <Badge variant="gold" size="sm">Active Rental</Badge>,
-            reserved: <Badge variant="sky" size="sm">Reserved</Badge>,
-            maintenance: <Badge variant="amber" size="sm">Maintenance</Badge>,
-            unavailable: <Badge variant="zinc" size="sm">Unavailable</Badge>
+            available: <Badge variant="emerald" size="sm">{getStatusLabel('available')}</Badge>,
+            rented: <Badge variant="gold" size="sm">{getStatusLabel('rented')}</Badge>,
+            reserved: <Badge variant="sky" size="sm">{getStatusLabel('reserved')}</Badge>,
+            maintenance: <Badge variant="amber" size="sm">{getStatusLabel('maintenance')}</Badge>,
+            unavailable: <Badge variant="zinc" size="sm">{getStatusLabel('unavailable')}</Badge>
           }[vehicle.status];
 
           return (
@@ -184,7 +158,7 @@ export const FleetCRMView: React.FC = () => {
                     <h3 className="text-lg font-display font-bold text-zinc-100 group-hover:text-[#f5d97f] transition-colors">
                       {vehicle.make} {vehicle.model}
                     </h3>
-                    <p className="text-xs text-zinc-400 capitalize">{vehicle.year} • {vehicle.exteriorColor} • {vehicle.category.replace('_', ' ')}</p>
+                    <p className="text-xs text-zinc-400 capitalize">{vehicle.year} • {vehicle.exteriorColor} • {getCategoryLabel(vehicle.category)}</p>
                   </div>
                 </div>
               </div>
@@ -195,37 +169,56 @@ export const FleetCRMView: React.FC = () => {
                 <div className="grid grid-cols-3 gap-2 text-center text-xs py-2 bg-zinc-950/60 rounded-xl border border-zinc-800/80">
                   <div>
                     <span className="text-[10px] uppercase text-zinc-500 font-medium flex items-center justify-center gap-1">
-                      <Zap className="w-3 h-3 text-[#D4AF37]" /> Power
+                      <Zap className="w-3 h-3 text-[#D4AF37]" /> {language === 'ar' ? 'القوة' : 'Power'}
                     </span>
-                    <p className="font-bold text-zinc-200 mt-0.5">{vehicle.horsepower} HP</p>
+                    <p className="font-bold text-zinc-200 mt-0.5">{vehicle.horsepower} {language === 'ar' ? 'حصان' : 'HP'}</p>
                   </div>
                   <div className="border-x border-zinc-800">
                     <span className="text-[10px] uppercase text-zinc-500 font-medium flex items-center justify-center gap-1">
-                      <Gauge className="w-3 h-3 text-sky-400" /> Engine
+                      <Gauge className="w-3 h-3 text-sky-400" /> {language === 'ar' ? 'المحرك' : 'Engine'}
                     </span>
                     <p className="font-bold text-zinc-200 mt-0.5">{vehicle.engine}</p>
                   </div>
                   <div>
                     <span className="text-[10px] uppercase text-zinc-500 font-medium flex items-center justify-center gap-1">
-                      <Fuel className="w-3 h-3 text-emerald-400" /> Odo
+                      <Fuel className="w-3 h-3 text-emerald-400" /> {language === 'ar' ? 'العداد' : 'Odo'}
                     </span>
-                    <p className="font-bold text-zinc-200 mt-0.5">{(vehicle.mileage || 0).toLocaleString()} km</p>
+                    <p className="font-bold text-zinc-200 mt-0.5">{(vehicle.mileage || 0).toLocaleString()} {language === 'ar' ? 'كم' : 'km'}</p>
                   </div>
                 </div>
 
                 {/* Pricing & Quick Action */}
                 <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between">
                   <div>
-                    <span className="text-[10px] text-zinc-400 uppercase font-medium">Daily Rate</span>
+                    <span className="text-[10px] text-zinc-400 uppercase font-medium">
+                      {language === 'ar' ? 'السعر اليومي' : 'Daily Rate'}
+                    </span>
                     <p className="text-base font-bold text-zinc-100">
-                      {(vehicle.dailyRate || 0).toLocaleString()} <span className="text-xs text-[#D4AF37] font-medium">AED/day</span>
+                      {(vehicle.dailyRate || 0).toLocaleString()} <span className="text-xs text-[#D4AF37] font-medium">{language === 'ar' ? 'د.إ / يوم' : 'AED/day'}</span>
                     </p>
                   </div>
-                  <div className="text-end">
-                    <span className="text-[10px] text-zinc-400 uppercase font-medium">Deposit</span>
-                    <p className="text-xs font-semibold text-zinc-300">
-                      {(vehicle.minDeposit || 0).toLocaleString()} AED
-                    </p>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingVehicle(vehicle);
+                      }}
+                      className="p-2 rounded-xl bg-zinc-900 border border-zinc-700 hover:border-[#D4AF37] text-zinc-300 hover:text-[#f5d97f] transition-all"
+                      title={language === 'ar' ? 'تعديل بيانات المركبة' : 'Edit Vehicle'}
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <div className="text-end">
+                      <span className="text-[10px] text-zinc-400 uppercase font-medium">
+                        {language === 'ar' ? 'مبلغ التأمين' : 'Deposit'}
+                      </span>
+                      <p className="text-xs font-semibold text-zinc-300">
+                        {(vehicle.minDeposit || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -247,12 +240,14 @@ export const FleetCRMView: React.FC = () => {
         isOpen={availabilityModalOpen}
         onClose={() => setAvailabilityModalOpen(false)}
         title={language === 'ar' ? 'فاحص تعارض الحجوزات والتوفر' : 'Real-Time Schedule Conflict Tester'}
-        subtitle="Verify vehicle availability against confirmed contracts and reservations"
+        subtitle={language === 'ar' ? 'التحقق الفوري من توفر السيارة مقابل العقود والحجوزات المؤكدة' : 'Verify vehicle availability against confirmed contracts and reservations'}
         maxWidth="lg"
       >
         <div className="space-y-4 text-xs">
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">Select Vehicle</label>
+            <label className="block text-zinc-400 font-medium mb-1">
+              {language === 'ar' ? 'اختر المركبة' : 'Select Vehicle'}
+            </label>
             <select
               value={testVehicleId}
               onChange={(e) => setTestVehicleId(e.target.value)}
@@ -260,7 +255,7 @@ export const FleetCRMView: React.FC = () => {
             >
               {vehicles.map(v => (
                 <option key={v.id} value={v.id}>
-                  {v.make} {v.model} ({v.plateNumber}) - Status: {(v.status || '').toUpperCase()}
+                  {v.make} {v.model} ({v.plateNumber}) - {language === 'ar' ? 'الحالة:' : 'Status:'} {getStatusLabel(v.status)}
                 </option>
               ))}
             </select>
@@ -268,7 +263,9 @@ export const FleetCRMView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Start Date & Time</label>
+              <label className="block text-zinc-400 font-medium mb-1">
+                {language === 'ar' ? 'تاريخ ووقت البدء' : 'Start Date & Time'}
+              </label>
               <input
                 type="datetime-local"
                 value={testStartDate.slice(0, 16)}
@@ -277,7 +274,9 @@ export const FleetCRMView: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">End Date & Time</label>
+              <label className="block text-zinc-400 font-medium mb-1">
+                {language === 'ar' ? 'تاريخ ووقت الانتهاء' : 'End Date & Time'}
+              </label>
               <input
                 type="datetime-local"
                 value={testEndDate.slice(0, 16)}
@@ -290,20 +289,28 @@ export const FleetCRMView: React.FC = () => {
           <button
             type="button"
             onClick={handleTestAvailability}
-            className="w-full py-2.5 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
+            className="w-full py-2.5 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold shadow-md"
           >
-            Check Schedule Availability
+            {language === 'ar' ? 'فحص التوفر في الجدول الزمني' : 'Check Schedule Availability'}
           </button>
 
           {availResult && (
             <div className={`p-4 rounded-2xl border ${availResult.available ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/20 border-rose-500/40 text-rose-300'}`}>
               <div className="flex items-center gap-2 font-bold text-sm">
                 {availResult.available ? <CheckCircle2 className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
-                <span>{availResult.available ? 'Vehicle is 100% Available for these dates' : 'Schedule Conflict Detected! Double-Booking Blocked.'}</span>
+                <span>
+                  {availResult.available
+                    ? (language === 'ar' ? 'السيارة متاحة 100% خلال هذه الفترة' : 'Vehicle is 100% Available for these dates')
+                    : (language === 'ar' ? 'تم اكتشاف تعارض في الحجوزات! تم حظر الحجز المزدوج.' : 'Schedule Conflict Detected! Double-Booking Blocked.')}
+                </span>
               </div>
               {!availResult.available && (
                 <div className="mt-2 text-xs text-zinc-300">
-                  <p>Conflicting bookings found: {availResult.conflictingRecords.length}</p>
+                  <p>
+                    {language === 'ar'
+                      ? `تم العثور على ${availResult.conflictingRecords.length} حجز متعارض`
+                      : `Conflicting bookings found: ${availResult.conflictingRecords.length}`}
+                  </p>
                 </div>
               )}
             </div>
@@ -311,97 +318,18 @@ export const FleetCRMView: React.FC = () => {
         </div>
       </Modal>
 
-      {/* Add Vehicle Modal */}
-      <Modal
+      {/* Comprehensive Add Vehicle Modal */}
+      <AddVehicleModal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
-        title="Add Supercar to Fleet"
-        subtitle="Register vehicle specs, plate, and rate structure"
-        maxWidth="2xl"
-      >
-        <form onSubmit={handleAddSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Make *</label>
-              <input
-                type="text"
-                required
-                value={form.make}
-                onChange={(e) => setForm({ ...form, make: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Model *</label>
-              <input
-                type="text"
-                required
-                value={form.model}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Year</label>
-              <input
-                type="number"
-                value={form.year}
-                onChange={(e) => setForm({ ...form, year: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-          </div>
+      />
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Plate Number *</label>
-              <input
-                type="text"
-                required
-                value={form.plateNumber}
-                onChange={(e) => setForm({ ...form, plateNumber: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Daily Rate (AED) *</label>
-              <input
-                type="number"
-                required
-                value={form.dailyRate}
-                onChange={(e) => setForm({ ...form, dailyRate: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Security Deposit (AED) *</label>
-              <input
-                type="number"
-                required
-                value={form.minDeposit}
-                onChange={(e) => setForm({ ...form, minDeposit: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              />
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => setAddModalOpen(false)}
-              className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
-            >
-              Save Supercar
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* Comprehensive Edit Vehicle Modal */}
+      <EditVehicleModal
+        vehicle={editingVehicle}
+        isOpen={!!editingVehicle}
+        onClose={() => setEditingVehicle(null)}
+      />
     </div>
   );
 };

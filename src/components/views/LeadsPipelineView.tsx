@@ -12,6 +12,7 @@ import { Modal } from '../common/Modal';
 
 export const LeadsPipelineView: React.FC = () => {
   const { language, t } = useLanguage();
+  const isAr = language === 'ar';
   const { leads, addLead, updateLead, convertLeadToCustomer, setSelectedCustomerId, setActiveView } = useCRM();
 
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -81,10 +82,10 @@ export const LeadsPipelineView: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-zinc-100">
-            {language === 'ar' ? 'مسار المبيعات وتأهيل الفرص' : 'Leads & VIP Sales Pipeline'}
+            {isAr ? 'مسار المبيعات وتأهيل الفرص' : 'Leads & VIP Sales Pipeline'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            {language === 'ar' ? 'تتبع استفسارات العملاء المحتملين من كافة القنوات مع التحويل الفوري بنقرة واحدة' : 'Track inbound luxury rental inquiries with 1-click customer & quote conversion'}
+            {isAr ? 'تتبع استفسارات العملاء المحتملين من كافة القنوات مع التحويل الفوري بنقرة واحدة' : 'Track inbound luxury rental inquiries with 1-click customer & quote conversion'}
           </p>
         </div>
 
@@ -93,7 +94,7 @@ export const LeadsPipelineView: React.FC = () => {
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold text-xs lg:text-sm shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
         >
           <UserPlus className="w-4 h-4" />
-          <span>{language === 'ar' ? 'تسجيل استفسار جديد' : 'New Inbound Lead'}</span>
+          <span>{isAr ? 'تسجيل استفسار جديد' : 'New Inbound Lead'}</span>
         </button>
       </div>
 
@@ -112,12 +113,12 @@ export const LeadsPipelineView: React.FC = () => {
                     {stageLeads.length}
                   </Badge>
                   <span className="text-xs font-bold text-zinc-200 truncate">
-                    {language === 'ar' ? stage.labelAr : stage.label}
+                    {isAr ? stage.labelAr : stage.label}
                   </span>
                 </div>
               </div>
               <div className="text-[11px] font-mono text-zinc-400">
-                {(totalStageValue || 0).toLocaleString()} AED
+                {(totalStageValue || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}
               </div>
 
               {/* Cards */}
@@ -138,7 +139,7 @@ export const LeadsPipelineView: React.FC = () => {
 
                     <div className="text-[11px] text-zinc-400 space-y-1">
                       <p className="truncate flex items-center gap-1"><Phone className="w-3 h-3 text-zinc-500" /> {lead.phone}</p>
-                      <p className="truncate font-semibold text-zinc-300">{(lead.estimatedValue || 0).toLocaleString()} AED</p>
+                      <p className="truncate font-semibold text-zinc-300">{(lead.estimatedValue || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</p>
                     </div>
 
                     {lead.notes && (
@@ -155,11 +156,11 @@ export const LeadsPipelineView: React.FC = () => {
                           className="text-[11px] font-semibold text-[#f5d97f] hover:underline flex items-center gap-1"
                         >
                           <UserCheck className="w-3 h-3" />
-                          <span>Convert</span>
+                          <span>{isAr ? 'تحويل لعميل' : 'Convert'}</span>
                         </button>
                       ) : (
                         <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Converted
+                          <CheckCircle2 className="w-3 h-3" /> {isAr ? 'تم التعاقد' : 'Converted'}
                         </span>
                       )}
 
@@ -169,7 +170,7 @@ export const LeadsPipelineView: React.FC = () => {
                           onClick={() => handleStageChange(lead.id, 'contacted')}
                           className="text-[10px] text-zinc-400 hover:text-zinc-200"
                         >
-                          → Contacted
+                          → {isAr ? 'تم التواصل' : 'Contacted'}
                         </button>
                       )}
                       {lead.status === 'contacted' && (
@@ -177,7 +178,7 @@ export const LeadsPipelineView: React.FC = () => {
                           onClick={() => handleStageChange(lead.id, 'qualified')}
                           className="text-[10px] text-zinc-400 hover:text-zinc-200"
                         >
-                          → Qualify
+                          → {isAr ? 'تأهيل VIP' : 'Qualify'}
                         </button>
                       )}
                     </div>
@@ -193,25 +194,25 @@ export const LeadsPipelineView: React.FC = () => {
       <Modal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
-        title={language === 'ar' ? 'تسجيل استفسار فاخر جديد' : 'Log New Luxury Rental Inquiry'}
-        subtitle="Capture inbound interest and assign to sales executive"
+        title={isAr ? 'تسجيل استفسار فاخر جديد' : 'Log New Luxury Rental Inquiry'}
+        subtitle={isAr ? 'تسجيل بيانات العميل المحتمل وتعيينها للمسؤول' : 'Capture inbound interest and assign to sales executive'}
         maxWidth="lg"
       >
         <form onSubmit={handleCreateSubmit} className="space-y-4 text-xs">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Prospect Name *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'اسم العميل المحتمل *' : 'Prospect Name *'}</label>
               <input
                 type="text"
                 required
                 value={form.fullName}
                 onChange={(e) => setForm({ ...form, fullName: e.target.value })}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="e.g. Lord Alistair Vance"
+                placeholder={isAr ? 'مثال: الشيخ راشد آل مكتوم' : 'e.g. Lord Alistair Vance'}
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Company (Optional)</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'الشركة (اختياري)' : 'Company (Optional)'}</label>
               <input
                 type="text"
                 value={form.companyName}
@@ -223,7 +224,7 @@ export const LeadsPipelineView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Phone Number *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'رقم الهاتف *' : 'Phone Number *'}</label>
               <input
                 type="text"
                 required
@@ -234,7 +235,7 @@ export const LeadsPipelineView: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Email Address *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'البريد الإلكتروني *' : 'Email Address *'}</label>
               <input
                 type="email"
                 required
@@ -248,34 +249,34 @@ export const LeadsPipelineView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Lead Source</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'مصدر الاستفسار' : 'Lead Source'}</label>
               <select
                 value={form.source}
                 onChange={(e) => setForm({ ...form, source: e.target.value as any })}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
               >
-                <option value="website">Website Direct</option>
-                <option value="concierge">Hotel Concierge</option>
-                <option value="instagram">Instagram VIP</option>
-                <option value="referral">VIP Referral</option>
-                <option value="whatsapp">WhatsApp Hotline</option>
+                <option value="website">{isAr ? 'الموقع الإلكتروني' : 'Website Direct'}</option>
+                <option value="concierge">{isAr ? 'كونسيرج الفندق' : 'Hotel Concierge'}</option>
+                <option value="instagram">{isAr ? 'إنستغرام VIP' : 'Instagram VIP'}</option>
+                <option value="referral">{isAr ? 'توصية خاصة' : 'VIP Referral'}</option>
+                <option value="whatsapp">{isAr ? 'خط واتساب الساخن' : 'WhatsApp Hotline'}</option>
               </select>
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Desired Fleet Tier</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'فئة الأسطول المطلوبة' : 'Desired Fleet Tier'}</label>
               <select
                 value={form.preferredCategory}
                 onChange={(e) => setForm({ ...form, preferredCategory: e.target.value as any })}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
               >
-                <option value="supercar">Supercar Tier</option>
-                <option value="ultra_luxury">Ultra-Luxury (Rolls/Maybach)</option>
-                <option value="luxury_suv">Luxury SUV (Cullinan/G63)</option>
-                <option value="convertible">Convertible</option>
+                <option value="supercar">{isAr ? 'سوبركار فارهة' : 'Supercar Tier'}</option>
+                <option value="ultra_luxury">{isAr ? 'ألترا لوكشري (رولز رويس/مايباخ)' : 'Ultra-Luxury (Rolls/Maybach)'}</option>
+                <option value="luxury_suv">{isAr ? 'دفع رباعي فاخر (كالينان/G63)' : 'Luxury SUV (Cullinan/G63)'}</option>
+                <option value="convertible">{isAr ? 'سيارة كشف رياضية' : 'Convertible'}</option>
               </select>
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Estimated Value (AED)</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'القيمة التقديرية (د.إ)' : 'Estimated Value (AED)'}</label>
               <input
                 type="number"
                 value={form.estimatedValue}
@@ -286,13 +287,13 @@ export const LeadsPipelineView: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">Requirements & Client Request Notes</label>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'ملاحظات ومتطلبات العميل' : 'Requirements & Client Request Notes'}</label>
             <textarea
               rows={3}
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-              placeholder="Inquiring for Formula 1 weekend in Abu Dhabi..."
+              placeholder={isAr ? 'استفسار عن عطلة نهاية الأسبوع لسباق الفورمولا 1 في أبوظبي...' : 'Inquiring for Formula 1 weekend in Abu Dhabi...'}
             />
           </div>
 
@@ -308,7 +309,7 @@ export const LeadsPipelineView: React.FC = () => {
               type="submit"
               className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md"
             >
-              Save Inbound Lead
+              {isAr ? 'حفظ الاستفسار' : 'Save Inbound Lead'}
             </button>
           </div>
         </form>

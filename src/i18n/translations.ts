@@ -1,3 +1,5 @@
+import { Language } from '../types';
+
 export const translations = {
   en: {
     // Brand & Header
@@ -12,25 +14,32 @@ export const translations = {
     switchRole: 'Switch Perspective',
     language: 'Language',
     currency: 'AED',
+    currencySymbol: 'AED',
 
-    // Sidebar Navigation Labels (t('finance') etc. previously had no key here
-    // and silently fell back to the raw lowercase key string -- e.g. the nav
-    // literally read "finance"/"reconciliation"/"tasks" instead of a real
-    // label, in both languages, since the t() fallback is language-agnostic)
+    // Sidebar Navigation Labels
     dashboard: 'Dashboard',
     customers: 'Customers',
-    leads: 'Leads',
-    fleet: 'Fleet',
+    leads: 'Leads & Pipeline',
+    fleet: 'Fleet CRM',
     quotations: 'Quotations',
     reservations: 'Reservations',
     contracts: 'Contracts',
-    finance: 'Finance',
+    finance: 'Finance & Invoices',
     reconciliation: 'Bank Reconciliation',
     tolls: 'Tolls & Parking',
-    tasks: 'Tasks',
-    settings: 'Settings',
+    tasks: 'Tasks & Follow-ups',
+    settings: 'Settings & Security',
+    notificationCenter: 'WhatsApp & Notifications',
+    aiStudio: 'AI Intelligence Studio',
+    testSuite: 'Diagnostic Test Suite',
 
-    // Authentication
+    // Navigation Sections
+    sectionOperations: 'OPERATIONS',
+    sectionRentals: 'RENTALS & DISPATCH',
+    sectionFinance: 'FINANCIAL CONTROL',
+    sectionIntelligence: 'INTELLIGENCE & SYSTEM',
+
+    // Authentication & Staff
     authTitle: 'Executive Sign In',
     authSubtitle: 'Authorized personnel only. Sign in with your Splendor account.',
     authEmailLabel: 'Work Email',
@@ -51,7 +60,7 @@ export const translations = {
     staffDirectorySubtitle: 'Read-only list of accounts provisioned in this workspace',
     addStaffButton: 'Add Staff Account',
     addStaffTitle: 'Create Staff Account',
-    addStaffSubtitle: 'Only CEO/Admin accounts can create logins. Share the temporary password with the employee securely and ask them to change it after their first sign-in.',
+    addStaffSubtitle: 'Only CEO/Admin accounts can create logins. Share the temporary password with the employee securely.',
     staffFieldName: 'Full Name',
     staffFieldNameAr: 'Full Name (Arabic)',
     staffFieldEmail: 'Work Email',
@@ -76,31 +85,7 @@ export const translations = {
     passwordChangeReauthError: 'For security, please sign out and sign in again before changing your password.',
     savePassword: 'Save New Password',
     savingPassword: 'Saving...',
-    currencySymbol: 'AED',
     
-    // Navigation Modules
-    navDashboard: 'CEO Command Center',
-    navCustomers: 'Customer 360',
-    navLeads: 'Lead Management',
-    navPipeline: 'Sales Pipeline',
-    navFleet: 'Fleet & Vehicle 360',
-    navAvailability: 'Fleet Availability',
-    navQuotations: 'Quotations',
-    navReservations: 'Reservations',
-    navRentalOperations: 'Rental Operations',
-    navContracts: 'Rental Contracts',
-    navFinance: 'Finance & Payments',
-    navBankImport: 'Bank Reconciliation',
-    navTasks: 'Tasks & Follow-ups',
-    navCommunications: 'Communications',
-    navDocuments: 'Document Center',
-    navReports: 'Reports & Analytics',
-    navAiStudio: 'AI Intelligence Studio',
-    navAudit: 'Audit Trail',
-    navAdmin: 'Administration',
-    navSystemTests: 'Workflow Test Suite',
-    navDocs: 'Documentation & SOPs',
-
     // Common Actions
     create: 'Create',
     add: 'Add New',
@@ -136,6 +121,9 @@ export const translations = {
     notes: 'Notes',
     overview: 'Overview',
     refresh: 'Refresh Data',
+    sync: 'Synchronize',
+    quickAction: 'Quick Action',
+    directActions: 'Direct Actions',
 
     // Customer 360
     customersTitle: 'Customer Management & 360 Profiles',
@@ -168,6 +156,8 @@ export const translations = {
     customerTimeline: 'Unified Activity Timeline',
     invoicesAndPayments: 'Invoices & Payments',
     heldDeposits: 'Security Deposits',
+    documentsCenter: 'Document Registry',
+    commsLog: 'Communications Log',
 
     // Leads & Pipeline
     leadsTitle: 'Lead Management & Intake',
@@ -370,22 +360,33 @@ export const translations = {
     activeRole: 'الدور الحالي',
     switchRole: 'تبديل منظور الصلاحيات',
     language: 'اللغة',
+    currency: 'د.إ',
+    currencySymbol: 'د.إ',
 
     // تسميات التنقل الجانبي
     dashboard: 'لوحة التحكم',
     customers: 'العملاء',
-    leads: 'العملاء المحتملون',
-    fleet: 'الأسطول',
+    leads: 'العملاء والفرص',
+    fleet: 'أسطول السيارات',
     quotations: 'عروض الأسعار',
     reservations: 'الحجوزات',
     contracts: 'العقود',
-    finance: 'المالية',
+    finance: 'المالية والفواتير',
     reconciliation: 'المطابقة البنكية',
     tolls: 'الرسوم والمواقف',
-    tasks: 'المهام',
-    settings: 'الإعدادات',
+    tasks: 'المهام والمتابعات',
+    settings: 'الإعدادات والأمان',
+    notificationCenter: 'مركز الإشعارات والواتساب',
+    aiStudio: 'استوديو الذكاء الاصطناعي',
+    testSuite: 'مختبر الفحص الآلي',
 
-    // تسجيل الدخول
+    // أقسام القائمة الجانبية
+    sectionOperations: 'العمليات التنفيذية',
+    sectionRentals: 'الحجوزات والعقود',
+    sectionFinance: 'الإدارة والرقابة المالية',
+    sectionIntelligence: 'الذكاء والتحكم والأنظمة',
+
+    // تسجيل الدخول والموظفين
     authTitle: 'تسجيل الدخول التنفيذي',
     authSubtitle: 'للموظفين المصرح لهم فقط. سجّل الدخول بحساب سبلندر الخاص بك.',
     authEmailLabel: 'البريد الإلكتروني للعمل',
@@ -431,31 +432,6 @@ export const translations = {
     passwordChangeReauthError: 'لأسباب أمنية، من فضلك سجّل الخروج ثم سجّل الدخول مرة أخرى قبل تغيير كلمة المرور.',
     savePassword: 'حفظ كلمة المرور الجديدة',
     savingPassword: 'جاري الحفظ...',
-    currency: 'د.إ',
-    currencySymbol: 'د.إ',
-    
-    // Navigation Modules
-    navDashboard: 'مركز قيادة الرئيس التنفيذي',
-    navCustomers: 'ملف العميل الشامل 360',
-    navLeads: 'إدارة العملاء المحتملين',
-    navPipeline: 'مسار المبيعات والصفقات',
-    navFleet: 'أسطول السيارات 360',
-    navAvailability: 'جدول توفر الأسطول',
-    navQuotations: 'عروض الأسعار الفاخرة',
-    navReservations: 'الحجوزات المؤكدة',
-    navRentalOperations: 'العمليات والتسليم والاستلام',
-    navContracts: 'عقود الإيجار الرسمية',
-    navFinance: 'المالية والمدفوعات',
-    navBankImport: 'مطابقة الكشوفات البنكية',
-    navTasks: 'المهام والمتابعات',
-    navCommunications: 'سجل الاتصالات والمراسلات',
-    navDocuments: 'مركز الوثائق والمستندات',
-    navReports: 'التقارير والتحليلات',
-    navAiStudio: 'استوديو الذكاء الاصطناعي',
-    navAudit: 'سجل التدقيق والرقابة',
-    navAdmin: 'الإدارة والإعدادات العامة',
-    navSystemTests: 'اختبارات التدفق المؤتمتة',
-    navDocs: 'أدلة الاستخدام وإجراءات العمل SOP',
 
     // Common Actions
     create: 'إنشاء',
@@ -492,6 +468,9 @@ export const translations = {
     notes: 'الملاحظات',
     overview: 'نظرة عامة',
     refresh: 'تحديث البيانات',
+    sync: 'مزامنة سحابية',
+    quickAction: 'إجراء سريع',
+    directActions: 'العمليات السريعة المباشرة',
 
     // Customer 360
     customersTitle: 'إدارة العملاء وملفات 360°',
@@ -524,6 +503,8 @@ export const translations = {
     customerTimeline: 'المسار الزمني الموحد للأنشطة',
     invoicesAndPayments: 'الفواتير والمدفوعات',
     heldDeposits: 'الودائع والتأمينات',
+    documentsCenter: 'مركز الوثائق والمستندات',
+    commsLog: 'سجل المراسلات والاتصالات',
 
     // Leads & Pipeline
     leadsTitle: 'إدارة العملاء المحتملين والاستفسارات',
@@ -715,3 +696,159 @@ export const translations = {
     statusApplied: 'تم الخصم للتسوية',
   }
 };
+
+// ==========================================
+// SYSTEM ENUM AND DISPLAY FORMATTERS (AR/EN)
+// ==========================================
+
+export function getStatusLabel(status: string | undefined | null, lang: Language): string {
+  if (!status) return '';
+  const key = String(status).toLowerCase().trim();
+
+  const map: Record<string, { en: string; ar: string }> = {
+    available: { en: 'Available', ar: 'متاحة للتأجير' },
+    reserved: { en: 'Reserved', ar: 'محجوزة' },
+    rented: { en: 'Active Rental', ar: 'مؤجرة نشطة' },
+    maintenance: { en: 'In Service / Maintenance', ar: 'تحت الصيانة' },
+    unavailable: { en: 'Unavailable', ar: 'غير متاحة' },
+    active: { en: 'Active', ar: 'نشط وسارٍ' },
+    completed: { en: 'Completed', ar: 'مكتمل' },
+    cancelled: { en: 'Cancelled', ar: 'ملغي' },
+    draft: { en: 'Draft', ar: 'مسودة' },
+    pending: { en: 'Pending', ar: 'قيد الانتظار' },
+    sent: { en: 'Sent', ar: 'تم الإرسال' },
+    viewed: { en: 'Viewed', ar: 'تمت المشاهدة' },
+    accepted: { en: 'Accepted', ar: 'مقبول ومعتمد' },
+    rejected: { en: 'Rejected', ar: 'مرفوض' },
+    expired: { en: 'Expired', ar: 'منتهي الصلاحية' },
+    won: { en: 'Won Deal', ar: 'صفقة ناجحة' },
+    lost: { en: 'Lost Deal', ar: 'صفقة مفقودة' },
+    contacted: { en: 'Contacted', ar: 'تم التواصل' },
+    qualified: { en: 'Qualified', ar: 'مؤهل' },
+    proposal_sent: { en: 'Proposal Sent', ar: 'تم إرسال العرض' },
+    negotiation: { en: 'Negotiating', ar: 'قيد التفاوض' },
+    new: { en: 'New Lead', ar: 'استفسار جديد' },
+    paid: { en: 'Paid in Full', ar: 'مسدد بالكامل' },
+    partially_paid: { en: 'Partially Paid', ar: 'مسدد جزئياً' },
+    unpaid: { en: 'Unpaid / Due', ar: 'مستحق الدفع' },
+    overdue: { en: 'Overdue', ar: 'متأخر عن السداد' },
+    held: { en: 'Held in Escrow', ar: 'محتجز كتأمين' },
+    refunded: { en: 'Refunded to Client', ar: 'تم الاسترداد' },
+    applied: { en: 'Applied to Balance', ar: 'تم الخصم للتسوية' },
+    verified: { en: 'Verified & Approved', ar: 'موثق ومعتمد' },
+    unverified: { en: 'Not Verified', ar: 'غير موثق' },
+    under_review: { en: 'Under Compliance Review', ar: 'قيد المراجعة والتدقيق' },
+    documents_pending: { en: 'Awaiting Documents', ar: 'بانتظار رفع المستندات' },
+    pristine: { en: 'Pristine Showroom Condition', ar: 'حالة الوكالة الممتازة' },
+    clean: { en: 'Clean', ar: 'نظيفة' },
+    needs_cleaning: { en: 'Needs Detailing / Cleaning', ar: 'تحتاج غسيل وتنظيف' },
+    sold: { en: 'Sold / Decommissioned', ar: 'تم البيع / خارج الخدمة' }
+  };
+
+  const found = map[key];
+  if (found) {
+    return lang === 'ar' ? found.ar : found.en;
+  }
+  // Capitalize fallback
+  return key.replace(/_/g, ' ').toUpperCase();
+}
+
+export function getRoleLabel(role: string | undefined | null, lang: Language): string {
+  if (!role) return '';
+  const map: Record<string, { en: string; ar: string }> = {
+    ceo: { en: 'Chief Executive Officer (CEO)', ar: 'الرئيس التنفيذي (CEO)' },
+    admin: { en: 'System Administrator', ar: 'مسؤول النظام (Admin)' },
+    operations: { en: 'Operations Executive', ar: 'مدير العمليات والتسليم' },
+    sales: { en: 'VIP Sales Executive', ar: 'مسؤول مبيعات كبار العملاء' },
+    fleet: { en: 'Fleet & Telematics Manager', ar: 'مدير الأسطول والصيانة' },
+    finance: { en: 'Financial Controller', ar: 'الإدارة المالية والمحاسبة' }
+  };
+  const found = map[role.toLowerCase()];
+  return found ? (lang === 'ar' ? found.ar : found.en) : role.toUpperCase();
+}
+
+export function getCategoryLabel(category: string | undefined | null, lang: Language): string {
+  if (!category) return '';
+  const map: Record<string, { en: string; ar: string }> = {
+    all: { en: 'All Categories', ar: 'كافة الفئات' },
+    supercar: { en: 'Supercar', ar: 'سيارة خارقة (Supercar)' },
+    ultra_luxury_sedan: { en: 'Ultra-Luxury Sedan', ar: 'سيدان فارهة VIP' },
+    executive_suv: { en: 'Executive SUV', ar: 'دفع رباعي فاخر' },
+    grand_tourer: { en: 'Grand Tourer', ar: 'جراند تورير (GT)' },
+    exotic_convertible: { en: 'Exotic Convertible', ar: 'كشف رياضية نادرة' }
+  };
+  const found = map[category.toLowerCase()];
+  return found ? (lang === 'ar' ? found.ar : found.en) : category.replace(/_/g, ' ');
+}
+
+export function getPaymentMethodLabel(method: string | undefined | null, lang: Language): string {
+  if (!method) return '';
+  const map: Record<string, { en: string; ar: string }> = {
+    cash: { en: 'Cash', ar: 'نقداً' },
+    bank_transfer: { en: 'Bank Transfer (IBAN)', ar: 'تحويل بنكي (IBAN)' },
+    card: { en: 'Credit / Debit Card', ar: 'بطاقة مصرفية / مدى' },
+    online_link: { en: 'VIP Payment Link', ar: 'رابط دفع إلكتروني' },
+    corporate_credit: { en: 'Corporate Credit', ar: 'حساب ائتمان الشركات' }
+  };
+  const found = map[method.toLowerCase()];
+  return found ? (lang === 'ar' ? found.ar : found.en) : method.replace(/_/g, ' ');
+}
+
+export function getKycStatusLabel(status: string | undefined | null, lang: Language): string {
+  if (!status) return '';
+  const map: Record<string, { en: string; ar: string }> = {
+    VERIFIED: { en: 'KYC Verified', ar: 'موثق رسمياً' },
+    UNVERIFIED: { en: 'Unverified', ar: 'غير موثق' },
+    UNDER_REVIEW: { en: 'Under Review', ar: 'قيد التدقيق' },
+    DOCUMENTS_PENDING: { en: 'Awaiting Upload', ar: 'بانتظار المستندات' },
+    EXPIRED: { en: 'Documents Expired', ar: 'وثائق منتهية' },
+    CEO_OVERRIDDEN: { en: 'CEO Approved Exception', ar: 'استثناء معتمد من الرئيس التنفيذي' },
+    REJECTED: { en: 'Rejected', ar: 'مرفوض' }
+  };
+  const found = map[status.toUpperCase()];
+  return found ? (lang === 'ar' ? found.ar : found.en) : status;
+}
+
+export function getDocCategoryLabel(category: string | undefined | null, lang: Language): string {
+  if (!category) return '';
+  const map: Record<string, { en: string; ar: string }> = {
+    customer_id: { en: 'Emirates ID / Passport', ar: 'هوية إماراتية / جواز سفر' },
+    driving_license: { en: 'Driving License', ar: 'رخصة القيادة' },
+    contract: { en: 'Signed Contract', ar: 'عقد إيجار موقع' },
+    invoice: { en: 'Tax Invoice', ar: 'فاتورة ضريبية' },
+    receipt: { en: 'Payment Receipt', ar: 'إيصال دفع' },
+    vehicle_reg: { en: 'Mulkiya (Registration)', ar: 'ملكية المركبة' },
+    vehicle_insurance: { en: 'Insurance Policy', ar: 'وثيقة التأمين' },
+    inspection_sheet: { en: 'Inspection Condition Report', ar: 'تقرير الفحص الميداني' },
+    statement: { en: 'Account Statement', ar: 'كشف حساب' },
+    other: { en: 'Other Attachment', ar: 'مستند آخر' },
+    EMIRATES_ID_FRONT: { en: 'Emirates ID (Front)', ar: 'الهوية الإماراتية (الوجه الأمامي)' },
+    EMIRATES_ID_BACK: { en: 'Emirates ID (Back)', ar: 'الهوية الإماراتية (الوجه الخلفي)' },
+    PASSPORT: { en: 'Passport (Bio Page)', ar: 'جواز السفر (صفحة البيانات)' },
+    VISA_ENTRY_STAMP: { en: 'UAE Entry Visa / Stamp', ar: 'تأشيرة الدخول / ختم الإقامة' },
+    DRIVING_LICENSE_FRONT: { en: 'Driving License (Front)', ar: 'رخصة القيادة (الوجه الأمامي)' },
+    DRIVING_LICENSE_BACK: { en: 'Driving License (Back)', ar: 'رخصة القيادة (الوجه الخلفي)' },
+    INTL_DRIVING_PERMIT: { en: 'International Driving Permit', ar: 'رخصة القيادة الدولية (IDP)' }
+  };
+  const found = map[category];
+  return found ? (lang === 'ar' ? found.ar : found.en) : String(category).replace(/_/g, ' ');
+}
+
+export function getPriorityLabel(priority: string | undefined | null, lang: Language): string {
+  if (!priority) return '';
+  const map: Record<string, { en: string; ar: string }> = {
+    all: { en: 'All', ar: 'الكل' },
+    urgent: { en: 'Urgent', ar: 'عاجل جداً' },
+    high: { en: 'High', ar: 'مرتفع' },
+    medium: { en: 'Medium', ar: 'متوسط' },
+    low: { en: 'Low', ar: 'منخفض' }
+  };
+  const found = map[priority.toLowerCase()];
+  return found ? (lang === 'ar' ? found.ar : found.en) : priority.toUpperCase();
+}
+
+export function formatCurrency(amount: number | string | undefined | null, lang: Language): string {
+  const val = Number(amount) || 0;
+  const numStr = val.toLocaleString('en-US');
+  return lang === 'ar' ? `${numStr} د.إ` : `${numStr} AED`;
+}

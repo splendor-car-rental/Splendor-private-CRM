@@ -21,7 +21,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose }) => {
-  const { language, setLanguage, t } = useLanguage();
+  const { language, setLanguage, t, getRoleLabel } = useLanguage();
   const { currentUser, logout, updateMyProfile } = useAuth();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -69,7 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
 
   const sections = [
     {
-      title: language === 'ar' ? 'العمليات التنفيذية' : 'OPERATIONS',
+      title: t('sectionOperations'),
       items: [
         {
           id: 'dashboard',
@@ -92,13 +92,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'fleet',
           label: t('fleet'),
           icon: <Car className="w-4 h-4" />,
-          badge: `${availableFleetCount} Avail`,
+          badge: language === 'ar' ? `${availableFleetCount} متاح` : `${availableFleetCount} Avail`,
           badgeVariant: 'emerald' as const
         }
       ]
     },
     {
-      title: language === 'ar' ? 'الحجوزات والعقود' : 'RENTALS & DISPATCH',
+      title: t('sectionRentals'),
       items: [
         {
           id: 'quotations',
@@ -114,13 +114,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'contracts',
           label: t('contracts'),
           icon: <FileSignature className="w-4 h-4" />,
-          badge: activeRentalsCount > 0 ? `${activeRentalsCount} Active` : undefined,
+          badge: activeRentalsCount > 0 ? (language === 'ar' ? `${activeRentalsCount} نشط` : `${activeRentalsCount} Active`) : undefined,
           badgeVariant: 'gold' as const
         }
       ]
     },
     {
-      title: language === 'ar' ? 'الإدارة المالية' : 'FINANCIAL CONTROL',
+      title: t('sectionFinance'),
       items: [
         {
           id: 'finance',
@@ -131,14 +131,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'reconciliation',
           label: t('reconciliation'),
           icon: <Landmark className="w-4 h-4" />,
-          badge: unreconciledCount > 0 ? `${unreconciledCount} Review` : undefined,
+          badge: unreconciledCount > 0 ? (language === 'ar' ? `${unreconciledCount} للمراجعة` : `${unreconciledCount} Review`) : undefined,
           badgeVariant: 'rose' as const
         },
         {
           id: 'tolls',
           label: t('tolls'),
           icon: <TicketCheck className="w-4 h-4" />,
-          badge: unmatchedTollsCount > 0 ? `${unmatchedTollsCount} Unmatched` : undefined,
+          badge: unmatchedTollsCount > 0 ? (language === 'ar' ? `${unmatchedTollsCount} غير مطابق` : `${unmatchedTollsCount} Unmatched`) : undefined,
           badgeVariant: 'rose' as const
         },
         {
@@ -156,25 +156,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
       ]
     },
     {
-      title: language === 'ar' ? 'الذكاء والتحكم' : 'INTELLIGENCE & SYSTEM',
+      title: t('sectionIntelligence'),
       items: [
         {
           id: 'notification-center',
-          label: language === 'ar' ? 'مركز الإشعارات وواتساب' : 'Notification & WhatsApp Center',
+          label: t('notificationCenter'),
           icon: <BellRing className="w-4 h-4 text-[#D4AF37]" />
         },
         {
           id: 'ai-studio',
-          label: language === 'ar' ? 'استوديو الذكاء الاصطناعي' : 'AI Intelligence',
+          label: t('aiStudio'),
           icon: <Sparkles className="w-4 h-4 text-[#D4AF37]" />,
           badge: 'Gemini 3.7',
           badgeVariant: 'gold' as const
         },
         {
           id: 'test-suite',
-          label: language === 'ar' ? 'مختبر الفحص الآلي' : 'Test Suite Runner',
+          label: t('testSuite'),
           icon: <ShieldCheck className="w-4 h-4 text-emerald-400" />,
-          badge: '12/12 Passed',
+          badge: language === 'ar' ? '18/18 نجاح' : '18/18 Passed',
           badgeVariant: 'emerald' as const
         },
         {
@@ -297,8 +297,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
               <p className="text-xs font-semibold text-zinc-200 truncate">
                 {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : (currentUser.name || currentUser.email || 'User')}
               </p>
-              <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider truncate">
-                {(currentUser.role || '').toUpperCase()} • {(currentUser.branch || '').split(' ')[0] || ''}
+              <p className="text-[10px] text-zinc-500 font-medium tracking-wider truncate">
+                {getRoleLabel(currentUser.role)} • {(currentUser.branch || '').split(' ')[0] || ''}
               </p>
             </div>
           </div>

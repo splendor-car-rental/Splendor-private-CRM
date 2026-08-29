@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../lib/apiFetch';
 import { UserRole } from '../../types';
 import { assignableRoles } from '../../config/permissions';
+import { InternationalPhoneInput } from '../common/InternationalPhoneInput';
 
 interface AddStaffModalProps {
   isOpen: boolean;
@@ -101,9 +102,11 @@ export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, o
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldPhone')}</label>
-            <input value={phone} onChange={e => setPhone(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-sm focus:outline-none focus:border-[#D4AF37]/60" />
+            <InternationalPhoneInput
+              value={phone}
+              onChange={setPhone}
+              label={t('staffFieldPhone')}
+            />
           </div>
           <div>
             <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldBranch')}</label>

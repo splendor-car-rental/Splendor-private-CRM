@@ -79,7 +79,9 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Real-time Firebase status badge */}
           <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-[11px] text-zinc-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span className="text-zinc-300 font-mono text-[10px] uppercase tracking-wider">Cloud Live</span>
+            <span className="text-zinc-300 font-mono text-[10px] uppercase tracking-wider">
+              {language === 'ar' ? 'سحابة سبلندر نشطة' : 'Cloud Live'}
+            </span>
           </div>
 
           {/* Luxury Language Switcher */}

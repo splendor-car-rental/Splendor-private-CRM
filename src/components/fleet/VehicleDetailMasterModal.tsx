@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { 
   History, Globe, Shield, Tag, Calendar, User, Clock, 
   ArrowRightLeft, AlertCircle, CheckCircle2, ExternalLink, 
-  DollarSign, Eye, EyeOff, Sparkles, Plus, AlertTriangle
+  DollarSign, Eye, EyeOff, Sparkles, Plus, AlertTriangle,
+  Navigation, Radio, Gauge, BatteryCharging, Lock, Unlock, MapPin, Zap,
+  Edit3, FileText, Check
 } from 'lucide-react';
 import { Vehicle, PlateAssignmentHistory, VehicleTimelineEvent, WebsiteVisibility, VehicleLifecycleStatus } from '../../types';
 import { useCRM } from '../../context/CRMContext';
@@ -11,6 +13,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
+import { EditVehicleModal } from '../modals/EditVehicleModal';
 
 interface VehicleDetailMasterModalProps {
   vehicleId: string | null;
@@ -28,7 +31,9 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
 
   const vehicle = vehicles.find(v => v.id === vehicleId);
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'plates' | 'website' | 'timeline' | 'schedule'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'plates' | 'website' | 'timeline' | 'schedule' | 'telematics'>('overview');
+  const [remoteEngineLock, setRemoteEngineLock] = useState(false);
+  const [valetModeActive, setValetModeActive] = useState(false);
 
   // Plate transfer modal state
   const [plateModalOpen, setPlateModalOpen] = useState(false);
@@ -47,6 +52,9 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
   const [webDescription, setWebDescription] = useState(vehicle?.website?.publicDescription || '');
   const [webDescriptionAr, setWebDescriptionAr] = useState(vehicle?.website?.publicDescriptionAr || '');
   const [isSavingWeb, setIsSavingWeb] = useState(false);
+
+  // Edit Vehicle modal
+  const [editModalOpen, setEditModalOpen] = useState(false);
 
   // Lifecycle status modal
   const [lifecycleModalOpen, setLifecycleModalOpen] = useState(false);
@@ -161,6 +169,14 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             {/* Top Quick Actions */}
             <div className="flex items-center gap-2 flex-wrap">
               <button
+                onClick={() => setEditModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-[#D4AF37] bg-[#D4AF37]/10 text-[#f5d97f] font-bold hover:bg-[#D4AF37] hover:text-zinc-950 transition-all shadow-sm"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>{isAr ? 'تعديل كافة بيانات المركبة' : 'Edit Full Vehicle Data'}</span>
+              </button>
+
+              <button
                 onClick={() => setPlateModalOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700 hover:border-[#D4AF37] hover:text-[#f5d97f] transition-all bg-zinc-900"
               >
@@ -224,6 +240,15 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
               <Calendar className="w-3.5 h-3.5" />
               <span>{isAr ? 'العقود والحجوزات' : 'Rentals & Schedule'} ({vehicleContracts.length + vehicleReservations.length})</span>
             </button>
+            <button
+              onClick={() => setActiveTab('telematics')}
+              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+                activeTab === 'telematics' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
+              }`}
+            >
+              <Navigation className="w-3.5 h-3.5 text-[#f5d97f]" />
+              <span>{isAr ? 'التتبع الحي والجيوفينس' : 'Live Telematics & Geofence'}</span>
+            </button>
           </div>
 
           {/* TAB 1: OVERVIEW */}
@@ -231,37 +256,155 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             <div className="space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase">Daily Rate</span>
-                  <p className="text-sm font-bold text-zinc-100 mt-0.5">{(vehicle.dailyRate || 0).toLocaleString()} AED</p>
+                  <span className="text-[10px] text-zinc-500 uppercase">{isAr ? 'السعر اليومي' : 'Daily Rate'}</span>
+                  <p className="text-sm font-bold text-zinc-100 mt-0.5">{(vehicle.dailyRate || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</p>
                 </div>
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase">Deposit</span>
-                  <p className="text-sm font-bold text-zinc-100 mt-0.5">{(vehicle.minDeposit || 0).toLocaleString()} AED</p>
+                  <span className="text-[10px] text-zinc-500 uppercase">{isAr ? 'مبلغ التأمين' : 'Deposit'}</span>
+                  <p className="text-sm font-bold text-zinc-100 mt-0.5">{(vehicle.minDeposit || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</p>
                 </div>
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase">Total Revenue</span>
-                  <p className="text-sm font-bold text-emerald-400 mt-0.5">{(vehicle.totalRevenue || 0).toLocaleString()} AED</p>
+                  <span className="text-[10px] text-zinc-500 uppercase">{isAr ? 'إجمالي الإيرادات' : 'Total Revenue'}</span>
+                  <p className="text-sm font-bold text-emerald-400 mt-0.5">{(vehicle.totalRevenue || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</p>
                 </div>
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800">
-                  <span className="text-[10px] text-zinc-500 uppercase">Odometer</span>
-                  <p className="text-sm font-bold text-sky-400 mt-0.5">{(vehicle.mileage || 0).toLocaleString()} km</p>
+                  <span className="text-[10px] text-zinc-500 uppercase">{isAr ? 'عداد المسافات' : 'Odometer'}</span>
+                  <p className="text-sm font-bold text-sky-400 mt-0.5">{(vehicle.mileage || 0).toLocaleString()} {isAr ? 'كم' : 'km'}</p>
                 </div>
               </div>
 
+              {/* Traffic & Official Registration Card */}
               <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
-                <h4 className="font-bold text-zinc-200 text-xs uppercase tracking-wider">Asset Identity & Registration</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-[#f5d97f] text-xs uppercase tracking-wider flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    <span>{isAr ? 'بيانات المرور والترخيص والملف' : 'Traffic, Registration & TC Details'}</span>
+                  </h4>
+                  <button
+                    onClick={() => setEditModalOpen(true)}
+                    className="text-[11px] text-[#D4AF37] hover:underline font-semibold flex items-center gap-1"
+                  >
+                    <Edit3 className="w-3 h-3" />
+                    <span>{isAr ? 'تعديل البيانات' : 'Edit'}</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
-                    <span className="text-zinc-500 text-[10px]">VIN (Vehicle Identification Number)</span>
-                    <p className="font-mono text-zinc-200 font-bold mt-0.5">{vehicle.vin}</p>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'الملف المروري (TC No.)' : 'Traffic File (TC No.)'}</span>
+                    <p className="font-mono text-zinc-100 font-bold mt-0.5">{vehicle.trafficFileNumber || '51317978'}</p>
                   </div>
                   <div>
-                    <span className="text-zinc-500 text-[10px]">Ownership Source</span>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'صنف اللوحة' : 'Plate Category'}</span>
+                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.plateCategory || `${vehicle.plateCity} - فئة فاخرة`}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'تاريخ الترخيص' : 'Registration Date'}</span>
+                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.registrationDate || formatDate(vehicle.createdAt)}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'إنتهاء الترخيص' : 'Registration Expiry'}</span>
+                    <p className="text-amber-400 font-medium mt-0.5">{vehicle.registrationExpiry || vehicle.insuranceExpiry || '2026-12-31'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Insurance & Mortgage Card */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <h4 className="font-bold text-[#f5d97f] text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>{isAr ? 'بيانات التأمين والرهن المالي' : 'Insurance Policy & Mortgage Entity'}</span>
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'مؤمنة لدى' : 'Insurance Company'}</span>
+                    <p className="text-zinc-100 font-bold mt-0.5">{vehicle.insuranceCompany || 'شركة دبي للتأمين (Dubai Insurance)'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'نوع التأمين' : 'Insurance Type'}</span>
+                    <span className="inline-block mt-0.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-400 font-bold text-[11px] border border-emerald-500/30">
+                      {vehicle.insuranceType || 'شامل (Comprehensive)'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'رقم الوثيقة' : 'Policy Number'}</span>
+                    <p className="font-mono text-zinc-200 font-medium mt-0.5">{vehicle.insurancePolicyNumber || `POL-DXB-${vehicle.id.slice(0, 6)}`}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'إنتهاء التأمين' : 'Insurance Expiry'}</span>
+                    <p className="text-emerald-400 font-bold mt-0.5">{vehicle.insuranceExpiry || '2026-12-31'}</p>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zinc-900 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'جهة الرهن' : 'Mortgagee / Financier'}</span>
+                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.mortgagee || 'لا يوجد (ملك خالص للشركة)'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'مصدر الملكية' : 'Ownership Source'}</span>
                     <p className="text-zinc-200 font-bold mt-0.5">{vehicle.ownershipSource || 'OWNED'}</p>
                   </div>
+                </div>
+              </div>
+
+              {/* Mechanical, Chassis & GPS Card */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <h4 className="font-bold text-[#f5d97f] text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <Radio className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>{isAr ? 'المواصفات الفنية والشاسيه والتتبع (GPS)' : 'Mechanical Specs, VIN & GPS Telematics'}</span>
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
-                    <span className="text-zinc-500 text-[10px]">Current Location</span>
-                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.currentLocation || 'Flagship Showroom'}</p>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'رقم القاعدة (الهيكل / VIN)' : 'Chassis / VIN'}</span>
+                    <p className="font-mono text-zinc-100 font-bold mt-0.5">{vehicle.chassisNumber || vehicle.vin}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'رقم المحرك' : 'Engine Serial Number'}</span>
+                    <p className="font-mono text-zinc-200 font-medium mt-0.5">{vehicle.engineNumber || `ENG-${vehicle.id.slice(0, 6)}`}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'بلد الصنع' : 'Manufacturing Country'}</span>
+                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.manufacturingCountry || 'ألمانيا (Germany)'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'عدد الركاب' : 'Seating Capacity'}</span>
+                    <p className="text-zinc-200 font-bold mt-0.5">{vehicle.seatingCapacity || 4} {isAr ? 'ركاب' : 'Seats'}</p>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-zinc-900 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'الشركة المسئولة عن جهاز التتبع' : 'GPS Provider'}</span>
+                    <p className="text-sky-300 font-medium mt-0.5">{vehicle.gpsTrackingCompany || 'فالكون آي للأنظمة الذكية (Falcon Eye Telematics)'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'تاريخ انتهاء شهادة التتبع' : 'GPS Certificate Expiry'}</span>
+                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.gpsCertificateExpiry || '2026-12-31'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rental Allowances & Extra KM Policy */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <h4 className="font-bold text-[#f5d97f] text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <DollarSign className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>{isAr ? 'سياسة المسافات والأسعار' : 'Mileage Allowances & Excess KM Rates'}</span>
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'المسافة اليومية القياسية' : 'Daily Allowance'}</span>
+                    <p className="text-zinc-100 font-bold mt-0.5">{vehicle.dailyMileageAllowance ?? 250} {isAr ? 'كم / يوم' : 'km/day'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'المسافة الشهرية القياسية' : 'Monthly Allowance'}</span>
+                    <p className="text-zinc-100 font-bold mt-0.5">{vehicle.monthlyMileageAllowance ?? 4500} {isAr ? 'كم / شهر' : 'km/month'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'رسوم التجاوز للكيلومتر' : 'Excess KM Rate'}</span>
+                    <p className="text-amber-400 font-bold mt-0.5">{vehicle.extraKmRate ?? 2} {isAr ? 'د.إ / كم' : 'AED/km'}</p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px]">{isAr ? 'الموقع الحالي' : 'Current Showroom'}</span>
+                    <p className="text-zinc-200 font-medium mt-0.5">{vehicle.currentLocation || (isAr ? 'المعرض الرئيسي - دبي' : 'Main Showroom')}</p>
                   </div>
                 </div>
               </div>
@@ -527,6 +670,131 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
               </div>
             </div>
           )}
+
+          {/* TAB 6: TELEMATICS & GEOFENCING */}
+          {activeTab === 'telematics' && (
+            <div className="space-y-4">
+              {/* Telematics Status Header */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-zinc-100">{isAr ? 'حالة التتبع النشط (OBD-II Telematics Live)' : 'Live Telematics & GPS Transponder'}</span>
+                      <Badge variant="emerald" size="sm">ONLINE (4G IoT)</Badge>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 mt-0.5">
+                      {isAr ? 'آخر إشارة: منذ 12 ثانية • الجهاز: Splendor-IoT-Pro-v4' : 'Last Ping: 12 seconds ago • Device: Splendor-IoT-Pro-v4'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRemoteEngineLock(!remoteEngineLock)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all shadow ${
+                      remoteEngineLock
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
+                    }`}
+                  >
+                    {remoteEngineLock ? <Lock className="w-3.5 h-3.5 text-rose-400" /> : <Unlock className="w-3.5 h-3.5 text-emerald-400" />}
+                    <span>{remoteEngineLock ? (isAr ? 'المحرك مقفل عن بُعد' : 'Engine Immobilized') : (isAr ? 'قفل المحرك عن بُعد' : 'Remote Immobilizer')}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setValetModeActive(!valetModeActive)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all shadow ${
+                      valetModeActive
+                        ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
+                    }`}
+                  >
+                    <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    <span>{valetModeActive ? (isAr ? 'وضع الفاليه مفعل (80 كم/س)' : 'Valet Mode Active') : (isAr ? 'تفعيل وضع الفاليه' : 'Activate Valet')}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Gauges & Real-time Telemetry */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span className="text-[11px]">{isAr ? 'السرعة الحالية' : 'Current Speed'}</span>
+                    <Gauge className="w-3.5 h-3.5 text-[#f5d97f]" />
+                  </div>
+                  <p className="text-lg font-mono font-bold text-zinc-100">0 <span className="text-xs font-normal text-zinc-500">km/h</span></p>
+                  <span className="text-[10px] text-zinc-500">{isAr ? 'حالة الحركة: متوقفة (Parked)' : 'Motion: Parked / Engine Off'}</span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span className="text-[11px]">{isAr ? 'مستوى الوقود / الطاقة' : 'Fuel / Energy'}</span>
+                    <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <p className="text-lg font-mono font-bold text-emerald-400">{(vehicle as any).fuelLevel || '100%'}</p>
+                  <span className="text-[10px] text-zinc-500">{isAr ? 'المدى التقديري: 580 كم' : 'Est. Range: 580 km'}</span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span className="text-[11px]">{isAr ? 'العداد الحي OBD' : 'Live Odometer'}</span>
+                    <Radio className="w-3.5 h-3.5 text-sky-400" />
+                  </div>
+                  <p className="text-lg font-mono font-bold text-zinc-100">{(vehicle.mileage || 0).toLocaleString()} <span className="text-xs font-normal text-zinc-500">km</span></p>
+                  <span className="text-[10px] text-zinc-500">{isAr ? 'محدث آلياً من ECU' : 'Synced with ECU'}</span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span className="text-[11px]">{isAr ? 'المنطقة الجغرافية' : 'Geofence Perimeter'}</span>
+                    <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <p className="text-xs font-bold text-emerald-400 mt-1">{isAr ? 'داخل النطاق المسموح (UAE)' : 'Inside Safe Zone (UAE)'}</p>
+                  <span className="text-[10px] text-zinc-500">{isAr ? 'تنبيه الحدود: غير مقترب' : 'Border Proximity: Safe'}</span>
+                </div>
+              </div>
+
+              {/* Simulated GPS Radar Map Visual */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-[#f5d97f]" />
+                    <span className="font-bold text-zinc-200">{isAr ? 'الموقع الجغرافي الحي والخريطة' : 'Live Real-Time Fleet Radar'}</span>
+                  </div>
+                  <span className="text-[11px] font-mono text-zinc-400">
+                    25.1972° N, 55.2744° E (Downtown Dubai)
+                  </span>
+                </div>
+
+                {/* Radar Mock Visualization */}
+                <div className="h-44 rounded-xl bg-zinc-900 border border-zinc-800 relative overflow-hidden flex items-center justify-center">
+                  <div className="absolute inset-0 bg-[radial-gradient(#D4AF37_1px,transparent_1px)] [background-size:16px_16px] opacity-15" />
+                  
+                  {/* Radar Circles */}
+                  <div className="absolute w-64 h-64 rounded-full border border-[#D4AF37]/20 animate-ping opacity-20" />
+                  <div className="absolute w-40 h-40 rounded-full border border-[#D4AF37]/30" />
+                  <div className="absolute w-20 h-20 rounded-full border border-[#D4AF37]/40" />
+                  
+                  {/* Vehicle Blip */}
+                  <div className="relative z-10 flex flex-col items-center">
+                    <div className="w-8 h-8 rounded-full bg-[#D4AF37] text-zinc-950 flex items-center justify-center shadow-lg shadow-[#D4AF37]/30 animate-bounce">
+                      <Navigation className="w-4 h-4 rotate-45" />
+                    </div>
+                    <div className="mt-2 px-2.5 py-1 rounded-md bg-zinc-950/90 border border-[#D4AF37]/40 text-[10px] font-bold text-[#f5d97f]">
+                      {vehicle.make} {vehicle.model} • {vehicle.plateNumber}
+                    </div>
+                  </div>
+
+                  <div className="absolute bottom-2 start-3 text-[10px] text-zinc-500 bg-zinc-950/80 px-2 py-0.5 rounded border border-zinc-800">
+                    {isAr ? 'الموقع الحالي: بوليفارد الشيخ محمد بن راشد، وسط دبي' : 'Current Location: Sheikh Mohammed bin Rashid Blvd, Downtown Dubai'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -679,6 +947,13 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
           </div>
         </form>
       </Modal>
+
+      {/* EDIT FULL VEHICLE MODAL */}
+      <EditVehicleModal
+        vehicle={vehicle}
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+      />
     </>
   );
 };

@@ -13,7 +13,8 @@ import { formatDate } from '../../lib/dateFormat';
 import { applyVat } from '../../config/tax';
 
 export const ReservationsView: React.FC = () => {
-  const { language, t } = useLanguage();
+  const { language, t, getStatusLabel } = useLanguage();
+  const isAr = language === 'ar';
   const { 
     reservations, customers, vehicles, createReservation, 
     createContractFromReservation, setActiveView, setSelectedContractId 
@@ -99,10 +100,10 @@ export const ReservationsView: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-zinc-100">
-            {language === 'ar' ? 'الحجوزات وجدول تسليم الأسطول' : 'Reservations & Fleet Booking Ledger'}
+            {isAr ? 'الحجوزات وجدول تسليم الأسطول' : 'Reservations & Fleet Booking Ledger'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            {language === 'ar' ? 'متابعة حجوزات العملاء المعتمدة والتحويل الفوري إلى عقود تأجير رقمية' : 'Manage confirmed bookings, pickup/return logistics & convert to active lease contracts'}
+            {isAr ? 'متابعة حجوزات العملاء المعتمدة والتحويل الفوري إلى عقود تأجير رقمية' : 'Manage confirmed bookings, pickup/return logistics & convert to active lease contracts'}
           </p>
         </div>
 
@@ -127,7 +128,7 @@ export const ReservationsView: React.FC = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search reservation, customer, car..."
+            placeholder={isAr ? 'بحث برقم الحجز، العميل، أو السيارة...' : 'Search reservation, customer, car...'}
             className="w-full pl-9 pr-4 py-2 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-[#D4AF37]/50"
           />
         </div>
@@ -139,13 +140,13 @@ export const ReservationsView: React.FC = () => {
           <table className="w-full text-xs text-start">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
-                <th className="p-4 text-start font-medium">Reservation ID</th>
-                <th className="p-4 text-start font-medium">VIP Client</th>
-                <th className="p-4 text-start font-medium">Vehicle / Plate</th>
-                <th className="p-4 text-start font-medium">Pickup & Return</th>
-                <th className="p-4 text-end font-medium">Total Amount</th>
-                <th className="p-4 text-center font-medium">Status</th>
-                <th className="p-4 text-end font-medium">Actions</th>
+                <th className="p-4 text-start font-medium">{isAr ? 'رقم الحجز' : 'Reservation ID'}</th>
+                <th className="p-4 text-start font-medium">{isAr ? 'العميل VIP' : 'VIP Client'}</th>
+                <th className="p-4 text-start font-medium">{isAr ? 'المركبة / اللوحة' : 'Vehicle / Plate'}</th>
+                <th className="p-4 text-start font-medium">{isAr ? 'موعد الاستلام والاسترجاع' : 'Pickup & Return'}</th>
+                <th className="p-4 text-end font-medium">{isAr ? 'إجمالي المبلغ' : 'Total Amount'}</th>
+                <th className="p-4 text-center font-medium">{isAr ? 'الحالة' : 'Status'}</th>
+                <th className="p-4 text-end font-medium">{isAr ? 'الإجراءات' : 'Actions'}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
@@ -170,15 +171,15 @@ export const ReservationsView: React.FC = () => {
                     <p className="text-zinc-200">
                       {formatDate(res.pickupDateTime)} → {formatDate(res.returnDateTime)}
                     </p>
-                    <p className="text-[11px] text-zinc-500">{res.durationDays} Days Duration</p>
+                    <p className="text-[11px] text-zinc-500">{res.durationDays} {isAr ? 'أيام' : 'Days Duration'}</p>
                   </td>
                   <td className="p-4 text-end">
-                    <p className="font-bold text-zinc-100">{(res.totalAmount || 0).toLocaleString()} AED</p>
-                    <p className="text-[10px] text-zinc-400">Deposit: {(res.depositAmount || 0).toLocaleString()} AED</p>
+                    <p className="font-bold text-zinc-100">{(res.totalAmount || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</p>
+                    <p className="text-[10px] text-zinc-400">{isAr ? 'التأمين:' : 'Deposit:'} {(res.depositAmount || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</p>
                   </td>
                   <td className="p-4 text-center">
                     <Badge variant={res.status === 'confirmed' ? 'sky' : res.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                      {(res.status || '').toUpperCase()}
+                      {getStatusLabel(res.status)}
                     </Badge>
                   </td>
                   <td className="p-4 text-end">
@@ -188,11 +189,11 @@ export const ReservationsView: React.FC = () => {
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#D4AF37]/15 hover:bg-[#D4AF37]/25 text-[#f5d97f] border border-[#D4AF37]/40 font-semibold transition-all shadow-sm"
                       >
                         <FileSignature className="w-3.5 h-3.5" />
-                        <span>Generate Contract</span>
+                        <span>{isAr ? 'إصدار العقد' : 'Generate Contract'}</span>
                       </button>
                     ) : (
                       <span className="text-[11px] font-mono text-emerald-400 font-semibold">
-                        Contract {res.contractId}
+                        {isAr ? `العقد ${res.contractId}` : `Contract ${res.contractId}`}
                       </span>
                     )}
                   </td>
@@ -207,14 +208,14 @@ export const ReservationsView: React.FC = () => {
       <Modal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
-        title="Create Direct Reservation"
-        subtitle="Reserve a vehicle with live conflict validation"
+        title={isAr ? 'إنشاء حجز مباشر' : 'Create Direct Reservation'}
+        subtitle={isAr ? 'حجز مركبة مع التحقق الفوري من عدم وجود تعارض زمني' : 'Reserve a vehicle with live conflict validation'}
         maxWidth="2xl"
       >
         <form onSubmit={handleCreateSubmit} className="space-y-4 text-xs">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Customer *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'العميل *' : 'Customer *'}</label>
               <select
                 required
                 value={form.customerId}
@@ -227,7 +228,7 @@ export const ReservationsView: React.FC = () => {
               </select>
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Vehicle *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'السيارة *' : 'Vehicle *'}</label>
               <select
                 required
                 value={form.vehicleId}
@@ -243,7 +244,7 @@ export const ReservationsView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Pickup Date & Time</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'تاريخ ووقت الاستلام' : 'Pickup Date & Time'}</label>
               <input
                 type="datetime-local"
                 value={form.pickupDateTime.slice(0, 16)}
@@ -252,7 +253,7 @@ export const ReservationsView: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Return Date & Time</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'تاريخ ووقت الاسترجاع' : 'Return Date & Time'}</label>
               <input
                 type="datetime-local"
                 value={form.returnDateTime.slice(0, 16)}
@@ -274,7 +275,7 @@ export const ReservationsView: React.FC = () => {
               type="submit"
               className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
             >
-              {language === 'ar' ? 'تأكيد الحجز' : 'Confirm Reservation'}
+              {isAr ? 'تأكيد الحجز' : 'Confirm Reservation'}
             </button>
           </div>
         </form>

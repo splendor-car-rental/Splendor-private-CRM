@@ -16,7 +16,7 @@ import { formatDate } from '../../lib/dateFormat';
 import { apiFetch } from '../../lib/apiFetch';
 
 export const DashboardView: React.FC = () => {
-  const { language } = useLanguage();
+  const { language, getStatusLabel } = useLanguage();
   const { 
     customers, vehicles, contracts, reservations, 
     bankTransactions, leads, invoices, payments,
@@ -236,37 +236,37 @@ export const DashboardView: React.FC = () => {
         <StatsCard
           title={language === 'ar' ? 'نسبة إشغال الأسطول' : 'Fleet Utilization'}
           value={`${fleetUtilizationRate}%`}
-          subValue={`${rentedVehicles.length} of ${totalFleetCount} Vehicles Active`}
+          subValue={language === 'ar' ? `${rentedVehicles.length} من أصل ${totalFleetCount} سيارة مؤجرة` : `${rentedVehicles.length} of ${totalFleetCount} Vehicles Active`}
           accent="gold"
           icon={<Car className="w-5 h-5" />}
-          trend={{ value: `${availableVehicles.length} Ready`, positive: true }}
+          trend={{ value: language === 'ar' ? `${availableVehicles.length} جاهزة` : `${availableVehicles.length} Ready`, positive: true }}
           onClick={() => setActiveView('fleet')}
         />
         <StatsCard
           title={language === 'ar' ? 'العقود المؤجرة النشطة' : 'Active VIP Rentals'}
           value={activeContracts.length}
-          subValue={`${(activeRentalsRevenue || 0).toLocaleString()} AED Booked`}
+          subValue={language === 'ar' ? `${(activeRentalsRevenue || 0).toLocaleString()} د.إ إجمالي مؤكد` : `${(activeRentalsRevenue || 0).toLocaleString()} AED Booked`}
           accent="emerald"
           icon={<FileSignature className="w-5 h-5" />}
-          trend={{ value: `${reservations.length} Reserved`, positive: true }}
+          trend={{ value: language === 'ar' ? `${reservations.length} محجوز` : `${reservations.length} Reserved`, positive: true }}
           onClick={() => setActiveView('contracts')}
         />
         <StatsCard
           title={language === 'ar' ? 'معاملات بنكية قيد المطابقة' : 'Bank Items to Reconcile'}
           value={unreconciledTxns.length}
-          subValue={`${(unreconciledAmount || 0).toLocaleString()} AED Pending Review`}
+          subValue={language === 'ar' ? `${(unreconciledAmount || 0).toLocaleString()} د.إ بانتظار المراجعة` : `${(unreconciledAmount || 0).toLocaleString()} AED Pending Review`}
           accent="rose"
           icon={<Landmark className="w-5 h-5" />}
-          trend={{ value: 'Emirates NBD Live', positive: true }}
+          trend={{ value: language === 'ar' ? 'بنك الإمارات دبي الوطني نشط' : 'Emirates NBD Live', positive: true }}
           onClick={() => setActiveView('bank-reconciliation')}
         />
         <StatsCard
           title={language === 'ar' ? 'فرص المبيعات النشطة' : 'Active VIP Pipeline'}
           value={openLeads.length}
-          subValue={`${(totalPipelineValue || 0).toLocaleString()} AED Estimated`}
+          subValue={language === 'ar' ? `${(totalPipelineValue || 0).toLocaleString()} د.إ قيمة تقديرية` : `${(totalPipelineValue || 0).toLocaleString()} AED Estimated`}
           accent="sky"
           icon={<Users className="w-5 h-5" />}
-          trend={{ value: `${customers.length} VIP Clients`, positive: true }}
+          trend={{ value: language === 'ar' ? `${customers.length} عميل VIP` : `${customers.length} VIP Clients`, positive: true }}
           onClick={() => setActiveView('leads')}
         />
       </div>
@@ -280,7 +280,7 @@ export const DashboardView: React.FC = () => {
               <h3 className="font-display font-semibold text-base text-zinc-100 flex items-center gap-2">
                 <span>{language === 'ar' ? 'لوحة تأجير الأسطول المباشرة' : 'Live Fleet Deployment & VIP Rentals'}</span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-500/30 text-[10px] text-emerald-400 font-mono">
-                  {activeContracts.length} Active
+                  {language === 'ar' ? `${activeContracts.length} نشط` : `${activeContracts.length} Active`}
                 </span>
               </h3>
               <p className="text-xs text-zinc-400 mt-0.5">
@@ -292,7 +292,7 @@ export const DashboardView: React.FC = () => {
               className="text-xs text-[#f5d97f] hover:underline flex items-center gap-1 font-medium"
             >
               <span>{language === 'ar' ? 'عرض كافة العقود' : 'View All Contracts'}</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
             </button>
           </div>
 
@@ -342,13 +342,15 @@ export const DashboardView: React.FC = () => {
 
                     <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-2 sm:pt-0 border-zinc-900">
                       <div className="text-start sm:text-end">
-                        <p className="text-xs font-semibold text-zinc-200">{(contract.grandTotal || 0).toLocaleString()} AED</p>
+                        <p className="text-xs font-semibold text-zinc-200">
+                          {(contract.grandTotal || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}
+                        </p>
                         <p className="text-[11px] text-zinc-400">
                           {language === 'ar' ? 'الاسترجاع:' : 'Return:'} {formatDate(contract.endDateTime)}
                         </p>
                       </div>
                       <Badge variant="emerald" size="sm">
-                        {(contract.status || '').toUpperCase()}
+                        {getStatusLabel(contract.status)}
                       </Badge>
                     </div>
                   </div>
@@ -386,11 +388,11 @@ export const DashboardView: React.FC = () => {
                         {unreconciledTxns.length} {language === 'ar' ? 'معاملة بنكية معلقة' : 'Bank Transactions Pending'}
                       </p>
                       <p className="text-[10px] text-rose-300">
-                        {unreconciledAmount.toLocaleString()} AED • Emirates NBD
+                        {unreconciledAmount.toLocaleString()} {language === 'ar' ? 'د.إ • بنك الإمارات دبي الوطني' : 'AED • Emirates NBD'}
                       </p>
                     </div>
                   </div>
-                  <ArrowRight className="w-4 h-4 text-zinc-500" />
+                  <ArrowRight className="w-4 h-4 text-zinc-500 rtl:rotate-180" />
                 </div>
               ) : (
                 <div className="p-3.5 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 flex items-center justify-between">
@@ -402,7 +404,9 @@ export const DashboardView: React.FC = () => {
                       <p className="text-xs font-semibold text-zinc-200">
                         {language === 'ar' ? 'كافة المعاملات البنكية مطابقة' : 'All Bank Feeds Reconciled'}
                       </p>
-                      <p className="text-[10px] text-emerald-300">Emirates NBD 100% Balanced</p>
+                      <p className="text-[10px] text-emerald-300">
+                        {language === 'ar' ? 'حساب الإمارات دبي الوطني متطابق 100%' : 'Emirates NBD 100% Balanced'}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -422,11 +426,13 @@ export const DashboardView: React.FC = () => {
                       {availableVehicles.length} {language === 'ar' ? 'سيارة فاخرة جاهزة للتأجير' : 'Supercars Ready to Rent'}
                     </p>
                     <p className="text-[10px] text-emerald-300">
-                      {maintenanceVehicles.length > 0 ? `${maintenanceVehicles.length} in Service` : 'Instant VIP Dispatch'}
+                      {maintenanceVehicles.length > 0 
+                        ? (language === 'ar' ? `${maintenanceVehicles.length} تحت الصيانة الدورية` : `${maintenanceVehicles.length} in Service`)
+                        : (language === 'ar' ? 'جاهزية تسليم فوري VIP' : 'Instant VIP Dispatch')}
                     </p>
                   </div>
                 </div>
-                <ArrowRight className="w-4 h-4 text-zinc-500" />
+                <ArrowRight className="w-4 h-4 text-zinc-500 rtl:rotate-180" />
               </div>
 
               {/* Item 3: System test suite status */}
@@ -440,14 +446,14 @@ export const DashboardView: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-zinc-200">
-                      {language === 'ar' ? 'فاحص العمليات التلقائي' : 'Automated Diagnostic Suite'}
+                      {language === 'ar' ? 'مختبر الفحص والتشخيص الآلي' : 'Automated Diagnostic Suite'}
                     </p>
                     <p className="text-[10px] text-[#f5d97f]">
-                      {language === 'ar' ? 'اختبار دورة التأجير والمطابقة' : '11 End-to-End Tests Ready'}
+                      {language === 'ar' ? '18 اختبار شامل لدورة التأجير والمطابقة' : '18 End-to-End Tests Ready'}
                     </p>
                   </div>
                 </div>
-                <ArrowRight className="w-4 h-4 text-zinc-500" />
+                <ArrowRight className="w-4 h-4 text-zinc-500 rtl:rotate-180" />
               </div>
             </div>
           </div>

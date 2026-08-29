@@ -110,16 +110,16 @@ export const TollsParkingView: React.FC = () => {
               <p className="text-[10px] uppercase font-bold text-zinc-400">{isAr ? TYPE_LABELS[type].ar : TYPE_LABELS[type].en}</p>
               <h3 className="text-xl font-bold text-zinc-100 font-display mt-1">{s.count} {isAr ? 'معاملة' : 'Txns'}</h3>
               <div className="mt-2 space-y-0.5 text-[11px] font-mono">
-                <p className="text-zinc-500">{isAr ? 'التكلفة الفعلية' : 'Actual Cost'}: <span className="text-rose-400">{(s.totalCost || 0).toLocaleString()} AED</span></p>
-                <p className="text-zinc-500">{isAr ? 'المحصل من العميل' : 'Collected'}: <span className="text-sky-300">{(s.totalCollected || 0).toLocaleString()} AED</span></p>
-                <p className="text-zinc-500">{isAr ? 'صافي الربح' : 'Net Profit'}: <span className="text-emerald-400 font-bold">{(s.totalNetProfit || 0).toLocaleString()} AED</span></p>
+                <p className="text-zinc-500">{isAr ? 'التكلفة الفعلية' : 'Actual Cost'}: <span className="text-rose-400">{(s.totalCost || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span></p>
+                <p className="text-zinc-500">{isAr ? 'المحصل من العميل' : 'Collected'}: <span className="text-sky-300">{(s.totalCollected || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span></p>
+                <p className="text-zinc-500">{isAr ? 'صافي الربح' : 'Net Profit'}: <span className="text-emerald-400 font-bold">{(s.totalNetProfit || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span></p>
               </div>
             </div>
           );
         })}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-[#D4AF37]/10 to-transparent border border-[#D4AF37]/30">
           <p className="text-[10px] uppercase font-bold text-[#f5d97f]">{isAr ? 'إجمالي هامش الربح' : 'Overall Net Profit'}</p>
-          <h3 className="text-2xl font-bold text-[#f5d97f] font-display mt-1">{(summary.overall.totalNetProfit || 0).toLocaleString()} AED</h3>
+          <h3 className="text-2xl font-bold text-[#f5d97f] font-display mt-1">{(summary.overall.totalNetProfit || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</h3>
           <p className="text-[11px] text-zinc-400 mt-1 font-mono">
             {(summary.overall.totalCollected || 0).toLocaleString()} {isAr ? 'محصل' : 'collected'} — {(summary.overall.totalCost || 0).toLocaleString()} {isAr ? 'تكلفة' : 'cost'}
           </p>
@@ -206,16 +206,16 @@ export const TollsParkingView: React.FC = () => {
                       </button>
                     )}
                   </td>
-                  <td className="p-3 text-end font-mono text-rose-400">{(t.actualCompanyCost || 0).toLocaleString()} AED</td>
+                  <td className="p-3 text-end font-mono text-rose-400">{(t.actualCompanyCost || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</td>
                   <td className="p-3 text-end font-mono text-sky-300">
-                    {(t.totalChargedToCustomer || 0).toLocaleString()} AED
+                    {(t.totalChargedToCustomer || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}
                     {(t.discountAmount || t.discountPercent) ? (
                       <p className="text-[10px] text-amber-400">
-                        {isAr ? 'خصم' : 'Discount'}: {t.discountPercent ? `${t.discountPercent}%` : ''}{t.discountPercent && t.discountAmount ? ' + ' : ''}{t.discountAmount ? `${t.discountAmount} AED` : ''}
+                        {isAr ? 'خصم' : 'Discount'}: {t.discountPercent ? `${t.discountPercent}%` : ''}{t.discountPercent && t.discountAmount ? ' + ' : ''}{t.discountAmount ? `${t.discountAmount} ${isAr ? 'د.إ' : 'AED'}` : ''}
                       </p>
                     ) : null}
                   </td>
-                  <td className="p-3 text-end font-mono font-bold text-emerald-400">{(t.netProfit || 0).toLocaleString()} AED</td>
+                  <td className="p-3 text-end font-mono font-bold text-emerald-400">{(t.netProfit || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</td>
                   <td className="p-3 text-center">
                     <button
                       onClick={() => updateTollTransaction(t.id, { isPaid: !t.isPaid, actorId: currentUser.id, actorName: currentUser.name })}

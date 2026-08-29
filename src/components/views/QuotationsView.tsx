@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   FileSpreadsheet, Plus, Search, Printer, CheckCircle2, 
-  Calendar, Car, User, DollarSign, ArrowRight, ShieldCheck, Clock
+  Calendar, Car, User, DollarSign, ArrowRight, ShieldCheck, Clock,
+  Sparkles, TrendingUp, Percent, Zap, Check, Gauge, Globe
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -9,9 +10,13 @@ import { Quotation } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
+import { YieldPricingEngine } from '../../server/yieldPricingEngine';
+import { CurrencySelector } from '../common/CurrencySelector';
+import { SUPPORTED_CURRENCIES, convertAEDToCurrency, formatPriceWithCurrency } from '../../lib/currency';
 
 export const QuotationsView: React.FC = () => {
-  const { language, t } = useLanguage();
+  const { language, t, getStatusLabel } = useLanguage();
+  const isAr = language === 'ar';
   const { 
     quotations, customers, vehicles, createQuotation, 
     convertQuotationToReservation, selectedQuotationId, 
@@ -34,6 +39,10 @@ export const QuotationsView: React.FC = () => {
     durationDays: 2,
     dailyRate: 6500,
     securityDeposit: 15000,
+    currency: 'AED',
+    mileageAllowancePerDay: 250,
+    monthlyMileageAllowance: 4500,
+    extraKmRate: 2,
     discountAmount: 0,
     validUntil: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0],
     notes: 'Includes VIP Delivery to client location with bespoke Splendor welcome kit.',
@@ -69,6 +78,29 @@ export const QuotationsView: React.FC = () => {
     }
   };
 
+  // Live yield recommendation calculation
+  const yieldRecommendation = useMemo(() => {
+    const veh = vehicles.find(v => v.id === form.vehicleId) || vehicles[0];
+    if (!veh) return null;
+
+    return YieldPricingEngine.computeYieldQuote(
+      veh,
+      form.startDate,
+      form.endDate,
+      vehicles
+    );
+  }, [form.vehicleId, form.startDate, form.endDate, vehicles]);
+
+  const applyYieldPricing = () => {
+    if (!yieldRecommendation) return;
+    setForm(prev => ({
+      ...prev,
+      dailyRate: yieldRecommendation.finalDailyRate,
+      durationDays: yieldRecommendation.totalDays,
+      discountAmount: Math.round(yieldRecommendation.baseDailyRate * (yieldRecommendation.durationDiscountPercent / 100) * yieldRecommendation.totalDays)
+    }));
+  };
+
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await createQuotation(form);
@@ -95,10 +127,10 @@ export const QuotationsView: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-zinc-100">
-            {language === 'ar' ? 'عروض الأسعار والاتفاقيات المبدئية' : 'Quotations & VIP Proposals'}
+            {isAr ? 'عروض الأسعار والاتفاقيات المبدئية' : 'Quotations & VIP Proposals'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            {language === 'ar' ? 'احتساب تلقائي لضريبة القيمة المضافة 5%، خدمات التسليم الخاص، والتحويل الفوري للحجز' : 'Automated 5% UAE VAT pricing, bespoke concierge addons, and 1-click booking lock'}
+            {isAr ? 'احتساب تلقائي لضريبة القيمة المضافة 5%، خدمات التسليم الخاص، والتحويل الفوري للحجز' : 'Automated 5% UAE VAT pricing, bespoke concierge addons, and 1-click booking lock'}
           </p>
         </div>
 
@@ -111,7 +143,7 @@ export const QuotationsView: React.FC = () => {
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold text-xs lg:text-sm shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
         >
           <Plus className="w-4 h-4" />
-          <span>{language === 'ar' ? 'إنشاء عرض سعر جديد' : 'New Quotation'}</span>
+          <span>{isAr ? 'إنشاء عرض سعر جديد' : 'New Quotation'}</span>
         </button>
       </div>
 
@@ -125,7 +157,7 @@ export const QuotationsView: React.FC = () => {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search quotation ID, client, car..."
+              placeholder={isAr ? 'بحث برقم العرض، العميل، السيارة...' : 'Search quotation ID, client, car...'}
               className="w-full pl-9 pr-4 py-2 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-[#D4AF37]/50"
             />
           </div>
@@ -149,13 +181,13 @@ export const QuotationsView: React.FC = () => {
                       <p className="text-[11px] text-zinc-400 mt-0.5">{quote.vehicleName}</p>
                     </div>
                     <Badge variant={quote.status === 'accepted' ? 'emerald' : quote.status === 'sent' ? 'sky' : 'zinc'} size="sm">
-                      {(quote.status || '').toUpperCase()}
+                      {getStatusLabel(quote.status)}
                     </Badge>
                   </div>
 
                   <div className="mt-2 pt-2 border-t border-zinc-800/50 flex items-center justify-between text-[11px] text-zinc-400">
                     <span className="font-mono text-zinc-500">{quote.id}</span>
-                    <span className="font-bold text-zinc-200">{(quote.grandTotal || 0).toLocaleString()} AED</span>
+                    <span className="font-bold text-zinc-200">{(quote.grandTotal || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span>
                   </div>
                 </div>
               );
@@ -175,34 +207,34 @@ export const QuotationsView: React.FC = () => {
                 <p className="text-[10px] tracking-wider text-zinc-400 uppercase font-medium mt-1">
                   شركة سبلندر لتأجير السيارات ذ.م.م • TRN: 100482910300003
                 </p>
-                <p className="text-xs text-zinc-400 mt-1">Downtown Flagship Showroom, Dubai, UAE</p>
+                <p className="text-xs text-zinc-400 mt-1">{isAr ? 'المعرض الرئيسي، وسط دبي، الإمارات العربية المتحدة' : 'Downtown Flagship Showroom, Dubai, UAE'}</p>
               </div>
 
               <div className="text-start sm:text-end space-y-1">
                 <span className="text-xs uppercase font-bold text-[#f5d97f] bg-[#D4AF37]/15 px-3 py-1 rounded-full border border-[#D4AF37]/30">
-                  OFFICIAL PROPOSAL
+                  {isAr ? 'عرض سعر رسمي معتمد' : 'OFFICIAL PROPOSAL'}
                 </span>
-                <p className="text-xs font-mono text-zinc-300 font-bold mt-2">No: {activeQuote.id}</p>
-                <p className="text-[11px] text-zinc-400">Date: {formatDate(activeQuote.createdAt)}</p>
+                <p className="text-xs font-mono text-zinc-300 font-bold mt-2">{isAr ? 'رقم العرض:' : 'No:'} {activeQuote.id}</p>
+                <p className="text-[11px] text-zinc-400">{isAr ? 'التاريخ:' : 'Date:'} {formatDate(activeQuote.createdAt)}</p>
               </div>
             </div>
 
             {/* Client & Vehicle Meta */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800/80 text-xs">
               <div className="space-y-1">
-                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Client Details</span>
+                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">{isAr ? 'بيانات العميل VIP' : 'Client Details'}</span>
                 <p className="font-bold text-zinc-100">{activeQuote.customerName}</p>
                 <p className="text-zinc-400">{activeQuote.customerPhone}</p>
                 <p className="text-zinc-400">{activeQuote.customerEmail}</p>
               </div>
 
               <div className="space-y-1">
-                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Rental Schedule</span>
+                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">{isAr ? 'جدول ومدة الإيجار' : 'Rental Schedule'}</span>
                 <p className="font-bold text-zinc-100">{activeQuote.vehicleName}</p>
                 <p className="text-zinc-400">
-                  {formatDate(activeQuote.startDate)} to {formatDate(activeQuote.endDate)} ({activeQuote.durationDays} Days)
+                  {formatDate(activeQuote.startDate)} {isAr ? 'إلى' : 'to'} {formatDate(activeQuote.endDate)} ({activeQuote.durationDays} {isAr ? 'أيام' : 'Days'})
                 </p>
-                <p className="text-zinc-400">Valid Until: {activeQuote.validUntil}</p>
+                <p className="text-zinc-400">{isAr ? 'صالح لغاية:' : 'Valid Until:'} {activeQuote.validUntil}</p>
               </div>
             </div>
 
@@ -211,26 +243,26 @@ export const QuotationsView: React.FC = () => {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-400">
-                    <th className="pb-3 text-start font-medium">Description</th>
-                    <th className="pb-3 text-center font-medium">Duration</th>
-                    <th className="pb-3 text-end font-medium">Rate (AED)</th>
-                    <th className="pb-3 text-end font-medium">Amount (AED)</th>
+                    <th className="pb-3 text-start font-medium">{isAr ? 'الوصف' : 'Description'}</th>
+                    <th className="pb-3 text-center font-medium">{isAr ? 'المدة' : 'Duration'}</th>
+                    <th className="pb-3 text-end font-medium">{isAr ? 'السعر (د.إ)' : 'Rate (AED)'}</th>
+                    <th className="pb-3 text-end font-medium">{isAr ? 'الإجمالي (د.إ)' : 'Amount (AED)'}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/50 text-zinc-300">
                   <tr>
                     <td className="py-3">
-                      <p className="font-semibold text-zinc-200">Luxury Vehicle Lease: {activeQuote.vehicleName}</p>
-                      <p className="text-[11px] text-zinc-400">Includes 250 km/day allowance & full comprehensive VIP insurance</p>
+                      <p className="font-semibold text-zinc-200">{isAr ? 'إيجار المركبة الفارهة:' : 'Luxury Vehicle Lease:'} {activeQuote.vehicleName}</p>
+                      <p className="text-[11px] text-zinc-400">{isAr ? 'يشمل مسافة 250 كم/يوم وتأمين شامل VIP' : 'Includes 250 km/day allowance & full comprehensive VIP insurance'}</p>
                     </td>
-                    <td className="py-3 text-center">{activeQuote.durationDays} Days</td>
+                    <td className="py-3 text-center">{activeQuote.durationDays} {isAr ? 'أيام' : 'Days'}</td>
                     <td className="py-3 text-end font-mono">{(activeQuote.dailyRate || 0).toLocaleString()}</td>
                     <td className="py-3 text-end font-mono">{(activeQuote.baseTotal || 0).toLocaleString()}</td>
                   </tr>
                   {activeQuote.extraServices?.map((svc, idx) => (
                     <tr key={idx}>
                       <td className="py-2.5 text-zinc-300">{svc.name}</td>
-                      <td className="py-2.5 text-center">1 Unit</td>
+                      <td className="py-2.5 text-center">1 {isAr ? 'خدمة' : 'Unit'}</td>
                       <td className="py-2.5 text-end font-mono">{svc.price}</td>
                       <td className="py-2.5 text-end font-mono">{svc.price}</td>
                     </tr>
@@ -243,20 +275,20 @@ export const QuotationsView: React.FC = () => {
             <div className="pt-4 border-t border-zinc-800 flex justify-end">
               <div className="w-72 space-y-2 text-xs">
                 <div className="flex justify-between text-zinc-400">
-                  <span>Subtotal (Net):</span>
-                  <span className="font-mono text-zinc-200">{((activeQuote.baseTotal || 0) + (activeQuote.extraServicesTotal || 0) - (activeQuote.discountAmount || 0)).toLocaleString()} AED</span>
+                  <span>{isAr ? 'المجموع قبل الضريبة:' : 'Subtotal (Net):'}</span>
+                  <span className="font-mono text-zinc-200">{((activeQuote.baseTotal || 0) + (activeQuote.extraServicesTotal || 0) - (activeQuote.discountAmount || 0)).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span>
                 </div>
                 <div className="flex justify-between text-zinc-400">
-                  <span>UAE VAT (5%):</span>
-                  <span className="font-mono text-zinc-200">{(activeQuote.vatAmount || 0).toLocaleString()} AED</span>
+                  <span>{isAr ? 'ضريبة القيمة المضافة (5%):' : 'UAE VAT (5%):'}</span>
+                  <span className="font-mono text-zinc-200">{(activeQuote.vatAmount || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span>
                 </div>
                 <div className="flex justify-between text-base font-bold text-zinc-100 pt-2 border-t border-zinc-800">
-                  <span>Grand Total:</span>
-                  <span className="font-mono text-[#f5d97f]">{(activeQuote.grandTotal || 0).toLocaleString()} AED</span>
+                  <span>{isAr ? 'الإجمالي النهائي:' : 'Grand Total:'}</span>
+                  <span className="font-mono text-[#f5d97f]">{(activeQuote.grandTotal || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span>
                 </div>
                 <div className="flex justify-between text-xs text-zinc-400 pt-1">
-                  <span>Security Deposit (Refundable):</span>
-                  <span className="font-mono text-zinc-300">{(activeQuote.securityDeposit || 0).toLocaleString()} AED</span>
+                  <span>{isAr ? 'مبلغ التأمين (مسترد):' : 'Security Deposit (Refundable):'}</span>
+                  <span className="font-mono text-zinc-300">{(activeQuote.securityDeposit || 0).toLocaleString()} {isAr ? 'د.إ' : 'AED'}</span>
                 </div>
               </div>
             </div>
@@ -273,7 +305,7 @@ export const QuotationsView: React.FC = () => {
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-zinc-800 text-zinc-300 text-xs font-semibold hover:bg-zinc-900 transition-all"
                 >
                   <Printer className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Print PDF</span>
+                  <span>{isAr ? 'طباعة العرض PDF' : 'Print PDF'}</span>
                 </button>
 
                 {activeQuote.status !== 'accepted' && (
@@ -282,7 +314,7 @@ export const QuotationsView: React.FC = () => {
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 text-xs font-bold shadow-md hover:brightness-110 active:scale-95 transition-all"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Convert to Reservation</span>
+                    <span>{isAr ? 'تحويل إلى حجز مؤكد' : 'Convert to Reservation'}</span>
                   </button>
                 )}
               </div>
@@ -295,14 +327,14 @@ export const QuotationsView: React.FC = () => {
       <Modal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
-        title="Prepare VIP Quotation"
-        subtitle="Select customer, vehicle, and dates to calculate UAE VAT & pricing"
+        title={isAr ? 'إعداد عرض سعر VIP' : 'Prepare VIP Quotation'}
+        subtitle={isAr ? 'اختيار العميل، المركبة، والتواريخ لاحتساب الضريبة والتكلفة' : 'Select customer, vehicle, and dates to calculate UAE VAT & pricing'}
         maxWidth="2xl"
       >
         <form onSubmit={handleCreateSubmit} className="space-y-4 text-xs">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Customer *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'العميل *' : 'Customer *'}</label>
               <select
                 required
                 value={form.customerId}
@@ -317,7 +349,7 @@ export const QuotationsView: React.FC = () => {
               </select>
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Vehicle *</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'السيارة *' : 'Vehicle *'}</label>
               <select
                 required
                 value={form.vehicleId}
@@ -326,7 +358,7 @@ export const QuotationsView: React.FC = () => {
               >
                 {vehicles.map(v => (
                   <option key={v.id} value={v.id}>
-                    {v.make} {v.model} - {v.dailyRate} AED/day
+                    {v.make} {v.model} - {v.dailyRate} {isAr ? 'د.إ/يوم' : 'AED/day'}
                   </option>
                 ))}
               </select>
@@ -335,7 +367,7 @@ export const QuotationsView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Start Date</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'تاريخ البدء' : 'Start Date'}</label>
               <input
                 type="date"
                 value={form.startDate.split('T')[0]}
@@ -344,7 +376,7 @@ export const QuotationsView: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">End Date</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'تاريخ الانتهاء' : 'End Date'}</label>
               <input
                 type="date"
                 value={form.endDate.split('T')[0]}
@@ -353,7 +385,7 @@ export const QuotationsView: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Duration (Days)</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'المدة (أيام)' : 'Duration (Days)'}</label>
               <input
                 type="number"
                 min="1"
@@ -362,6 +394,149 @@ export const QuotationsView: React.FC = () => {
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               />
             </div>
+          </div>
+
+          {/* Smart Yield Pricing Recommendation Banner */}
+          {yieldRecommendation && (
+            <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#f5d97f]" />
+                  <span className="font-bold text-zinc-200">
+                    {isAr ? 'محرك التسعير الديناميكي الذكي (Yield Pricing Engine)' : 'Smart Dynamic Yield Pricing Intelligence'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={applyYieldPricing}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#D4AF37] text-zinc-950 font-bold text-[11px] hover:brightness-110 active:scale-95 transition-all shadow"
+                >
+                  <Zap className="w-3 h-3" />
+                  <span>{isAr ? 'تطبيق السعر المقترح' : 'Apply Smart Rate'}</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] pt-1 border-t border-zinc-800/80">
+                <div>
+                  <span className="text-zinc-500">{isAr ? 'السعر المقترح:' : 'Suggested Rate:'}</span>
+                  <p className="font-bold text-[#f5d97f]">{yieldRecommendation.finalDailyRate.toLocaleString()} {isAr ? 'د.إ/يوم' : 'AED/day'}</p>
+                </div>
+                <div>
+                  <span className="text-zinc-500">{isAr ? 'الموسمية والطلب:' : 'Demand Surge:'}</span>
+                  <p className="font-semibold text-emerald-400">
+                    {yieldRecommendation.seasonalityMultiplier > 1 ? `+${Math.round((yieldRecommendation.seasonalityMultiplier - 1) * 100)}% (Peak Surge)` : 'Standard Base'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-zinc-500">{isAr ? 'خصم المدة الطويلة:' : 'Duration Discount:'}</span>
+                  <p className="font-semibold text-sky-400">
+                    {yieldRecommendation.durationDiscountPercent > 0 ? `-${yieldRecommendation.durationDiscountPercent}% (${Math.round(yieldRecommendation.baseDailyRate * (yieldRecommendation.durationDiscountPercent / 100) * yieldRecommendation.totalDays)} AED)` : 'None'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Currency and Mileage Settings */}
+          <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-zinc-200 flex items-center gap-1.5 text-xs">
+                <Gauge className="w-3.5 h-3.5 text-[#D4AF37]" />
+                {isAr ? 'إعدادات الكيلومترات والعملة للمستند:' : 'Mileage Allowances & Billing Currency:'}
+              </span>
+              <span className="text-[11px] text-amber-400 font-semibold">
+                {isAr ? 'الرسوم القياسية: 2 د.إ / كم' : 'Standard Rate: 2 AED/km'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+              <div>
+                <label className="block text-zinc-400 text-[11px] mb-1">{isAr ? 'المسافة اليومية (كم/يوم) *' : 'Daily KM *'}</label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={form.mileageAllowancePerDay}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setForm({ ...form, mileageAllowancePerDay: v, monthlyMileageAllowance: v * 18 });
+                  }}
+                  className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-zinc-400 text-[11px] mb-1">{isAr ? 'المسافة الشهرية (كم/شهر) *' : 'Monthly KM *'}</label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={form.monthlyMileageAllowance}
+                  onChange={(e) => setForm({ ...form, monthlyMileageAllowance: Number(e.target.value) })}
+                  className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-sky-300 font-mono text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-amber-300 text-[11px] mb-1">{isAr ? 'رسوم التجاوز (د.إ/كم) *' : 'Excess (AED/km) *'}</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  required
+                  value={form.extraKmRate}
+                  onChange={(e) => setForm({ ...form, extraKmRate: Number(e.target.value) })}
+                  className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-amber-500/40 text-amber-300 font-mono font-bold text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-zinc-400 text-[11px] mb-1">{isAr ? 'عملة العرض' : 'Quotation Currency'}</label>
+                <select
+                  value={form.currency}
+                  onChange={(e) => setForm({ ...form, currency: e.target.value })}
+                  className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-[#D4AF37]/50 text-[#f5d97f] font-bold text-xs"
+                >
+                  {SUPPORTED_CURRENCIES.map(c => (
+                    <option key={c.code} value={c.code} className="bg-zinc-900 text-zinc-100">
+                      {c.flag} {c.code}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'السعر اليومي (د.إ) *' : 'Daily Rate (AED) *'}</label>
+              <input
+                type="number"
+                required
+                value={form.dailyRate}
+                onChange={(e) => setForm({ ...form, dailyRate: Number(e.target.value) })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'مبلغ الخصم الترويجي (د.إ)' : 'Discount Amount (AED)'}</label>
+              <input
+                type="number"
+                value={form.discountAmount}
+                onChange={(e) => setForm({ ...form, discountAmount: Number(e.target.value) })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'ملاحظات العرض والخدمات الإضافية' : 'VIP Addons & Notes'}</label>
+            <input
+              type="text"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs"
+            />
           </div>
 
           <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
@@ -374,9 +549,9 @@ export const QuotationsView: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-bold shadow-md hover:brightness-110"
             >
-              Generate Quotation
+              {isAr ? 'إصدار عرض السعر الرسمي' : 'Generate Official Quotation'}
             </button>
           </div>
         </form>

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { 
   Customer, Lead, Opportunity, Vehicle, Quotation, 
   Reservation, Contract, AdditionalCharge, Deposit, 
-  Payment, Invoice, BankImportBatch, BankTransaction,
+  Payment, Invoice, BankImportBatch, BankTransaction, CompanyBankAccount,
   CRMTask, Communication, CRMDocument, AuditLog,
   CustomFieldDefinition, NumberingConfig, NotificationItem,
   TollTransaction, TollImportBatch, TollPricingConfig,
@@ -66,6 +66,7 @@ interface CRMContextType {
   invoices: Invoice[];
   bankBatches: BankImportBatch[];
   bankTransactions: BankTransaction[];
+  companyBankAccounts: CompanyBankAccount[];
   tollTransactions: TollTransaction[];
   tollImportBatches: TollImportBatch[];
   tollPricingConfig: TollPricingConfig | null;
@@ -143,6 +144,9 @@ interface CRMContextType {
   uploadBankBatch: (batchData: any) => Promise<void>;
   reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string) => Promise<void>;
   runAutoReconciliation: () => Promise<void>;
+  addCompanyBankAccount: (data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
+  updateCompanyBankAccount: (id: string, data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
+  deleteCompanyBankAccount: (id: string) => Promise<void>;
 
   addManualToll: (data: any) => Promise<TollTransaction>;
   updateTollTransaction: (id: string, data: any) => Promise<TollTransaction>;
@@ -188,6 +192,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [bankBatches, setBankBatches] = useState<BankImportBatch[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
+  const [companyBankAccounts, setCompanyBankAccounts] = useState<CompanyBankAccount[]>([]);
   const [tollTransactions, setTollTransactions] = useState<TollTransaction[]>([]);
   const [tollImportBatches, setTollImportBatches] = useState<TollImportBatch[]>([]);
   const [tollPricingConfig, setTollPricingConfig] = useState<TollPricingConfig | null>(null);
@@ -268,7 +273,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const [
         custRes, leadRes, oppRes, vehRes, quoteRes,
         resRes, conRes, chgRes, depRes, payRes,
-        invRes, bBatchRes, bTxnRes, tskRes, commRes,
+        invRes, bBatchRes, bTxnRes, bAccRes, tskRes, commRes,
         docRes, auditRes, cfRes, numRes, notifRes,
         tollRes, tollBatchRes, tollPricingRes,
         notifCfgRes, remindersRes, waLogRes, waStatusRes, custNotifCfgRes
@@ -286,6 +291,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/invoices').then(r => r.json()).catch(() => []),
         fetch('/api/bank-batches').then(r => r.json()).catch(() => []),
         fetch('/api/bank-transactions').then(r => r.json()).catch(() => []),
+        fetch('/api/company-bank-accounts').then(r => r.json()).catch(() => []),
         fetch('/api/tasks').then(r => r.json()).catch(() => []),
         fetch('/api/communications').then(r => r.json()).catch(() => []),
         fetch('/api/documents').then(r => r.json()).catch(() => []),
@@ -316,6 +322,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setInvoices(Array.isArray(invRes) ? invRes : []);
       setBankBatches(Array.isArray(bBatchRes) ? bBatchRes : []);
       setBankTransactions(Array.isArray(bTxnRes) ? bTxnRes : []);
+      setCompanyBankAccounts(Array.isArray(bAccRes) ? bAccRes : []);
       setTasks(Array.isArray(tskRes) ? tskRes : []);
       setCommunications(Array.isArray(commRes) ? commRes : []);
       setDocuments(Array.isArray(docRes) ? docRes : []);
@@ -445,6 +452,12 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
 
         unsubs.push(
+          FirestoreService.subscribe<CompanyBankAccount>(COLLECTIONS.COMPANY_BANK_ACCOUNTS, (items) => {
+            setCompanyBankAccounts(items || []);
+          })
+        );
+
+        unsubs.push(
           FirestoreService.subscribe<CRMTask>(COLLECTIONS.TASKS, (items) => {
             setTasks(items || []);
           })
@@ -506,7 +519,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Fetch latest server baseline if needed
       const [
         cRes, lRes, oRes, vRes, qRes, rRes, conRes,
-        chgRes, depRes, payRes, invRes, bbRes, btRes,
+        chgRes, depRes, payRes, invRes, bbRes, btRes, bAccRes,
         tRes, commRes, dRes, aRes, cfRes, numRes, notRes,
         tollRes, tollBatchRes
       ] = await Promise.all([
@@ -523,6 +536,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/invoices').then(r => r.json()).catch(() => invoices),
         fetch('/api/bank-batches').then(r => r.json()).catch(() => bankBatches),
         fetch('/api/bank-transactions').then(r => r.json()).catch(() => bankTransactions),
+        fetch('/api/company-bank-accounts').then(r => r.json()).catch(() => companyBankAccounts),
         fetch('/api/tasks').then(r => r.json()).catch(() => tasks),
         fetch('/api/communications').then(r => r.json()).catch(() => communications),
         fetch('/api/documents').then(r => r.json()).catch(() => documents),
@@ -548,6 +562,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         invoices: invRes,
         bankBatches: bbRes,
         bankTransactions: btRes,
+        companyBankAccounts: bAccRes,
         tasks: tRes,
         communications: commRes,
         documents: dRes,
@@ -1062,6 +1077,63 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const addCompanyBankAccount = async (data: Partial<CompanyBankAccount>): Promise<CompanyBankAccount> => {
+    const res = await fetch('/api/company-bank-accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to add company bank account');
+
+    try {
+      await FirestoreService.set(COLLECTIONS.COMPANY_BANK_ACCOUNTS, result.account.id, result.account);
+    } catch (e) {
+      console.warn('Firestore bank account write warning:', e);
+    }
+
+    await fetchData();
+    showToast('Bank Account Added', `Registered ${result.account.bankName} - ${result.account.accountNumber} successfully.`);
+    return result.account;
+  };
+
+  const updateCompanyBankAccount = async (id: string, data: Partial<CompanyBankAccount>): Promise<CompanyBankAccount> => {
+    const res = await fetch(`/api/company-bank-accounts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to update company bank account');
+
+    try {
+      await FirestoreService.set(COLLECTIONS.COMPANY_BANK_ACCOUNTS, id, result.account);
+    } catch (e) {
+      console.warn('Firestore bank account update warning:', e);
+    }
+
+    await fetchData();
+    showToast('Bank Account Updated', `Updated ${result.account.bankName} details.`);
+    return result.account;
+  };
+
+  const deleteCompanyBankAccount = async (id: string): Promise<void> => {
+    const res = await fetch(`/api/company-bank-accounts/${id}`, {
+      method: 'DELETE'
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to delete company bank account');
+
+    try {
+      await FirestoreService.remove(COLLECTIONS.COMPANY_BANK_ACCOUNTS, id);
+    } catch (e) {
+      console.warn('Firestore bank account delete warning:', e);
+    }
+
+    await fetchData();
+    showToast('Bank Account Deleted', 'The company bank account has been removed.');
+  };
+
   /**
    * Toll/Parking module (Salik, Darb, Parking): manual entry, editing,
    * deletion, file import (preview-then-confirm), and the live default
@@ -1408,7 +1480,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <CRMContext.Provider value={{
       customers, leads, opportunities, vehicles, quotations,
       reservations, contracts, charges, deposits, payments,
-      invoices, bankBatches, bankTransactions, tollTransactions,
+      invoices, bankBatches, bankTransactions, companyBankAccounts, tollTransactions,
       tollImportBatches, tollPricingConfig,
       notificationEventConfigs, customerNotificationConfigs, customReminders,
       whatsappMessageLog, whatsappStatus, tasks, communications,
@@ -1429,6 +1501,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
       uploadBankBatch, reconcileBankTransaction, runAutoReconciliation,
+      addCompanyBankAccount, updateCompanyBankAccount, deleteCompanyBankAccount,
       addManualToll, updateTollTransaction, deleteTollTransaction,
       previewTollImport, confirmTollImport, updateTollPricingConfig,
       updateNotificationConfig, updateCustomerNotificationConfig,

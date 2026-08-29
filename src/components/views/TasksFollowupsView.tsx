@@ -12,7 +12,8 @@ import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
 
 export const TasksFollowupsView: React.FC = () => {
-  const { language, t } = useLanguage();
+  const { language, t, getPriorityLabel, getStatusLabel } = useLanguage();
+  const isAr = language === 'ar';
   const { tasks, createTask, updateTask, customers } = useCRM();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -78,10 +79,10 @@ export const TasksFollowupsView: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-zinc-100">
-            {language === 'ar' ? 'المهام ومتابعات خدمة كبار الشخصيات' : 'VIP Concierge Tasks & Operational Follow-ups'}
+            {isAr ? 'المهام ومتابعات خدمة كبار الشخصيات' : 'VIP Concierge Tasks & Operational Follow-ups'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            {language === 'ar' ? 'جدولة تسليم السوبركارز، تجديد عقود الـ VIP، واسترداد الودائع ومخالفات المرور' : 'Coordinate white-glove deliveries, deposit settlements, renewal calls & operational audits'}
+            {isAr ? 'جدولة تسليم السوبركارز، تجديد عقود الـ VIP، واسترداد الودائع ومخالفات المرور' : 'Coordinate white-glove deliveries, deposit settlements, renewal calls & operational audits'}
           </p>
         </div>
 
@@ -93,7 +94,7 @@ export const TasksFollowupsView: React.FC = () => {
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold text-xs lg:text-sm shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
         >
           <Plus className="w-4 h-4" />
-          <span>{language === 'ar' ? 'إنشاء مهمة جديدة' : 'Create Task'}</span>
+          <span>{isAr ? 'إنشاء مهمة جديدة' : 'Create Task'}</span>
         </button>
       </div>
 
@@ -105,7 +106,7 @@ export const TasksFollowupsView: React.FC = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search task title, VIP client, description..."
+            placeholder={isAr ? 'بحث في العنوان، العميل، الوصف...' : 'Search task title, VIP client, description...'}
             className="w-full pl-9 pr-4 py-2 rounded-xl bg-zinc-950/80 border border-zinc-800 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-[#D4AF37]/50"
           />
         </div>
@@ -119,7 +120,7 @@ export const TasksFollowupsView: React.FC = () => {
                 priorityFilter === p ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 border border-zinc-800 hover:bg-zinc-800'
               }`}
             >
-              {p}
+              {p === 'all' ? (isAr ? 'الكل' : 'All') : getPriorityLabel(p)}
             </button>
           ))}
         </div>
@@ -130,10 +131,10 @@ export const TasksFollowupsView: React.FC = () => {
         {filteredTasks.map(task => {
           const isDone = task.status === 'completed';
           const priorityBadge = {
-            urgent: <Badge variant="rose" size="sm">Urgent</Badge>,
-            high: <Badge variant="amber" size="sm">High</Badge>,
-            medium: <Badge variant="sky" size="sm">Medium</Badge>,
-            low: <Badge variant="zinc" size="sm">Low</Badge>
+            urgent: <Badge variant="rose" size="sm">{getPriorityLabel('urgent')}</Badge>,
+            high: <Badge variant="amber" size="sm">{getPriorityLabel('high')}</Badge>,
+            medium: <Badge variant="sky" size="sm">{getPriorityLabel('medium')}</Badge>,
+            low: <Badge variant="zinc" size="sm">{getPriorityLabel('low')}</Badge>
           }[task.priority];
 
           return (
@@ -171,7 +172,7 @@ export const TasksFollowupsView: React.FC = () => {
               {/* Bottom bar */}
               <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
                 <span className="text-zinc-500 text-[11px] flex items-center gap-1">
-                  <Clock className="w-3 h-3" /> Due {formatDate(task.dueDate)}
+                  <Clock className="w-3 h-3" /> {isAr ? 'الاستحقاق:' : 'Due'} {formatDate(task.dueDate)}
                 </span>
 
                 <button
@@ -183,7 +184,7 @@ export const TasksFollowupsView: React.FC = () => {
                   }`}
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>{isDone ? 'Reopen' : 'Mark Done'}</span>
+                  <span>{isDone ? (isAr ? 'إعادة فتح' : 'Reopen') : (isAr ? 'إكمال' : 'Mark Done')}</span>
                 </button>
               </div>
             </div>
@@ -195,54 +196,54 @@ export const TasksFollowupsView: React.FC = () => {
       <Modal
         isOpen={addModalOpen}
         onClose={() => setAddModalOpen(false)}
-        title="Create VIP Follow-up Task"
-        subtitle="Schedule operations, delivery or renewal tasks"
+        title={isAr ? 'إنشاء مهمة متابعة VIP جديدة' : 'Create VIP Follow-up Task'}
+        subtitle={isAr ? 'جدولة العمليات، تسليم السيارات أو التجديدات' : 'Schedule operations, delivery or renewal tasks'}
         maxWidth="lg"
       >
         <form onSubmit={handleAddSubmit} className="space-y-4 text-xs">
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">Task Title *</label>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'عنوان المهمة *' : 'Task Title *'}</label>
             <input
               type="text"
               required
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              placeholder="e.g. Schedule VIP Chauffeur Delivery to Burj Al Arab"
+              placeholder={isAr ? 'مثال: تسليم سيارة VIP لبرج العرب' : 'e.g. Schedule VIP Chauffeur Delivery to Burj Al Arab'}
             />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Related Customer</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'العميل المرتبط' : 'Related Customer'}</label>
               <select
                 value={form.customerId}
                 onChange={(e) => handleCustomerSelect(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               >
-                <option value="">-- No specific customer --</option>
+                <option value="">{isAr ? '-- بدون عميل محدد --' : '-- No specific customer --'}</option>
                 {customers.map(c => (
                   <option key={c.id} value={c.id}>{c.fullName}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Priority</label>
+              <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'الأولوية' : 'Priority'}</label>
               <select
                 value={form.priority}
                 onChange={(e) => setForm({ ...form, priority: e.target.value as any })}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
               >
-                <option value="urgent">Urgent</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
+                <option value="urgent">{getPriorityLabel('urgent')}</option>
+                <option value="high">{getPriorityLabel('high')}</option>
+                <option value="medium">{getPriorityLabel('medium')}</option>
+                <option value="low">{getPriorityLabel('low')}</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">Due Date</label>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'تاريخ الاستحقاق' : 'Due Date'}</label>
             <input
               type="date"
               value={form.dueDate}
@@ -252,13 +253,13 @@ export const TasksFollowupsView: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">Description / Action Items</label>
+            <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'الوصف وبنود المتابعة' : 'Description / Action Items'}</label>
             <textarea
               rows={3}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              placeholder="Instructions for concierge team..."
+              placeholder={isAr ? 'تعليمات لفريق الكونسيرج...' : 'Instructions for concierge team...'}
             />
           </div>
 
@@ -274,7 +275,7 @@ export const TasksFollowupsView: React.FC = () => {
               type="submit"
               className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold"
             >
-              Save Task
+              {isAr ? 'حفظ المهمة' : 'Save Task'}
             </button>
           </div>
         </form>

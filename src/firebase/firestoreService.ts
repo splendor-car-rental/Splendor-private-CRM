@@ -16,7 +16,7 @@ import { handleFirestoreError, OperationType } from './errorHandling';
 import { 
   Customer, Lead, Opportunity, Vehicle, Quotation, 
   Reservation, Contract, AdditionalCharge, Deposit, 
-  Payment, Invoice, BankImportBatch, BankTransaction, 
+  Payment, Invoice, BankImportBatch, BankTransaction, CompanyBankAccount,
   CRMTask, Communication, CRMDocument, AuditLog, 
   CustomFieldDefinition, NumberingConfig, NotificationItem,
   TollTransaction, TollImportBatch
@@ -36,6 +36,7 @@ export const COLLECTIONS = {
   INVOICES: 'invoices',
   BANK_BATCHES: 'bank_batches',
   BANK_TRANSACTIONS: 'bank_transactions',
+  COMPANY_BANK_ACCOUNTS: 'company_bank_accounts',
   TASKS: 'tasks',
   COMMUNICATIONS: 'communications',
   DOCUMENTS: 'documents',
@@ -196,6 +197,7 @@ export class FirestoreService {
     charges: AdditionalCharge[];
     bankTransactions: BankTransaction[];
     bankBatches: BankImportBatch[];
+    companyBankAccounts?: CompanyBankAccount[];
     tasks: CRMTask[];
     communications: Communication[];
     documents: CRMDocument[];
@@ -240,6 +242,9 @@ export class FirestoreService {
     await commitBatchList(COLLECTIONS.CHARGES, seedData.charges);
     await commitBatchList(COLLECTIONS.BANK_TRANSACTIONS, seedData.bankTransactions);
     await commitBatchList(COLLECTIONS.BANK_BATCHES, seedData.bankBatches);
+    if (seedData.companyBankAccounts) {
+      await commitBatchList(COLLECTIONS.COMPANY_BANK_ACCOUNTS, seedData.companyBankAccounts);
+    }
     await commitBatchList(COLLECTIONS.TASKS, seedData.tasks);
     await commitBatchList(COLLECTIONS.COMMUNICATIONS, seedData.communications);
     await commitBatchList(COLLECTIONS.DOCUMENTS, seedData.documents);
