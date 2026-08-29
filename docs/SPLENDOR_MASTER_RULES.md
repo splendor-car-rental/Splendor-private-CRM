@@ -221,18 +221,58 @@ states its real current status honestly.
 
 ## MODULE 08 — Digital Inspection
 
+**Rebuilt as a standalone workflow this phase** (`src/server/vehicleInspections.ts`,
+`src/components/views/VehicleInspectionsView.tsx`), deliberately additive
+alongside -- not replacing -- the older embedded `Contract.handover`/
+`returnDetails` checklist (`RULE-C0x` above; still used by ContractsOpsView's
+own Handover/Return buttons). Covers `pre_delivery` / `handover` /
+`in_rental` / `return` / `post_return`, all through one workspace.
+
 ### RULE-I01 — Mandatory photo count per inspection
-**REQUIREMENT**: A handover/return inspection cannot be marked complete with fewer than a configurable minimum number of photos (default 8).
-**STATUS**: PARTIAL — `HandoverInspection`/`ReturnInspection` already carry a `damages: VehicleDamageMarker[]` array with optional per-marker photos, but no minimum-photo-count gate was found and none was added this session (would require touching the existing, working handover/return UI flow — deferred to avoid a rushed change to a live customer-facing workflow without a full UI regression pass; see Remaining Work).
+**REQUIREMENT**: An inspection cannot be marked complete until every photo category required for its type has at least one photo.
+**RATIONALE**: Blueprint's mandatory-photo-evidence requirement, generalized to per-type configurable categories (front/rear/left/right/interior/dashboard-odometer/fuel-gauge/damage/other) rather than a single fixed "8 photos" count, since a spot-check and a full handover don't need the same evidence.
+**DEPENDENCIES**: `src/config/inspectionPhotoCategories.ts` (`REQUIRED_PHOTO_CATEGORIES_BY_TYPE`), snapshotted onto each inspection at creation.
+**ACCEPTANCE CRITERIA**: `completeInspection()` rejects with the specific missing categories named; a photo's category, uploader, timestamp, and per-category sequence number are all recorded server-side, never trusted from the client beyond the category itself.
+**SECURITY**: Every photo's `uploadedBy`/`uploadedByName` comes from the server-verified caller (`getRequesterActor`), never the request body.
+**STORAGE VERIFICATION**: **BLOCKED / UNVERIFIED** -- the actual photo-bytes upload (`POST /api/upload`, folder `vehicle-inspections/`) could not be exercised end-to-end in this sandbox: no Storage emulator is wired here (only Auth+Firestore), and real Firebase Storage is network-restricted, confirmed via a real browser session hitting the real route and failing with "Bucket name not specified" (the emulator-mode admin init has no `storageBucket` configured) -- the same class of blocker as the pre-existing, separately documented Storage-verification gap (`docs/QA_TEST_ENVIRONMENT.md`). Not bypassed, not faked. Everything downstream of a successful upload (photo metadata registration, the completion gate counting categories, immutability after completion) IS verified, by calling `POST /api/inspections/:id/photos` directly with the exact payload shape a real upload would produce.
+**STATUS**: **IMPLEMENTED (this session)** -- photo-requirement logic and metadata pipeline fully built and verified; the Storage byte-transfer half is architecturally correct but unverified in this environment (see above).
 
 ### RULE-I02 — Handover-vs-return damage comparison
-**STATUS**: UNKNOWN (§28 of the requirements map) — not traced or built this session.
+**REQUIREMENT**: A later inspection (typically `return`) can reference an earlier one (`handover`) so their photo sets and damage lists can be compared.
+**RATIONALE**: Blueprint's damage-comparison requirement. Deliberately a **manual, human-reviewed comparison**, not automated image-diffing -- this mission's own instruction is explicit that a fake AI-detection step must never replace a human decision here.
+**ACCEPTANCE CRITERIA**: `VehicleInspection.compareAgainstInspectionId` links the two records; the UI renders both side by side (damage counts, photo categories) for a human to visually compare and then classify each damage marker as `pre_existing`/`new`/`uncertain` themselves.
+**STATUS**: **IMPLEMENTED (this session)** -- as a manual side-by-side view, not automated detection, per this mission's explicit "no fake AI" instruction.
 
 ### RULE-I03 — Image-quality rejection (blur/darkness)
-**STATUS**: MISSING — requires either a client-side heuristic or a vendor; not built.
+**STATUS**: MISSING -- requires either a client-side heuristic or a vendor; not built this session (this mission's scope control explicitly excludes inventing detection capability that doesn't exist).
 
 ### RULE-I04 — Evidence integrity (tamper-evident photo record)
-**STATUS**: MISSING — not built; would naturally extend RULE-A01 (hash-chaining) once that pattern exists.
+**STATUS**: MISSING -- no cryptographic hash is computed over photo bytes or attached to the photo metadata record. Not claimed. A completed inspection's photo/damage arrays ARE protected from further mutation (RULE-I07 below), which is a real but different guarantee (no further edits, not "this photo file itself is provably unaltered since capture").
+
+### RULE-I05 — Damage liability review, never an automatic charge
+**REQUIREMENT**: Recording `new` or `uncertain` damage opens a `pending_review` liability flag; only an explicit reviewer decision (`customer_liable`/`not_customer_liable`, with a mandatory note) resolves it, and completion is blocked while any review is still pending. Recording damage NEVER creates a financial charge by itself.
+**RATIONALE**: This mission's explicit financial-safety requirement -- "MUST NOT automatically deduct money from a customer merely because damage is recorded."
+**ACCEPTANCE CRITERIA**: `InspectionDamageMarker.liabilityStatus` starts at `not_applicable` for `pre_existing` damage (no review needed) and `pending_review` for `new`/`uncertain`; reviewing pre-existing damage is rejected. Any actual customer charge for confirmed-liable damage still requires a separate, manual step through the existing, unmodified Debt/Charge module -- this feature never calls it automatically.
+**FINANCIAL**: This is the core financial-safety guarantee of the whole module.
+**SECURITY**: The review decision's actor is server-verified; a `reviewNotes` note is mandatory.
+**VERIFICATION METHOD**: `tests/vehicleInspections.test.ts` (real emulator) + `tests/coreWorkflows.test.ts` (mocked HTTP, role authorization) + a real-browser pass confirming the "pending review" badge, the blocked Complete button, and no charge object ever appearing on the damage record.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-I06 — Customer acknowledgement gate
+**REQUIREMENT**: `handover` and `return` inspections cannot complete without a recorded customer acknowledgement; `pre_delivery`/`in_rental`/`post_return` (no customer present) don't require one.
+**RATIONALE**: Blueprint's customer-acknowledgement requirement. Deliberately NOT a new digital-signature/OTP system (out of this mission's explicit scope control) -- recorded as a staff-witnessed confirmation (`acknowledgedByName`, `witnessedBy`/`witnessedByName`, timestamp), the same trust model the app's pre-existing `customerSignatureUrl` plain-URL fields already implied without ever building real signature capture.
+**STATUS**: **IMPLEMENTED (this session)**.
+
+### RULE-I07 — Post-completion immutability
+**REQUIREMENT**: Once an inspection is `completed`, no further mutation (photo, damage, detail edit, acknowledgement) succeeds for anyone, including ceo/admin.
+**RATIONALE**: This mission's explicit "do not allow ... silently alter completed inspection evidence" requirement.
+**ACCEPTANCE CRITERIA**: Every mutating function in `vehicleInspections.ts` calls a shared `requireDraft()` guard first.
+**STATUS**: **IMPLEMENTED (this session)** -- verified by both the real-emulator and mocked-HTTP test suites attempting every mutation type against a completed record.
+
+### RULE-I08 — Idempotent creation and completion
+**REQUIREMENT**: Starting or completing an inspection is safe against double-submission, browser refresh, and network retry.
+**ACCEPTANCE CRITERIA**: Both `startInspection()` and `completeInspection()` use the existing `runIdempotentCreate` primitive (Idempotency-Key header); a real concurrent double-submission race produces exactly one record.
+**STATUS**: **IMPLEMENTED (this session)**.
 
 ---
 
@@ -361,21 +401,28 @@ table reflects the corrected, verified counts.
 | 05 Fines | 5 | 0 | 0 | 5 |
 | 06 Deposit | 5 | 2 | 0 | 3 |
 | 07 Geofencing | 5 | 0 | 0 | 5 |
-| 08 Inspection | 4 | 0 | 0 | 4 |
+| 08 Inspection | 8 | 0 | 6 | 2 |
 | 09 Maintenance | 5 | 0 | 3 | 2 |
 | 10 Reservation | 5 | 2 | 2 | 1 |
 | 11 Pricing | 3 | 0 | 1 | 2 |
 | 12 Governance | 4 | 2 | 1 | 1 |
-| **Total** | **56** | **10** | **12** | **34** |
+| **Total** | **60** | **10** | **18** | **32** |
 
-12 rules were genuinely implemented, tested, and committed across this
-session (RULE-A01, R03, R04, B01-B05, P01, M01-M03), on top of 10
-already-real pre-existing ones — 22 of 56 (39%) now have genuine,
-evidenced implementation. The 34 deferred/not-built rules are each
-explicitly reasoned above, not silently dropped: external/hardware
-dependency, a material financial-policy question awaiting the user
-(RULE-D04/D05), or a deliberate choice not to half-build a large, coherent
-feature in a rushed pass (RULE-P02/P03, RULE-R05) — plus the Module
-01/02/05/07 rows corrected by this audit, which remain genuinely
-unbuilt and are catalogued as real, sizeable future work rather than
-fabricated.
+18 rules were genuinely implemented, tested, and committed across this
+session (RULE-A01, R03, R04, B01-B05, P01, M01-M03, I01-I02, I05-I08), on
+top of 10 already-real pre-existing ones — 28 of 60 (47%) now have
+genuine, evidenced implementation. Module 08 grew from 4 to 8 rules this
+phase: I01/I02 (photo requirements, manual comparison) already existed as
+placeholders and are now genuinely built; I05-I08 (damage liability
+review, customer acknowledgement, post-completion immutability,
+idempotent creation/completion) are new rules this phase's Vehicle
+Inspection mission surfaced and immediately implemented, per this
+mission's standing authorization to create new rules as needed rather
+than force everything into the original four inspection placeholders.
+The 32 deferred/not-built rules are each explicitly reasoned above, not
+silently dropped: external/hardware dependency, a material
+financial-policy question awaiting the user (RULE-D04/D05), a deliberate
+choice not to half-build a large, coherent feature in a rushed pass
+(RULE-P02/P03, RULE-R05, RULE-I03/I04) — plus the Module 01/02/05/07 rows
+corrected by an earlier audit, which remain genuinely unbuilt and are
+catalogued as real, sizeable future work rather than fabricated.
