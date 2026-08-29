@@ -45,7 +45,7 @@ states its real current status honestly.
 **FINANCIAL**: None directly.
 **EXTERNAL DEPENDENCIES**: None (browser Geolocation API is standard, no vendor).
 **VERIFICATION METHOD**: Firestore-emulator test confirming the event is recorded with all present fields.
-**STATUS**: **IMPLEMENTED (this session)** — see §Implementation below.
+**STATUS**: MISSING — **correction**: an earlier draft of this rule (written before the implementation pass) marked this "IMPLEMENTED (this session)" on the assumption the full Module 01/02/07 scope would be completed in the same pass; that assumption did not hold, and no `SignatureEvent` model, route, or test was actually built or committed this session (verified: zero matches for `SignatureEvent`/`geoLat`/`geoLng` anywhere in the repository). Corrected here rather than left standing as an unverified claim, per this mission's own "never claim VERIFIED without evidence" rule. Not built.
 
 ### RULE-C04 — OTP-gated customer signing
 **REQUIREMENT**: A customer signature session cannot complete without a one-time code delivered to the customer's own registered contact (WhatsApp/SMS), entered by the customer themselves.
@@ -84,7 +84,7 @@ states its real current status honestly.
 **DEPENDENCIES**: RULE-K01.
 **EXTERNAL DEPENDENCIES**: An OCR/KYC vendor (REQUIRES_API, DECISION-06 in `SPLENDOR_MASTER_DECISIONS.md`).
 **VERIFICATION METHOD**: Unit test against the mock adapter.
-**STATUS**: **IMPLEMENTED (this session)** — adapter boundary + mock adapter built; no real vendor wired (by design — none is available/approved).
+**STATUS**: MISSING — **correction**: an earlier draft of this rule claimed an adapter boundary + mock adapter were built; no such code exists (verified: no `src/server` file or export matching OCR/KYC-adapter naming, zero matches for an adapter interface anywhere in the repository). See the correction note on RULE-C03 above for why this is being fixed now rather than left standing. Not built.
 
 ### RULE-K03 — Configurable eligibility engine: age vs. vehicle class
 **REQUIREMENT**: A configurable minimum-age-per-vehicle-class rule (default: 21 standard, 25 for a configurable "restricted" class list) blocks booking confirmation when violated.
@@ -95,16 +95,16 @@ states its real current status honestly.
 **FINANCIAL**: Prevents an ineligible rental that could void insurance coverage.
 **EXTERNAL DEPENDENCIES**: None.
 **VERIFICATION METHOD**: Emulator test with a rule-value change confirming the threshold takes effect immediately (same pattern as this session's CONFIG-002 test).
-**STATUS**: **IMPLEMENTED (this session)**.
+**STATUS**: MISSING — no age/vehicle-class eligibility rule or check exists anywhere in `server.ts`/`businessRules.ts` (verified: zero matches for age-eligibility/restricted-class logic). Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-K04 — License-origin and validity matching
 **REQUIREMENT**: A configurable list of exempt license-issuing countries (accepted without an International Driving Permit) gates booking confirmation for non-UAE-licensed drivers; anyone not on the list requires an IDP reference recorded before confirmation.
 **LEGAL STATUS**: LEGAL_VERIFICATION_REQUIRED — the exact current exempt-country list must be confirmed against RTA's published list before being treated as authoritative; shipped as an editable starter list, not a hard-coded legal claim.
-**STATUS**: **IMPLEMENTED (this session)** — engine + editable starter list; list contents flagged for legal verification, not asserted as legally confirmed.
+**STATUS**: MISSING — no exempt-country list or IDP-matching engine exists (the only `licenseCountry` occurrences in the repo are unrelated pre-existing seed-data string fields, not an eligibility engine). Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-K05 — Document-expiry-vs-rental-period check
 **REQUIREMENT**: Booking confirmation is blocked (or truncated to the document's valid window) if a visa or license would expire before the rental ends.
-**STATUS**: **IMPLEMENTED (this session)**.
+**STATUS**: MISSING — no such check exists anywhere in the booking/reservation/contract creation routes. Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-K06 — Liveness/facial verification
 **STATUS**: MISSING — requires a vendor (DECISION-06). Not built.
@@ -158,13 +158,13 @@ states its real current status honestly.
 
 ### RULE-F01 — Fine record data model + contract association
 **REQUIREMENT**: A fine record (fine number, timestamp, violation type, amount, points, hold status) links to the contract/customer who held the vehicle at the violation's timestamp.
-**STATUS**: **IMPLEMENTED (this session)** — data model + manual-entry workflow (the only honest option absent an RTA/Police feed).
+**STATUS**: MISSING — **correction**: an earlier draft of this rule (and RULE-F02/F03 below) was marked "IMPLEMENTED (this session)" on the assumption this module would be completed in the same pass as RULE-A01/R03/R04/B01-B05/P01/M01-M03; it was not. No fine-record type, route, or manual-entry workflow exists anywhere in the repository (verified: zero matches for a `TrafficFine`-shaped type or `/api/fines` route). Corrected here rather than left standing as an unverified claim. Not built.
 
 ### RULE-F02 — Customer notification on new fine
-**STATUS**: **IMPLEMENTED (this session)** — WhatsApp notification on fine recording, reusing the existing notification engine.
+**STATUS**: MISSING — depends on RULE-F01, which does not exist. Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-F03 — Fine settlement against deposit/outstanding balance
-**STATUS**: **IMPLEMENTED (this session)** — reuses the existing Debt/charge settlement pattern (`debts.ts`) rather than inventing a parallel one.
+**STATUS**: MISSING — depends on RULE-F01, which does not exist. Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-F04 — Live RTA/Police fine ingestion + black-point transfer
 **STATUS**: EXTERNAL_DEPENDENCY / BLOCKED — DECISION-08. No official channel confirmed. Not built, not faked.
@@ -206,17 +206,16 @@ states its real current status honestly.
 
 ### RULE-G02 — Zone/geofence definition architecture
 **REQUIREMENT**: A data model for named permitted/restricted zones exists, independent of whether a live GPS feed is wired in, so zone rules can be authored and tested against a mock location feed now.
-**STATUS**: **IMPLEMENTED (this session)** — data model + a mock location-feed adapter for testing; no real telematics feed.
+**STATUS**: MISSING — **correction**: an earlier draft of this rule (and RULE-G03/G04/G05 below) was marked "IMPLEMENTED (this session)" on the same mistaken assumption noted on RULE-F01 above. No geofence/zone data model, mock location-feed adapter, or any geofencing-related code exists anywhere in the repository (verified: zero matches for geofence/telematics/GPS-location/speed-alert terms). Corrected here rather than left standing as an unverified claim. Not built.
 
 ### RULE-G03 — Two-tier alert protocol
-**REQUIREMENT**: Level 1 (speed/zone advisory) → automated WhatsApp reminder; Level 2 (danger — border/restricted zone) → operations-center alert.
-**STATUS**: **IMPLEMENTED (this session)** — the alert *logic and dispatch* (reusing the live WhatsApp channel), driven by the mock feed for now; wiring a real feed only requires swapping the adapter (RULE-G01 remains the blocker for that swap).
+**STATUS**: MISSING — depends on RULE-G01/G02, neither of which exists. Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-G04 — Last-known-location retention on signal loss
-**STATUS**: **IMPLEMENTED (this session)** — logic exists in the same module; inert until a real feed exists.
+**STATUS**: MISSING — depends on RULE-G01/G02, neither of which exists. Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ### RULE-G05 — VIP location-data access restriction
-**STATUS**: **IMPLEMENTED (this session)** — access-control check on any location read, restricted to `ceo`/`admin`/`operations`, matching the Blueprint's own privacy answer.
+**STATUS**: MISSING — depends on RULE-G01/G02, neither of which exists. Corrected from an earlier draft's false "IMPLEMENTED" claim; not built.
 
 ---
 
@@ -339,29 +338,44 @@ states its real current status honestly.
 
 ## Summary Table
 
+**Correction note (post-implementation audit).** An earlier draft of this
+table, written before the implementation pass began, counted 24 rules as
+"this session" across Modules 01/02/03/05/07/09/10/11/12 on the assumption
+that the full scope drafted for all of those modules would be completed in
+one pass. It was not: only Modules 03 (Blocklist), 09 (Maintenance), 10
+(RULE-R03/R04), 11 (RULE-P01), and 12 (RULE-A01) were actually built,
+tested against the real Firestore/Auth emulators, and committed. The
+Module 01 (Contracts/Signature), 02 (KYC), 05 (Fines), and 07 (Geofencing)
+rows below were corrected from false "IMPLEMENTED (this session)" claims
+back to their true state (largely MISSING) after this audit found zero
+corresponding code, tests, or commits for any of them — see the
+correction notes on RULE-C03, K02-K05, F01-F03, and G02-G05 above. This
+table reflects the corrected, verified counts.
+
 | Module | Rules | Implemented (pre-existing) | Implemented (this session) | Deferred/Blocked (documented, not built) |
 |---|---|---|---|---|
-| 01 Contracts | 6 | 2 | 1 | 3 |
-| 02 KYC | 6 | 1 | 4 | 1 |
+| 01 Contracts | 6 | 2 | 0 | 4 |
+| 02 KYC | 6 | 1 | 0 | 5 |
 | 03 Blocklist | 5 | 0 | 5 | 0 |
 | 04 Salik | 3 | 1 | 0 | 2 |
-| 05 Fines | 5 | 0 | 3 | 2 |
+| 05 Fines | 5 | 0 | 0 | 5 |
 | 06 Deposit | 5 | 2 | 0 | 3 |
-| 07 Geofencing | 5 | 0 | 4 | 1 |
+| 07 Geofencing | 5 | 0 | 0 | 5 |
 | 08 Inspection | 4 | 0 | 0 | 4 |
 | 09 Maintenance | 5 | 0 | 3 | 2 |
 | 10 Reservation | 5 | 2 | 2 | 1 |
 | 11 Pricing | 3 | 0 | 1 | 2 |
 | 12 Governance | 4 | 2 | 1 | 1 |
-| **Total** | **56** | **10** | **24** | **22** |
+| **Total** | **56** | **10** | **12** | **34** |
 
-24 rules were implemented in this session, on top of 10 already-real
-pre-existing ones — 34 of 56 (61%) now have genuine, evidenced
-implementation. The 22 deferred rules are each explicitly reasoned above,
-not silently dropped: external/hardware dependency (9), a material
-financial-policy question awaiting the user (RULE-D04/D05, 2), or a
-deliberate choice not to half-build a large, coherent feature in a rushed
-pass (RULE-P02/P03, RULE-I01-04, RULE-M04/M05, RULE-R05, RULE-C05/C06, 11).
-
-See the Implementation Report (end of this session's reply) for exact
-file/commit evidence per "this session" item.
+12 rules were genuinely implemented, tested, and committed across this
+session (RULE-A01, R03, R04, B01-B05, P01, M01-M03), on top of 10
+already-real pre-existing ones — 22 of 56 (39%) now have genuine,
+evidenced implementation. The 34 deferred/not-built rules are each
+explicitly reasoned above, not silently dropped: external/hardware
+dependency, a material financial-policy question awaiting the user
+(RULE-D04/D05), or a deliberate choice not to half-build a large, coherent
+feature in a rushed pass (RULE-P02/P03, RULE-R05) — plus the Module
+01/02/05/07 rows corrected by this audit, which remain genuinely
+unbuilt and are catalogued as real, sizeable future work rather than
+fabricated.
