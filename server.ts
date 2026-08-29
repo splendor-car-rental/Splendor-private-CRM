@@ -88,6 +88,15 @@ import {
   assignConversation, setConversationBotActive, sendManualReply, markConversationRead,
   normalizePhone, ConversationError
 } from './src/server/whatsappConversation';
+import {
+  checkLtoEligibility, createLtoApplication, submitLtoApplication, cancelLtoApplication,
+  decideLtoApplication, listLtoInstallments, recordLtoInstallmentPayment, runLtoCollectionsSweep,
+  requestLtoEarlySettlement, decideLtoEarlySettlement, markLtoDefault, requestLtoTermination,
+  decideLtoTermination, markLtoVehicleRecovered, requestLtoOwnershipTransfer, confirmLtoOwnershipTransfer,
+  completeLtoAgreement, getLtoApplicationById, listLtoApplications, getLtoContractView, listLtoContracts,
+  getLtoSummaryForCustomer, getLtoSummaryForVehicle, LtoError
+} from './src/server/leaseToOwn';
+import { computeLtoFinancialOffer, LtoPolicyNotConfiguredError } from './src/server/leaseToOwnPolicy';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -2641,6 +2650,258 @@ app.post('/api/inspections/:id/void', requireRole('ceo', 'admin'), asyncHandler(
   }
 }));
 
+// ---------------------------------------------------------------------------
+// Lease-to-Own (Splendor Private Mobility Operating System) -- every route
+// below is a thin HTTP wrapper over src/server/leaseToOwn.ts, which is the
+// actual orchestration layer. Reuses the same requireRole/kill-switch/
+// getRequesterActor/recordAudit conventions as every other module -- no
+// parallel auth or audit path. killSwitch.contractLifecycle gates the
+// agreement lifecycle (application/approval/settlement/termination/
+// ownership transfer, since an LTO agreement IS a Contract); killSwitch.
+// paymentsRefunds gates installment payment recording, matching how every
+// other money-received route in this app is gated.
+function ltoErrorStatus(message: string): number {
+  if (message.includes('not found')) return 404;
+  const isFieldValidation = message.includes('is required') || message.includes('must be') || message.includes('cannot be negative');
+  return isFieldValidation ? 400 : 409;
+}
+
+app.post('/api/lto/eligibility', asyncHandler(async (req, res) => {
+  const { customerId, vehicleId } = req.body || {};
+  if (!customerId || !vehicleId) return res.status(400).json({ error: 'customerId and vehicleId are required.' });
+  res.json(await checkLtoEligibility(customerId, vehicleId));
+}));
+
+app.post('/api/lto/offer-preview', requireRole('ceo', 'admin', 'operations', 'sales', 'finance'), asyncHandler(async (req, res) => {
+  const { vehiclePrice, downPayment, termMonths, hasFinalPayment, finalPaymentAmount } = req.body || {};
+  try {
+    res.json(computeLtoFinancialOffer({ vehiclePrice, downPayment, termMonths, hasFinalPayment: !!hasFinalPayment, finalPaymentAmount }));
+  } catch (error: any) {
+    if (error instanceof LtoPolicyNotConfiguredError) return res.status(409).json({ error: error.message });
+    return res.status(400).json({ error: error.message });
+  }
+}));
+
+app.post('/api/lto/applications', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result: application, replayed } = await createLtoApplication(req.body || {}, actor as any, idempotencyKey, fingerprintRequest(req.body), recordAudit);
+    res.status(201).json({ ...application, replayed });
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/applications', asyncHandler(async (req, res) => {
+  res.json(await listLtoApplications(req.query.status ? { status: req.query.status as any } : undefined));
+}));
+
+app.get('/api/lto/applications/:id', asyncHandler(async (req, res) => {
+  try {
+    res.json(await getLtoApplicationById(req.params.id));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/applications/:id/submit', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await submitLtoApplication(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/applications/:id/cancel', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await cancelLtoApplication(req.params.id, req.body?.reason || '', actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// RULE-LTO0x SoD: decider must not be the same person who created/submitted
+// the application -- enforced inside decideLtoApplication() via the shared
+// Four-Eyes engine (decideApprovalRequest), not re-checked here.
+app.post('/api/lto/applications/:id/decide', requireRole('ceo', 'admin', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { decision, note, offer } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  if (decision === 'approved' && !offer) return res.status(400).json({ error: 'A financial offer (downPayment, termMonths, hasFinalPayment, finalPaymentAmount) is required to approve.' });
+  try {
+    res.json(await decideLtoApplication(req.params.id, decision, note || '', decision === 'approved' ? offer : null, decider as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof ApprovalError) return res.status(403).json({ error: error.message });
+    if (error instanceof LtoPolicyNotConfiguredError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/contracts', asyncHandler(async (req, res) => {
+  res.json(await listLtoContracts(req.query.ltoStatus ? { ltoStatus: req.query.ltoStatus as any } : undefined));
+}));
+
+app.get('/api/lto/contracts/:id', asyncHandler(async (req, res) => {
+  try {
+    res.json(await getLtoContractView(req.params.id));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/contracts/:id/installments', asyncHandler(async (req, res) => {
+  res.json(await listLtoInstallments(req.params.id));
+}));
+
+app.post('/api/lto/installments/:id/payments', requireRole('ceo', 'admin', 'operations', 'finance', 'sales'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { amount, method } = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result, replayed } = await recordLtoInstallmentPayment(req.params.id, amount, method, actor as any, idempotencyKey, fingerprintRequest(req.body), recordAudit);
+    res.status(201).json({ ...result, replayed });
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/early-settlement', requireRole('ceo', 'admin', 'operations', 'finance', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await requestLtoEarlySettlement(req.params.id, Number(req.body?.adjustments) || 0, req.body?.adjustmentReason, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoPolicyNotConfiguredError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/settlements/:id/decide', requireRole('ceo', 'admin', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  try {
+    res.json(await decideLtoEarlySettlement(req.params.id, decision, note || '', decider as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Only FLAGS eligibility for default -- never terminates or repossesses on
+// its own, per this module's explicit "no automatic legal action" rule.
+app.post('/api/lto/contracts/:id/flag-default', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await markLtoDefault(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/termination', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await requestLtoTermination(req.params.id, req.body?.reason || '', actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/termination/decide', requireRole('ceo', 'admin'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  try {
+    res.json(await decideLtoTermination(req.params.id, decision, note || '', decider as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Staff-confirmed, never automatic -- the actual physical recovery happens
+// off-system; this only records that it happened, per the mission's
+// explicit "no automatic vehicle repossession" rule.
+app.post('/api/lto/contracts/:id/vehicle-recovered', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await markLtoVehicleRecovered(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// The actual RTA ownership/plate transfer is an EXTERNAL, manual dependency
+// -- no RTA API integration exists or is invented. These two routes only
+// record that staff started, then confirmed, that external process.
+app.post('/api/lto/contracts/:id/ownership-transfer', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await requestLtoOwnershipTransfer(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/ownership-transfer/confirm', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await confirmLtoOwnershipTransfer(req.params.id, req.body?.documentPath, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/complete', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await completeLtoAgreement(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/customers/:id/summary', asyncHandler(async (req, res) => {
+  res.json(await getLtoSummaryForCustomer(req.params.id));
+}));
+
+app.get('/api/lto/vehicles/:id/summary', asyncHandler(async (req, res) => {
+  res.json(await getLtoSummaryForVehicle(req.params.id));
+}));
+
 // Extends an active contract's end date -- e.g. a customer wants a few more
 // days. Recalculates the rental total/VAT/grand total for the added days
 // at the contract's existing daily rate, logs an audit entry, and sends the
@@ -4336,7 +4597,18 @@ async function handleRunChecks(req: express.Request, res: express.Response) {
 
   try {
     const summary = await runNotificationChecks();
-    res.json(summary);
+    // Same cron trigger, not a second scheduled job -- runLtoCollectionsSweep
+    // only sends reminders for installments that newly read as due/late/
+    // overdue (see its own lastReminderAt guard) and never terminates a
+    // contract or touches a vehicle itself.
+    let ltoSweep: { remindersSent: number; tasksCreated: number } | { error: string };
+    try {
+      ltoSweep = await runLtoCollectionsSweep();
+    } catch (ltoError: any) {
+      console.error('runLtoCollectionsSweep failed:', ltoError);
+      ltoSweep = { error: ltoError?.message || 'Lease-to-Own collections sweep failed.' };
+    }
+    res.json({ ...summary, lto: ltoSweep });
   } catch (error: any) {
     console.error('runNotificationChecks failed:', error);
     res.status(500).json({ error: error?.message || 'Notification check sweep failed.' });

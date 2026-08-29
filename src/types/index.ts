@@ -60,6 +60,10 @@ export interface Customer {
   licenseNumber: string;
   licenseCountry: string;
   licenseExpiryDate: string;
+  /** Optional -- most existing customer records were never asked for this. Added for Lease-to-Own age eligibility (checkLtoEligibility() in src/server/leaseToOwn.ts); absent for an existing customer is treated as "age cannot be verified" (conservatively ineligible for LTO), never guessed. */
+  dateOfBirth?: string;
+  /** Which language a customer-facing WhatsApp message should be sent in, monolingual (no mixing) -- used by the Lease-to-Own notification flows (dispatchCustomerNotification's `language` param). Defaults to 'ar' when absent, never mixed with a guessed opposite language. */
+  preferredLanguage?: 'ar' | 'en';
 
   // CRM details
   source: string;
@@ -272,6 +276,21 @@ export interface Vehicle {
   status: VehicleStatus;
   lifecycleStatus?: VehicleLifecycleStatus; // Default ACTIVE
   ownershipSource?: VehicleOwnershipSource; // Default OWNED
+  /**
+   * Purely informational/additive marker for a vehicle currently on a
+   * Lease-to-Own track -- never a substitute for `status`/`lifecycleStatus`.
+   * Availability blocking during an active LTO agreement is handled the
+   * exact same way an active rental already blocks other bookings: the LTO
+   * Contract itself carries `status:'active'` and a real
+   * startDateTime/endDateTime spanning the LTO term, so the existing
+   * reserveVehicleSlot() active-contract-date-range conflict check already
+   * excludes it from new reservations with zero new conflict-checking code.
+   * This field only drives UI labeling (Customer 360 / Vehicle Details /
+   * the LTO Dashboard) and is cleared once the vehicle leaves the LTO track
+   * (terminated-and-recovered) or reaches 'owned' (ownership transferred).
+   */
+  ltoStatus?: 'lto_reserved' | 'lto_active' | 'lto_default' | 'lto_settlement' | 'lto_recovery' | 'ownership_transfer_pending' | 'owned';
+  ltoContractId?: string;
   
   // Public website publishing layer
   publicVehicleId?: string;
@@ -782,17 +801,175 @@ export interface Contract {
   status: ContractStatus;
   handover?: HandoverInspection;
   returnDetails?: ReturnInspection;
-  
+
   paymentStatus: 'unpaid' | 'partially_paid' | 'paid';
   depositStatus: 'pending' | 'collected' | 'held' | 'applied' | 'partially_refunded' | 'refunded';
-  
+
   notes: string;
   termsAccepted: boolean;
   createdAt: string;
   updatedAt: string;
+
+  /** Absent/undefined = an ordinary rental contract (every contract created before this field existed, and every one created by the rental flow going forward). Only 'lease_to_own' contracts carry an `lto` block -- this is a pure addition, never a change to how rental contracts are read or written. */
+  contractType?: 'rental' | 'lease_to_own';
+  lto?: LtoContractDetails;
 }
 
-export type ChargeType = 
+// ----------------------------------------------------
+// LEASE-TO-OWN (Splendor Private Mobility Operating System)
+// ----------------------------------------------------
+// A full product module built entirely on top of the existing Customer /
+// KYC / Vehicle / Reservation / Contract / Financial / Audit / RBAC / SoD /
+// WhatsApp / Document architecture -- no parallel systems. An LTO deal is
+// still a Contract (contractType:'lease_to_own', see above); its own
+// lifecycle data lives in the `lto` block; its installment schedule is a
+// new, genuinely new concept (a fixed recurring due-date obligation, a
+// different shape from the existing itemized Invoice or the ad-hoc Debt
+// ledger) tracked in its own collection, but actual money received is
+// still recorded through the existing Payment entity/route -- one
+// financial ledger, never two.
+
+export type LtoApplicationStatus = 'draft' | 'submitted' | 'under_review' | 'approved' | 'rejected' | 'cancelled';
+
+export interface LtoEligibilityCheck {
+  eligible: boolean;
+  reasons: string[]; // human-readable failure reasons when eligible=false; empty when eligible=true
+  checkedAt: string;
+}
+
+export interface LtoFinancialOffer {
+  vehiclePrice: number;
+  downPayment: number;
+  termMonths: number;
+  monthlyInstallment: number;
+  /** The portion of each monthly installment that counts toward the ownership-equity build-up (principal), vs. the markup/finance-cost portion -- per Splendor's own LTO contract template (Clause 3), the payment schedule must show "the ownership-right value out of the base rent value" for each installment. */
+  monthlyPrincipalPortion: number;
+  monthlyMarkupPortion: number;
+  finalPayment: number; // balloon payment; 0 if the term has none
+  processingFee: number;
+  vatAmount: number;
+  totalContractValue: number; // downPayment + (monthlyInstallment * termMonths) + finalPayment + processingFee + vatAmount
+  computedAt: string;
+  /** The exact policy inputs used, snapshotted so a later change to the Business Rules Engine's LTO policy never silently rewrites what an already-issued offer promised the customer. */
+  policySnapshot: {
+    monthlyMarkupRatePercent: number;
+    processingFeeAed: number;
+  };
+}
+
+export interface LtoApplication {
+  id: string; // LTOA-000001
+  customerId: string;
+  customerName: string;
+  vehicleId: string;
+  vehicleName: string;
+  requestedTermMonths: number;
+  requestedDownPayment: number;
+  vehiclePrice: number; // staff-entered target sale price for this deal -- never derived from the rental daily/weekly/monthly rate (that would be an invented accounting policy)
+  notes: string;
+  status: LtoApplicationStatus;
+  eligibilityCheck?: LtoEligibilityCheck;
+  offer?: LtoFinancialOffer;
+  approvalRequestId?: string;
+  contractId?: string; // set once the Agreement/Contract is created after approval
+  temporaryHoldId?: string; // the vehicle hold placed while the application is under review
+  submittedAt?: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decisionReason?: string;
+  cancelledAt?: string;
+  cancelledReason?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LtoStatus =
+  | 'active'
+  | 'settlement_requested'
+  | 'settled'
+  | 'default'
+  | 'termination_requested'
+  | 'terminated'
+  | 'ownership_transfer_pending'
+  | 'ownership_transferred'
+  | 'completed';
+
+export interface LtoContractDetails {
+  applicationId: string;
+  termMonths: number;
+  downPayment: number;
+  monthlyInstallment: number;
+  finalPayment: number;
+  vehiclePrice: number;
+  processingFee: number;
+  vatAmount: number;
+  totalContractValue: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  ltoStatus: LtoStatus;
+  ownershipTransferredAt?: string;
+  defaultedAt?: string;
+  defaultReason?: string;
+  terminationRequestedAt?: string;
+  terminationRequestedReason?: string;
+  terminatedAt?: string;
+  settlementRequestId?: string;
+}
+
+export type LtoInstallmentStatus = 'upcoming' | 'due' | 'partially_paid' | 'paid' | 'late' | 'overdue' | 'settled';
+
+export interface LtoInstallment {
+  id: string; // LTOI-000001
+  contractId: string;
+  customerId: string;
+  customerName: string;
+  installmentNumber: number; // 1-based; the final balloon payment (if any) is the highest number, flagged below
+  isFinalPayment: boolean;
+  dueDate: string;
+  amount: number;
+  /** Per Splendor's LTO contract template (Clause 3): how much of `amount` counts toward the ownership-right build-up (principal) vs. finance/markup cost. Snapshotted from the offer at schedule-generation time. */
+  principalPortion: number;
+  markupPortion: number;
+  paidAmount: number;
+  remainingAmount: number;
+  status: LtoInstallmentStatus;
+  paidAt?: string;
+  lastReminderAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LtoSettlementRequestStatus = 'pending' | 'approved' | 'rejected' | 'completed';
+
+export interface LtoSettlementRequest {
+  id: string; // LTOS-000001
+  contractId: string;
+  customerId: string;
+  customerName: string;
+  outstandingBalance: number;
+  /** A flat ownership-transfer processing fee borne by the customer -- NOT a percentage penalty on the balance. Splendor's own LTO contract template (Clause 6) sets no early-settlement discount or penalty: full payoff simply means the outstanding balance is paid and ownership transfers immediately, "at the expense of" the customer for the transfer itself. */
+  ownershipTransferFee: number;
+  adjustments: number;
+  adjustmentReason?: string;
+  finalSettlementAmount: number;
+  status: LtoSettlementRequestStatus;
+  approvalRequestId?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  completedAt?: string;
+  paymentId?: string; // the Payment record that actually settled the balance
+  notes?: string;
+}
+
+export type ChargeType =
   | 'extra_km' 
   | 'extra_hour' 
   | 'late_return' 
@@ -1148,7 +1325,7 @@ export interface BusinessRule {
   sourceNote?: string;
 }
 
-export type ApprovalRequestType = 'rule_change';
+export type ApprovalRequestType = 'rule_change' | 'lto_application' | 'lto_settlement' | 'lto_termination';
 export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export interface ApprovalRequest {

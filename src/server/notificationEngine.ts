@@ -143,8 +143,14 @@ export async function dispatchCustomReminder(reminderId: string, title: string, 
  * CustomerNotificationConfig toggle; a customer with no phone on file is
  * still logged (status 'failed') so it's visible in the Control Center
  * activity log rather than silently dropped.
+ *
+ * `language`, when supplied, sends ONLY that language's text -- no
+ * bilingual concatenation -- for callers (Lease-to-Own) that must send a
+ * message fully in one language with zero mixing. Every existing call site
+ * omits it and keeps the original bilingual (Arabic-then-English) message
+ * exactly as before -- fully backward compatible.
  */
-export async function dispatchCustomerNotification(eventKey: string, customerId: string, customerName: string, customerPhone: string | undefined, messageEn: string, messageAr: string): Promise<void> {
+export async function dispatchCustomerNotification(eventKey: string, customerId: string, customerName: string, customerPhone: string | undefined, messageEn: string, messageAr: string, language?: 'ar' | 'en'): Promise<void> {
   if (whatsappOutboundSuspended()) {
     console.warn(`[notificationEngine] WhatsApp outbound suspended by emergency kill switch -- skipped customer event "${eventKey}" for ${customerId}.`);
     return;
@@ -152,7 +158,11 @@ export async function dispatchCustomerNotification(eventKey: string, customerId:
   const config = globalStore.customerNotificationConfigs.find(c => c.eventKey === eventKey);
   if (!config || !config.enabled) return;
 
-  const text = `مرحباً ${customerName}،\n\n${messageAr}\n\n${messageEn}\n\n— Splendor Car Rental`;
+  const text = language === 'ar'
+    ? `مرحباً ${customerName}،\n\n${messageAr}\n\n— سبلندر لتأجير السيارات`
+    : language === 'en'
+      ? `Dear ${customerName},\n\n${messageEn}\n\n— Splendor Car Rental`
+      : `مرحباً ${customerName}،\n\n${messageAr}\n\n${messageEn}\n\n— Splendor Car Rental`;
 
   const result = customerPhone
     ? await sendWhatsAppMessage(customerPhone, text)

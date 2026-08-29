@@ -83,7 +83,18 @@ export const CUSTOMER_NOTIFICATION_EVENTS: CustomerNotificationEventDef[] = [
   { key: 'customer_payment_due', labelEn: 'Upcoming payment due date reminder', labelAr: 'تذكير باقتراب موعد استحقاق دفعة', automated: true },
   { key: 'customer_payment_overdue', labelEn: 'Overdue payment / arrears reminder', labelAr: 'تذكير بمتأخرات السداد', automated: true },
   { key: 'customer_contract_expiring', labelEn: 'Contract nearing expiry reminder', labelAr: 'تذكير باقتراب انتهاء العقد', automated: true },
-  { key: 'customer_contract_extended', labelEn: 'Contract extension addendum notice', labelAr: 'إشعار ملحق تمديد العقد' }
+  { key: 'customer_contract_extended', labelEn: 'Contract extension addendum notice', labelAr: 'إشعار ملحق تمديد العقد' },
+
+  // Lease-to-Own (Splendor Private Mobility Operating System)
+  { key: 'lto_application_received', labelEn: 'Lease-to-Own application received', labelAr: 'استلام طلب الإيجار المنتهي بالتملك' },
+  { key: 'lto_application_approved', labelEn: 'Lease-to-Own application approved', labelAr: 'الموافقة على طلب الإيجار المنتهي بالتملك' },
+  { key: 'lto_application_rejected', labelEn: 'Lease-to-Own application rejected', labelAr: 'رفض طلب الإيجار المنتهي بالتملك' },
+  { key: 'lto_payment_reminder', labelEn: 'Lease-to-Own upcoming installment reminder', labelAr: 'تذكير باستحقاق قسط الإيجار المنتهي بالتملك' },
+  { key: 'lto_payment_due', labelEn: 'Lease-to-Own installment due today', labelAr: 'استحقاق قسط الإيجار المنتهي بالتملك اليوم' },
+  { key: 'lto_payment_late', labelEn: 'Lease-to-Own installment overdue', labelAr: 'تأخر سداد قسط الإيجار المنتهي بالتملك' },
+  { key: 'lto_statement', labelEn: 'Lease-to-Own account statement', labelAr: 'كشف حساب الإيجار المنتهي بالتملك' },
+  { key: 'lto_settlement', labelEn: 'Lease-to-Own settlement confirmation', labelAr: 'تأكيد تسوية الإيجار المنتهي بالتملك' },
+  { key: 'lto_ownership_transfer', labelEn: 'Lease-to-Own ownership transfer', labelAr: 'نقل ملكية الإيجار المنتهي بالتملك' }
 ];
 
 export function getCustomerNotificationEventDef(key: string): CustomerNotificationEventDef | undefined {

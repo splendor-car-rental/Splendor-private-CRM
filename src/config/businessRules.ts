@@ -529,5 +529,82 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     description: 'Not yet defined -- requires legal/regulatory review before activation. Operational communications log, not a legal/financial record -- likely a shorter period than the categories above once reviewed.',
     tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
     sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
+  },
+
+  // ---- Lease-to-Own (Splendor Private Mobility Operating System) ----
+  // Financial-formula rules (monthly markup, processing fee, early-
+  // settlement fee) have NEVER existed anywhere in this codebase before --
+  // seeded at value:null per this catalog's own established precedent
+  // (see the retention* rules above), never an invented percentage. A
+  // CEO/Admin must set a real number through this same Business Rules
+  // Engine (Settings) before src/server/leaseToOwnPolicy.ts will compute a
+  // real financial offer -- see computeLtoFinancialOffer()'s
+  // LtoPolicyNotConfiguredError. Operational/timing rules below (grace
+  // days, late threshold, minimum age, application hold) are seeded with a
+  // real, reasonable default, same class as notificationExpiryLookaheadDays
+  // above -- not a financial formula, an operational window.
+  {
+    id: 'ltoMonthlyMarkupRatePercent',
+    label: 'Lease-to-Own: total markup rate over the financed amount (%)',
+    labelAr: 'الإيجار المنتهي بالتملك: نسبة الهامش الإجمالية على المبلغ الممول (%)',
+    description: 'Not yet defined -- requires a business/finance decision before the first real LTO offer can be issued. Applied once, over the whole term, to (vehicle price - down payment - final payment), then spread evenly across the monthly installments -- see computeLtoFinancialOffer().',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 0, max: 100, editable: true,
+    sourceNote: 'New this session -- no prior LTO financing existed in this codebase; no value invented.'
+  },
+  {
+    id: 'ltoProcessingFeeAed',
+    label: 'Lease-to-Own: one-time processing/documentation fee (AED)',
+    labelAr: 'الإيجار المنتهي بالتملك: رسوم معالجة/توثيق لمرة واحدة (درهم)',
+    description: 'Not yet defined -- requires a business decision. Added once to the total contract value, VAT-inclusive via the same UAE_VAT_RATE every other fee in this app already uses.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 0, max: 100000, editable: true,
+    sourceNote: 'New this session -- no prior LTO financing existed in this codebase; no value invented.'
+  },
+  {
+    id: 'ltoOwnershipTransferFeeAed',
+    label: 'Lease-to-Own: ownership transfer processing fee (AED, borne by the customer)',
+    labelAr: 'الإيجار المنتهي بالتملك: رسوم إجراءات نقل الملكية (درهم، على نفقة العميل)',
+    description: 'Not yet defined -- requires a business decision (represents real RTA/administrative transfer costs). Per Splendor\'s own approved LTO contract template (Clause 6): full early settlement requires the lessor to immediately transfer ownership "at the expense of" the customer requesting it -- the contract sets NO early-settlement penalty or discount on the outstanding balance itself, only that the transfer\'s processing costs are the customer\'s. This fee models exactly that cost, added to the outstanding balance to form the final settlement amount -- see computeSettlementAmount().',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 0, max: 100000, editable: true,
+    sourceNote: 'New this session -- sourced from Splendor\'s real LTO contract template Clause 6; no percentage/penalty invented since the contract specifies none.'
+  },
+  {
+    id: 'ltoConsecutiveMissedInstallmentsForDefault',
+    label: 'Lease-to-Own: consecutive missed monthly installments that make an agreement eligible for default/termination',
+    labelAr: 'الإيجار المنتهي بالتملك: عدد الأقساط الشهرية المتتالية غير المسددة المؤهلة للتعثر/الفسخ',
+    description: 'Per Splendor\'s own approved LTO contract template (Clause 3): "the lessor has the right to terminate the contract and recover the vehicle in case of a delay in installment payments for two consecutive months." This is a REAL, sourced contractual threshold, not an invented one -- markLtoDefault()/the collections workflow uses this to flag an agreement as default-eligible, but never terminates or recovers the vehicle automatically (that remains a human decision with RBAC/SoD -- see RULE-LTO09).',
+    tier: 'business_rule', valueType: 'number', value: 2, min: 1, max: 12, editable: true,
+    sourceNote: 'Sourced directly from Splendor\'s real, approved LTO contract template, Clause 3 ("شهرين متتاليين") -- not invented.'
+  },
+  {
+    id: 'ltoMinCustomerAgeYears',
+    label: 'Lease-to-Own: minimum customer age (years)',
+    labelAr: 'الإيجار المنتهي بالتملك: الحد الأدنى لعمر العميل (سنة)',
+    description: 'Minimum age for LTO eligibility, checked against the customer\'s ID/passport expiry-implied or recorded date of birth if on file.',
+    tier: 'business_rule', valueType: 'number', value: 21, min: 18, max: 99, editable: true,
+    sourceNote: 'New this session -- a reasonable operational default (UAE legal adult age), not a financial formula.'
+  },
+  {
+    id: 'ltoGraceDays',
+    label: 'Lease-to-Own: grace period after an installment\'s due date (days)',
+    labelAr: 'الإيجار المنتهي بالتملك: فترة سماح بعد تاريخ استحقاق القسط (أيام)',
+    description: 'An unpaid installment still shows as DUE (not LATE) for this many days after its due date.',
+    tier: 'business_rule', valueType: 'number', value: 5, min: 0, max: 60, editable: true,
+    sourceNote: 'New this session -- an operational collections-timing window, not a financial formula.'
+  },
+  {
+    id: 'ltoLateThresholdDays',
+    label: 'Lease-to-Own: days late before an installment is OVERDUE',
+    labelAr: 'الإيجار المنتهي بالتملك: عدد أيام التأخير قبل اعتبار القسط متأخر السداد',
+    description: 'Days past the due date (beyond the grace period) before an installment escalates from LATE to OVERDUE for collections purposes.',
+    tier: 'business_rule', valueType: 'number', value: 15, min: 1, max: 180, editable: true,
+    sourceNote: 'New this session -- an operational collections-timing window, not a financial formula.'
+  },
+  {
+    id: 'ltoApplicationHoldDays',
+    label: 'Lease-to-Own: vehicle hold duration while an application is under review (days)',
+    labelAr: 'الإيجار المنتهي بالتملك: مدة حجز المركبة أثناء مراجعة الطلب (أيام)',
+    description: 'How long the selected vehicle is held (via the existing temporary-hold mechanism) once an LTO application is submitted, before the hold lapses if the application has not been decided.',
+    tier: 'business_rule', valueType: 'number', value: 3, min: 1, max: 30, editable: true,
+    sourceNote: 'New this session -- an operational timing window, matching the existing temporary-hold mechanism\'s own precedent.'
   }
 ];
