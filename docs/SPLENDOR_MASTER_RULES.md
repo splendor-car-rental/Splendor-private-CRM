@@ -554,7 +554,7 @@ liability-transfer rule.
 ### RULE-LTO11 — Contract, Document, and Audit integration (no parallel systems)
 **REQUIREMENT**: LTO uses the existing Contract engine (additive `contractType`/`lto` fields only), links documents to the existing Document system, and routes every sensitive operation through the existing hash-chained audit trail.
 **RATIONALE**: Sections 11, 16, 17's explicit "extend, never duplicate" mandate — verified by inventory: zero new entity collections were created for anything that already had one.
-**STATUS**: **IMPLEMENTED (this session)** for Contract/Audit integration. **PARTIAL** for document generation: the user separately supplied (a) the real source LTO contract's clause text (used only for this module's business logic, per their explicit instruction never to reuse its layout/branding) and (b) a fixed company letterhead template intended as the visual shell for a future generated contract PDF (header/footer/branding preserved exactly, customer/vehicle/value/date fields and the source contract's clauses merged into its blank body). Understanding the letterhead's structure was completed this session; the actual merge-and-render pipeline (HTML→PDF, embedding the letterhead as a fixed asset) was not built this pass — see **NEXT BACKLOG** in the final report. Until built, LTO agreement documents are handled like any other Contract: attached via the existing generic document upload, not auto-generated.
+**STATUS**: **IMPLEMENTED**. Document generation (`src/server/leaseToOwnContractDocument.ts`, `POST /api/lto/contracts/:id/generate-contract`) merges (a) Splendor's fixed, approved letterhead -- supplied as a reference PDF, cropped once into its header band and footer band and embedded exactly as-is (never redrawn/recolored/regenerated; see `src/server/assets/ltoLetterheadAsset.ts`), repeating on every page via Puppeteer's native `headerTemplate`/`footerTemplate`, never reused as page content -- with (b) this codebase's own paraphrase of Splendor's real, approved LTO contract template (also supplied as a reference PDF, content-only; every clause's legal meaning matches the source 1:1, wording is the system's own) and (c) live merge fields from the real Contract/Customer/Installment records. Rendering uses a real headless Chromium (`puppeteer-core` + `@sparticuz/chromium`, the standard Vercel/Lambda-serverless-compatible build) rather than a pure-Node PDF library: an earlier `pdf-lib` + manual Arabic-reshaping/bidi attempt produced real, reproducible glyph-overlap bugs in this bilingual legal document, confirmed against a real-Chromium ground-truth render before being discarded -- an unacceptable risk for a document customers sign. The generated PDF is filed through the EXISTING Document pipeline (Firebase Storage + a real `CRMDocument`, category `'contract'`, linked to the Contract) -- no parallel storage system -- and every generation is audited. **VERIFICATION METHOD**: `tests/leaseToOwnContractDocument.test.ts` -- pure-template merge-field assertions, a REAL end-to-end Chromium render (magic-byte/page-count/merge-data checks via `pdf-parse`), and the guard-clause error paths; separately confirmed visually by rendering to PNG and reviewing the Arabic shaping/RTL and letterhead fidelity by eye during development. Not automated: the actual Firebase Storage upload step (this environment has no working Storage emulator, the same pre-existing limitation as every other document-upload code path in this codebase).
 
 ### RULE-LTO12 — Customer 360 / Vehicle Details / Dashboard integration
 **REQUIREMENT**: Customer 360 shows Active Agreement/Vehicle/Monthly Payment/Paid/Outstanding/Term; Vehicle Details shows LTO Status/Customer/Agreement/Dates/Payment Status/Ownership Status and the vehicle must not read as ordinarily available while LTO-active; a Dashboard KPI widget surfaces Applications/Active/Outstanding/Near-Completion/Defaults.
@@ -638,24 +638,35 @@ Module 01/02/05/07 rows corrected by an earlier audit, which remain
 genuinely unbuilt and are catalogued as real, sizeable future work rather
 than fabricated.
 
-Module 14 (Lease-to-Own) is entirely new this phase: LTO01-LTO14 (the
-complete application-to-ownership-transfer lifecycle) are real, tested
-(61 new tests against the real Firestore emulator plus pure unit tests, on
-top of the full pre-existing 358-test suite -- 400 total, zero
-regressions), and additive to every existing engine (Contract, Vehicle,
-Approvals/SoD, Payments, Vehicle Inspection, WhatsApp, Audit) per the
-mission's explicit "extend, never duplicate" mandate. Two rules carry an
-honest caveat inside an otherwise-IMPLEMENTED status rather than a blanket
-claim: LTO04/LTO08's three real monetary values (monthly markup rate,
-processing fee, ownership-transfer fee) are seeded unconfigured
-(sensitive_rule/value:null) and require a one-time CEO/Admin decision via
-the existing Business Rules Engine before the first real offer or
-settlement can be computed; LTO14's automated test coverage is complete,
-but browser/Playwright UI verification could not be performed in this
-environment (no Firebase service-account credentials configured here to
-authenticate a real session). LTO11's document-generation half (merging
-the user's supplied source-contract clauses and a fixed company letterhead
-into a rendered PDF) is explicitly PARTIAL: the letterhead's structure was
-reviewed this session, but the actual generation pipeline is real, scoped
-future work, catalogued in the final report's NEXT BACKLOG rather than
-rushed or fabricated.
+Module 14 (Lease-to-Own) is entirely new across two phases: LTO01-LTO14
+(the complete application-to-ownership-transfer lifecycle, including
+LTO11's contract-document generation) are real, tested (67 tests total --
+61 against the real Firestore emulator/pure unit tests plus 6 for document
+generation, one of which is a REAL end-to-end headless-Chromium PDF
+render -- on top of the full pre-existing 358-test suite -- 406 total,
+zero regressions), and additive to every existing engine (Contract,
+Vehicle, Approvals/SoD, Payments, Vehicle Inspection, WhatsApp, Audit,
+Document/Storage) per the mission's explicit "extend, never duplicate"
+mandate. Two rules carry an honest caveat inside an otherwise-IMPLEMENTED
+status rather than a blanket claim: LTO04/LTO08's three real monetary
+values (monthly markup rate, processing fee, ownership-transfer fee) are
+seeded unconfigured (sensitive_rule/value:null) and require a one-time
+CEO/Admin decision via the existing Business Rules Engine before the
+first real offer or settlement can be computed; LTO14's automated test
+coverage is complete, but browser/Playwright UI verification of the
+staff-facing screens could not be performed in this environment (no
+Firebase service-account credentials configured here to authenticate a
+real session) -- the document-generation pipeline's own Chromium rendering
+IS exercised for real, since it needs no Firebase credentials. LTO11's
+document generation, initially deferred as PARTIAL, was completed in a
+follow-up session once the two reference PDFs (source contract, company
+letterhead) were re-supplied: a real `pdf-lib`-based approach was tried
+first and discarded after it produced reproducible Arabic glyph-overlap
+bugs (verified against a real-Chromium ground truth) -- an unacceptable
+risk for a document customers sign -- in favor of real headless Chromium
+(`puppeteer-core` + `@sparticuz/chromium`), a deliberate architecture
+change surfaced to and approved by the user before being built. The one
+genuinely unautomated piece is the Firebase Storage upload step inside
+`generateLtoContractDocument()`, for the same pre-existing reason every
+other document-upload code path in this codebase is untested here: no
+working Storage emulator in this environment.

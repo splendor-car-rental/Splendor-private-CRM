@@ -97,6 +97,7 @@ import {
   getLtoSummaryForCustomer, getLtoSummaryForVehicle, LtoError
 } from './src/server/leaseToOwn';
 import { computeLtoFinancialOffer, LtoPolicyNotConfiguredError } from './src/server/leaseToOwnPolicy';
+import { generateLtoContractDocument } from './src/server/leaseToOwnContractDocument';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -755,7 +756,7 @@ app.post('/api/upload', async (req, res) => {
 // two folders POST /api/upload itself ever writes to, both server-
 // generated (never a client-supplied filesystem/Storage path), which rules
 // out path traversal to an unrelated object in the same bucket.
-const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/', 'vehicle-inspections/'];
+const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/', 'vehicle-inspections/', 'lease-to-own-contracts/'];
 
 app.get('/api/documents/file', asyncHandler(async (req, res) => {
   const path = String(req.query.path || '');
@@ -2888,6 +2889,24 @@ app.post('/api/lto/contracts/:id/complete', requireRole('ceo', 'admin', 'operati
   if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
   try {
     res.json(await completeLtoAgreement(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Generates the actual signable Lease-to-Own contract PDF from the
+// system's own approved template (letterhead + paraphrased clauses + live
+// merge data -- see src/server/leaseToOwnContractDocument.ts) and files it
+// through the EXISTING Document pipeline (Firebase Storage + a real
+// CRMDocument record), never a parallel storage system. Regeneration is
+// allowed (e.g. after a data correction) -- each call creates a new
+// Document rather than mutating one in place, preserving history.
+app.post('/api/lto/contracts/:id/generate-contract', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await generateLtoContractDocument(req.params.id, actor as any, recordAudit));
   } catch (error: any) {
     if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
     throw error;

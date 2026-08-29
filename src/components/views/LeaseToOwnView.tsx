@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   KeySquare, Plus, Loader2, CheckCircle2, XCircle, ShieldCheck, Wallet,
-  CalendarClock, FileWarning, Handshake, ArrowRightLeft, RefreshCcw
+  CalendarClock, FileWarning, Handshake, ArrowRightLeft, RefreshCcw, FileText
 } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
@@ -566,7 +566,25 @@ function AgreementDetail({ contract, isAr, canDecide, canOperate, busy, setBusy,
   const [payModal, setPayModal] = useState<LtoInstallment | null>(null);
   const [settleModalOpen, setSettleModalOpen] = useState(false);
   const [termModalOpen, setTermModalOpen] = useState(false);
+  const [generatingDoc, setGeneratingDoc] = useState(false);
   const lto = contract.lto;
+
+  const generateAndOpenContract = async () => {
+    setGeneratingDoc(true);
+    try {
+      const doc = await callApi(`/api/lto/contracts/${contract.id}/generate-contract`, 'POST');
+      const res = await apiFetch(doc.fileUrl);
+      if (!res.ok) throw new Error(`Failed to load document (${res.status}).`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    } catch (e) {
+      showToast(isAr ? 'فشل توليد العقد' : 'Contract Generation Failed', errorText(e));
+    } finally {
+      setGeneratingDoc(false);
+    }
+  };
 
   const loadView = useCallback(async () => {
     setLoadingSchedule(true);
@@ -617,6 +635,19 @@ function AgreementDetail({ contract, isAr, canDecide, canOperate, busy, setBusy,
 
       {handoverInspectionId && (
         <p className="text-zinc-500 flex items-center gap-1.5"><Handshake className="w-3.5 h-3.5" /> {isAr ? 'فحص التسليم:' : 'Handover inspection:'} <span className="font-mono text-zinc-300">{handoverInspectionId}</span></p>
+      )}
+
+      {canOperate && (
+        <div>
+          <button
+            onClick={generateAndOpenContract}
+            disabled={generatingDoc}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-40"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            {generatingDoc ? (isAr ? 'جارِ التوليد...' : 'Generating...') : (isAr ? 'توليد عقد الإيجار المنتهي بالتملك' : 'Generate Lease-to-Own Contract')}
+          </button>
+        </div>
       )}
 
       <div className="border-t border-zinc-800 pt-4">
