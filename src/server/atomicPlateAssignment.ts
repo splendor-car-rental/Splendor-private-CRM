@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import type { PlateAssignmentHistory, Vehicle, VehicleTimelineEvent, AuditLog } from '../types';
 import { globalStore } from './dataStore';
 import { runDurableTransaction } from './persistence';
@@ -71,8 +72,8 @@ export async function assignPlateAtomically(
       const previousPlateCity = vehicle.plateCity || '';
       const targetHistory = Array.isArray(vehicle.plateHistory) ? [...vehicle.plateHistory] : [];
       const targetTimeline = Array.isArray(vehicle.timeline) ? [...vehicle.timeline] : [];
-      const eventId = `EVT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const assignmentId = `PLT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const eventId = `EVT-${randomUUID()}`;
+      const assignmentId = `PLT-${randomUUID()}`;
 
       if (otherVehicle && otherSnap) {
         const otherHistory = Array.isArray(otherVehicle.plateHistory) ? [...otherVehicle.plateHistory] : [];
@@ -157,7 +158,7 @@ export async function assignPlateAtomically(
         updatedAt: effectiveDate
       };
 
-      const auditId = `AUD-PLATE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const auditId = `AUD-PLATE-${randomUUID()}`;
       const auditLog: AuditLog = {
         id: auditId,
         timestamp: effectiveDate,
