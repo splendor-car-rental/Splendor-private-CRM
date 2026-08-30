@@ -146,6 +146,78 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     sourceNote: 'Was a hardcoded literal at src/server/notificationEngine.ts (contract-overdue case).'
   },
 
+  // ---- business_rule: customer late-fee thresholds (migrated from
+  // src/server/lateFees.ts / src/config/procurement.ts, Procurement Phase
+  // 1's own config, which predated this engine and was never migrated
+  // into it). computeLateFee() is a pure, synchronous function called
+  // fresh on every /api/late-fees/compute request and on every waiver
+  // request -- it stores nothing itself, so changing either value here
+  // only affects fees computed AFTER the change; a LateFeeWaiver already
+  // on record keeps its own frozen originalLateFeeAmount forever,
+  // regardless of any later rule change (historical calculations are
+  // never retroactively recomputed). The two time thresholds below were
+  // given as real numbers by the business spec; the values are unchanged
+  // by this migration -- only their storage moved from a hardcoded
+  // literal to this auditable, versioned engine. ----
+  {
+    id: 'lateFeeGracePeriodHours',
+    label: 'Late-fee grace period',
+    labelAr: 'فترة السماح قبل احتساب رسوم التأخير',
+    description: 'Hours after the scheduled return time before any late fee starts accruing.',
+    tier: 'business_rule', valueType: 'number', value: 1, min: 0, max: 24, editable: true,
+    sourceNote: 'Was LATE_FEE_GRACE_PERIOD_HOURS, a hardcoded literal at src/config/procurement.ts:136.'
+  },
+  {
+    id: 'lateFeeExtraDayConversionHours',
+    label: 'Late-fee full-day conversion threshold',
+    labelAr: 'حد التحويل إلى يوم إيجار كامل لرسوم التأخير',
+    description: 'Hours of delay past the grace period after which the late fee converts from hourly billing to one full extra rental day.',
+    tier: 'business_rule', valueType: 'number', value: 6, min: 1, max: 24, editable: true,
+    sourceNote: 'Was LATE_FEE_EXTRA_DAY_CONVERSION_HOURS, a hardcoded literal at src/config/procurement.ts:137.'
+  },
+
+  // ---- Master Blueprint Rule Set (this session) -- see docs/SPLENDOR_MASTER_RULES.md ----
+  {
+    id: 'bookingOperationalBufferHours',
+    label: 'Mandatory post-booking operational buffer',
+    labelAr: 'فترة الأمان التشغيلي الإلزامية بعد كل حجز',
+    description: 'Hours reserved after every booking ends, before the next booking on the same vehicle may start -- covers receipt, inspection, detailing, and repositioning (RULE-R03).',
+    tier: 'business_rule', valueType: 'number', value: 3, min: 0, max: 24, editable: true,
+    sourceNote: 'Blueprint item 10 (REQ-BP10-2): "فترة أمان تشغيلي تلقائية قدرها 3 ساعات".'
+  },
+  {
+    id: 'bookingSoftHoldMinutes',
+    label: 'Temporary checkout hold duration',
+    labelAr: 'مدة الحجز المؤقت أثناء الدفع',
+    description: 'Minutes a vehicle/window is soft-held for a customer mid-checkout before automatically releasing back to availability (RULE-R04).',
+    tier: 'business_rule', valueType: 'number', value: 10, min: 1, max: 60, editable: true,
+    sourceNote: 'Blueprint item 10 (REQ-BP10-4): "قفلاً مؤقتاً لمدة 10 دقائق فقط".'
+  },
+  {
+    id: 'staffDiscountCeilingPercent',
+    label: 'Staff discount ceiling before manager approval',
+    labelAr: 'الحد الأقصى للخصم قبل موافقة المدير',
+    description: 'Maximum discount percentage a non-manager can apply without a separate, logged sales-manager approval (RULE-P01).',
+    tier: 'business_rule', valueType: 'number', value: 5, min: 0, max: 100, editable: true,
+    sourceNote: 'Blueprint item 11 (REQ-BP11-5): "الموظف العادي لا يملك صلاحية الخصم بأكثر من 5%".'
+  },
+  {
+    id: 'maintenanceOilFilterIntervalKm',
+    label: 'Oil/filter maintenance interval (km)',
+    labelAr: 'دورة صيانة الزيوت والفلاتر (كم)',
+    description: 'Kilometers between scheduled oil/filter maintenance (RULE-M01).',
+    tier: 'business_rule', valueType: 'number', value: 7000, min: 3000, max: 15000, editable: true,
+    sourceNote: 'Blueprint item 9: "كل 5,000 إلى 8,000 كم" -- midpoint used as the editable default.'
+  },
+  {
+    id: 'maintenanceAlertLeadKm',
+    label: 'Pre-maintenance workshop alert lead distance (km)',
+    labelAr: 'مسافة التنبيه المسبق قبل موعد الصيانة (كم)',
+    description: 'Kilometers before a maintenance threshold at which the workshop manager is alerted (RULE-M03).',
+    tier: 'business_rule', valueType: 'number', value: 500, min: 100, max: 2000, editable: true,
+    sourceNote: 'Blueprint item 9: "قبل موعد الصيانة بـ 500 كم".'
+  },
+
   // ---- editable:false visibility mirrors: still owned by their existing route/transaction ----
   {
     id: 'contractDefaultMileageAllowanceKm',
@@ -457,5 +529,82 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     description: 'Not yet defined -- requires legal/regulatory review before activation. Operational communications log, not a legal/financial record -- likely a shorter period than the categories above once reviewed.',
     tier: 'sensitive_rule', valueType: 'number', value: null, min: 1, max: 36500, editable: true,
     sourceNote: 'New in Phase 23.9 -- framework only, no prior value, no value invented here.'
+  },
+
+  // ---- Lease-to-Own (Splendor Private Mobility Operating System) ----
+  // Financial-formula rules (monthly markup, processing fee, early-
+  // settlement fee) have NEVER existed anywhere in this codebase before --
+  // seeded at value:null per this catalog's own established precedent
+  // (see the retention* rules above), never an invented percentage. A
+  // CEO/Admin must set a real number through this same Business Rules
+  // Engine (Settings) before src/server/leaseToOwnPolicy.ts will compute a
+  // real financial offer -- see computeLtoFinancialOffer()'s
+  // LtoPolicyNotConfiguredError. Operational/timing rules below (grace
+  // days, late threshold, minimum age, application hold) are seeded with a
+  // real, reasonable default, same class as notificationExpiryLookaheadDays
+  // above -- not a financial formula, an operational window.
+  {
+    id: 'ltoMonthlyMarkupRatePercent',
+    label: 'Lease-to-Own: total markup rate over the financed amount (%)',
+    labelAr: 'الإيجار المنتهي بالتملك: نسبة الهامش الإجمالية على المبلغ الممول (%)',
+    description: 'Not yet defined -- requires a business/finance decision before the first real LTO offer can be issued. Applied once, over the whole term, to (vehicle price - down payment - final payment), then spread evenly across the monthly installments -- see computeLtoFinancialOffer().',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 0, max: 100, editable: true,
+    sourceNote: 'New this session -- no prior LTO financing existed in this codebase; no value invented.'
+  },
+  {
+    id: 'ltoProcessingFeeAed',
+    label: 'Lease-to-Own: one-time processing/documentation fee (AED)',
+    labelAr: 'الإيجار المنتهي بالتملك: رسوم معالجة/توثيق لمرة واحدة (درهم)',
+    description: 'Not yet defined -- requires a business decision. Added once to the total contract value, VAT-inclusive via the same UAE_VAT_RATE every other fee in this app already uses.',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 0, max: 100000, editable: true,
+    sourceNote: 'New this session -- no prior LTO financing existed in this codebase; no value invented.'
+  },
+  {
+    id: 'ltoOwnershipTransferFeeAed',
+    label: 'Lease-to-Own: ownership transfer processing fee (AED, borne by the customer)',
+    labelAr: 'الإيجار المنتهي بالتملك: رسوم إجراءات نقل الملكية (درهم، على نفقة العميل)',
+    description: 'Not yet defined -- requires a business decision (represents real RTA/administrative transfer costs). Per Splendor\'s own approved LTO contract template (Clause 6): full early settlement requires the lessor to immediately transfer ownership "at the expense of" the customer requesting it -- the contract sets NO early-settlement penalty or discount on the outstanding balance itself, only that the transfer\'s processing costs are the customer\'s. This fee models exactly that cost, added to the outstanding balance to form the final settlement amount -- see computeSettlementAmount().',
+    tier: 'sensitive_rule', valueType: 'number', value: null, min: 0, max: 100000, editable: true,
+    sourceNote: 'New this session -- sourced from Splendor\'s real LTO contract template Clause 6; no percentage/penalty invented since the contract specifies none.'
+  },
+  {
+    id: 'ltoConsecutiveMissedInstallmentsForDefault',
+    label: 'Lease-to-Own: consecutive missed monthly installments that make an agreement eligible for default/termination',
+    labelAr: 'الإيجار المنتهي بالتملك: عدد الأقساط الشهرية المتتالية غير المسددة المؤهلة للتعثر/الفسخ',
+    description: 'Per Splendor\'s own approved LTO contract template (Clause 3): "the lessor has the right to terminate the contract and recover the vehicle in case of a delay in installment payments for two consecutive months." This is a REAL, sourced contractual threshold, not an invented one -- markLtoDefault()/the collections workflow uses this to flag an agreement as default-eligible, but never terminates or recovers the vehicle automatically (that remains a human decision with RBAC/SoD -- see RULE-LTO09).',
+    tier: 'business_rule', valueType: 'number', value: 2, min: 1, max: 12, editable: true,
+    sourceNote: 'Sourced directly from Splendor\'s real, approved LTO contract template, Clause 3 ("شهرين متتاليين") -- not invented.'
+  },
+  {
+    id: 'ltoMinCustomerAgeYears',
+    label: 'Lease-to-Own: minimum customer age (years)',
+    labelAr: 'الإيجار المنتهي بالتملك: الحد الأدنى لعمر العميل (سنة)',
+    description: 'Minimum age for LTO eligibility, checked against the customer\'s ID/passport expiry-implied or recorded date of birth if on file.',
+    tier: 'business_rule', valueType: 'number', value: 21, min: 18, max: 99, editable: true,
+    sourceNote: 'New this session -- a reasonable operational default (UAE legal adult age), not a financial formula.'
+  },
+  {
+    id: 'ltoGraceDays',
+    label: 'Lease-to-Own: grace period after an installment\'s due date (days)',
+    labelAr: 'الإيجار المنتهي بالتملك: فترة سماح بعد تاريخ استحقاق القسط (أيام)',
+    description: 'An unpaid installment still shows as DUE (not LATE) for this many days after its due date.',
+    tier: 'business_rule', valueType: 'number', value: 5, min: 0, max: 60, editable: true,
+    sourceNote: 'New this session -- an operational collections-timing window, not a financial formula.'
+  },
+  {
+    id: 'ltoLateThresholdDays',
+    label: 'Lease-to-Own: days late before an installment is OVERDUE',
+    labelAr: 'الإيجار المنتهي بالتملك: عدد أيام التأخير قبل اعتبار القسط متأخر السداد',
+    description: 'Days past the due date (beyond the grace period) before an installment escalates from LATE to OVERDUE for collections purposes.',
+    tier: 'business_rule', valueType: 'number', value: 15, min: 1, max: 180, editable: true,
+    sourceNote: 'New this session -- an operational collections-timing window, not a financial formula.'
+  },
+  {
+    id: 'ltoApplicationHoldDays',
+    label: 'Lease-to-Own: vehicle hold duration while an application is under review (days)',
+    labelAr: 'الإيجار المنتهي بالتملك: مدة حجز المركبة أثناء مراجعة الطلب (أيام)',
+    description: 'How long the selected vehicle is held (via the existing temporary-hold mechanism) once an LTO application is submitted, before the hold lapses if the application has not been decided.',
+    tier: 'business_rule', valueType: 'number', value: 3, min: 1, max: 30, editable: true,
+    sourceNote: 'New this session -- an operational timing window, matching the existing temporary-hold mechanism\'s own precedent.'
   }
 ];

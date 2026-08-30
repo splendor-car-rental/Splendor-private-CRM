@@ -142,7 +142,12 @@ interface CRMContextType {
   refundDeposit: (depositId: string, amount: number) => Promise<Deposit>;
   
   uploadBankBatch: (batchData: any) => Promise<void>;
-  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string) => Promise<void>;
+  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string, classification?: any, duplicateOverrideReason?: string) => Promise<void>;
+  reclassifyBankTransaction: (txnId: string, classification: any, reason: string) => Promise<void>;
+  previewBankImport: (file: any) => Promise<any>;
+  confirmBankImport: (file: any) => Promise<any>;
+  startVehicleMaintenance: (vehicleId: string, reason: string) => Promise<any>;
+  logVehicleMaintenance: (vehicleId: string, mileageAtService: number, notes: string) => Promise<any>;
   runAutoReconciliation: () => Promise<void>;
   addCompanyBankAccount: (data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
   updateCompanyBankAccount: (id: string, data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
@@ -1476,6 +1481,15 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return doc;
   };
 
+  const reclassifyBankTransaction = async (txnId: string, classification: any, reason: string) => {
+    await FirestoreService.update(COLLECTIONS.BANK_TRANSACTIONS, txnId, { classification, reclassificationReason: reason, reclassifiedAt: new Date().toISOString() });
+    setBankTransactions(prev => prev.map(t => t.id === txnId ? { ...t, classification, reclassificationReason: reason } : t));
+  };
+  const previewBankImport = async (file: any) => ({ fileName: file?.fileName || file?.name || 'bank-import', transactions: [], warnings: [] });
+  const confirmBankImport = async (file: any) => { await uploadBankBatch(file); return { confirmed: true, fileName: file?.fileName || file?.name || 'bank-import' }; };
+  const startVehicleMaintenance = async (vehicleId: string, reason: string) => { const updated = await updateVehicle(vehicleId, { maintenanceStatus: 'IN_PROGRESS', maintenanceReason: reason, maintenanceStartedAt: new Date().toISOString() } as any); return updated; };
+  const logVehicleMaintenance = async (vehicleId: string, mileageAtService: number, notes: string) => { const updated = await updateVehicle(vehicleId, { lastMaintenanceMileage: mileageAtService, lastMaintenanceNotes: notes, lastMaintenanceAt: new Date().toISOString(), maintenanceStatus: 'COMPLETED' } as any); return updated; };
+
   return (
     <CRMContext.Provider value={{
       customers, leads, opportunities, vehicles, quotations,
@@ -1500,7 +1514,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
-      uploadBankBatch, reconcileBankTransaction, runAutoReconciliation,
+      uploadBankBatch, reconcileBankTransaction, reclassifyBankTransaction, previewBankImport, confirmBankImport, startVehicleMaintenance, logVehicleMaintenance, runAutoReconciliation,
       addCompanyBankAccount, updateCompanyBankAccount, deleteCompanyBankAccount,
       addManualToll, updateTollTransaction, deleteTollTransaction,
       previewTollImport, confirmTollImport, updateTollPricingConfig,

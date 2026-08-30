@@ -54,7 +54,7 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput, r
     type: input.type,
     entityType: input.entityType,
     entityId: input.entityId,
-    fieldPath: input.fieldPath,
+    ...(input.fieldPath !== undefined ? { fieldPath: input.fieldPath } : {}),
     requestedBy: input.requestedBy,
     requestedByName: input.requestedByName,
     requestedByRole: input.requestedByRole,

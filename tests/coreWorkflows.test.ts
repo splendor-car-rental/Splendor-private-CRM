@@ -52,7 +52,7 @@ vi.mock('firebase-admin', () => {
     }
   };
 
-  const makeDocRef = (collectionName: string, id: string) => ({
+  const makeDocRef = (collectionName: string, id: string): any => ({
     id,
     __collection: collectionName,
     get: async () => {
@@ -81,7 +81,11 @@ vi.mock('firebase-admin', () => {
     },
     delete: async () => {
       collectionOf(collectionName).delete(id);
-    }
+    },
+    // A doc's subcollection is just another top-level collection keyed by
+    // "<collection>/<docId>/<subName>" -- enough for whatsappConversation.ts's
+    // messages subcollection to round-trip through set/get/orderBy/limit.
+    collection: (subName: string) => makeCollectionRef(`${collectionName}/${id}/${subName}`)
   });
 
   const makeCollectionRef = (name: string): any => ({
@@ -91,7 +95,9 @@ vi.mock('firebase-admin', () => {
       const docs = Array.from(col.entries()).map(([id, data]) => ({ id, data: () => data }));
       return { docs, size: docs.length };
     },
-    where: () => makeCollectionRef(name)
+    where: () => makeCollectionRef(name),
+    orderBy: () => makeCollectionRef(name),
+    limit: () => makeCollectionRef(name)
   });
 
   const firestoreObj: any = {
@@ -161,6 +167,8 @@ let adminMock: {
 
 const FINANCE_UID = 'finance-uid';
 const OPS_UID = 'ops-uid';
+const CEO_UID = 'ceo-uid';
+const SALES_UID = 'sales-uid';
 
 beforeAll(async () => {
   process.env.VERCEL = '1';
@@ -170,6 +178,8 @@ beforeAll(async () => {
   adminMock = (adminModule.default as any).__test;
   adminMock.usersDb.set(FINANCE_UID, { role: 'finance', name: 'Test Finance' });
   adminMock.usersDb.set(OPS_UID, { role: 'operations', name: 'Test Ops' });
+  adminMock.usersDb.set(CEO_UID, { role: 'ceo', name: 'Test CEO' });
+  adminMock.usersDb.set(SALES_UID, { role: 'sales', name: 'Test Sales' });
 
   const serverModule = await import('../server');
   app = serverModule.default;
@@ -378,18 +388,42 @@ describe('POST /api/deposits/:id/apply and /refund', () => {
 });
 
 describe('POST /api/bank-transactions/:id/reconcile', () => {
-  it('reconciles a pending transaction against an invoice', async () => {
+  it('reconciles a pending transaction against an invoice with a real classification', async () => {
     seedDoc('bank_transactions', 'BTX-REC-1', { id: 'BTX-REC-1', reference: 'REF1', credit: 500, reconciled: false, status: 'pending' });
     seedDoc('invoices', 'INV-REC-1', { id: 'INV-REC-1', totalAmount: 1000, paidAmount: 0, balanceDue: 1000, status: 'unpaid' });
 
     const res = await request(app)
       .post('/api/bank-transactions/BTX-REC-1/reconcile')
       .set(authAs(FINANCE_UID))
-      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1' });
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1', classification: 'settlement' });
 
     expect(res.status).toBe(200);
-    expect(adminMock.store.get('bank_transactions')?.get('BTX-REC-1').reconciled).toBe(true);
+    const txn = adminMock.store.get('bank_transactions')?.get('BTX-REC-1');
+    expect(txn.reconciled).toBe(true);
+    expect(txn.receivedAmountClassification).toBe('settlement');
+    expect(txn.classificationHistory).toHaveLength(1);
     expect(adminMock.store.get('invoices')?.get('INV-REC-1').paidAmount).toBe(500);
+  });
+
+  // FIN-002: classification is required and never guessed -- omitting it
+  // must fail loudly (400), not silently default to something.
+  it('rejects reconciliation with no classification', async () => {
+    seedDoc('bank_transactions', 'BTX-REC-3', { id: 'BTX-REC-3', reference: 'REF3', credit: 200, reconciled: false, status: 'pending' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-REC-3/reconcile')
+      .set(authAs(FINANCE_UID))
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/classification is required/i);
+  });
+
+  it('rejects reconciliation with an invalid classification value', async () => {
+    seedDoc('bank_transactions', 'BTX-REC-4', { id: 'BTX-REC-4', reference: 'REF4', credit: 200, reconciled: false, status: 'pending' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-REC-4/reconcile')
+      .set(authAs(FINANCE_UID))
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1', classification: 'made_up_value' });
+    expect(res.status).toBe(400);
   });
 
   it('rejects reconciling the same transaction twice', async () => {
@@ -397,7 +431,56 @@ describe('POST /api/bank-transactions/:id/reconcile', () => {
     const res = await request(app)
       .post('/api/bank-transactions/BTX-REC-2/reconcile')
       .set(authAs(FINANCE_UID))
-      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1' });
+      .send({ targetRecordType: 'invoice', targetRecordId: 'INV-REC-1', classification: 'settlement' });
+    expect(res.status).toBe(409);
+  });
+
+  it('does not touch the invoices collection when targetRecordType is not invoice', async () => {
+    seedDoc('bank_transactions', 'BTX-REC-5', { id: 'BTX-REC-5', reference: 'REF5', credit: 300, reconciled: false, status: 'pending' });
+    seedDoc('invoices', 'INV-REC-1', { id: 'INV-REC-1', totalAmount: 1000, paidAmount: 0, balanceDue: 1000, status: 'unpaid' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-REC-5/reconcile')
+      .set(authAs(FINANCE_UID))
+      .send({ targetRecordType: 'deposit', targetRecordId: 'INV-REC-1', classification: 'security_deposit' });
+    expect(res.status).toBe(200);
+    // Same id happens to collide with the invoice seeded above -- the fix
+    // means that invoice's paidAmount must stay untouched.
+    expect(adminMock.store.get('invoices')?.get('INV-REC-1').paidAmount).toBe(0);
+  });
+});
+
+describe('POST /api/bank-transactions/:id/reclassify', () => {
+  it('changes only the classification, never the settled amount', async () => {
+    seedDoc('bank_transactions', 'BTX-RCL-1', {
+      id: 'BTX-RCL-1', reference: 'REFRCL1', credit: 700, reconciled: true, status: 'approved',
+      receivedAmountClassification: 'settlement', classificationHistory: [{ classification: 'settlement', setBy: 'x', setByName: 'x', setAt: 'now' }]
+    });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-RCL-1/reclassify')
+      .set(authAs(FINANCE_UID))
+      .send({ classification: 'advance_payment', reason: 'Turned out there was no invoice yet.' });
+    expect(res.status).toBe(200);
+    const txn = adminMock.store.get('bank_transactions')?.get('BTX-RCL-1');
+    expect(txn.receivedAmountClassification).toBe('advance_payment');
+    expect(txn.classificationHistory).toHaveLength(2);
+    expect(txn.credit).toBe(700); // unchanged
+  });
+
+  it('rejects reclassification without a reason', async () => {
+    seedDoc('bank_transactions', 'BTX-RCL-2', { id: 'BTX-RCL-2', reference: 'REFRCL2', credit: 100, reconciled: true, status: 'approved', receivedAmountClassification: 'settlement' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-RCL-2/reclassify')
+      .set(authAs(FINANCE_UID))
+      .send({ classification: 'credit_balance' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects reclassifying a transaction that was never reconciled', async () => {
+    seedDoc('bank_transactions', 'BTX-RCL-3', { id: 'BTX-RCL-3', reference: 'REFRCL3', credit: 100, reconciled: false, status: 'pending' });
+    const res = await request(app)
+      .post('/api/bank-transactions/BTX-RCL-3/reclassify')
+      .set(authAs(FINANCE_UID))
+      .send({ classification: 'credit_balance', reason: 'test' });
     expect(res.status).toBe(409);
   });
 });
@@ -478,5 +561,438 @@ describe('Public vehicle DTO sanitization (data leakage prevention)', () => {
       website: { enabled: false, visibility: 'INTERNAL_ONLY' }
     };
     expect(SplendorConnectEngine.toPublicVehicleDTO(vehicle)).toBeNull();
+  });
+});
+
+describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set)', () => {
+  it('rejects a passport-based block that is missing the issuing country -- passport number alone is not a unique enough match', async () => {
+    const res = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'P1234567', tier: 'full', reason: 'Reckless driving on a prior rental' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/issuing country/i);
+  });
+
+  it('creates a full block and rejects a new-customer registration matching the exact identifier pair', async () => {
+    const create = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', tier: 'full', reason: 'Fraud attempt on a prior booking' });
+    expect(create.status).toBe(201);
+    expect(create.body.identifierValue).toBe('P9988776'); // normalized uppercase
+
+    const blocked = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Blocked Person', email: 'blocked@example.com', phone: '+971500000001', idType: 'passport', idNumber: 'P9988776', nationality: 'United Kingdom' });
+    expect(blocked.status).toBe(403);
+  });
+
+  it('never matches by name alone -- a different passport number with the same name is NOT blocked', async () => {
+    await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'P1111111', identifierCountry: 'France', customerName: 'Jean Dupont', tier: 'full', reason: 'Damage dispute' });
+
+    const differentPassport = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Jean Dupont', email: 'jean2@example.com', phone: '+971500000002', idType: 'passport', idNumber: 'P2222222', nationality: 'France' });
+    expect(differentPassport.status).toBe(201); // same name, different passport -- not a match
+  });
+
+  it('never matches a passport number alone without the correct issuing country', async () => {
+    await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'passport', identifierValue: 'P3333333', identifierCountry: 'Germany', tier: 'full', reason: 'Unpaid fines' });
+
+    const sameNumberDifferentCountry = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Someone Else', email: 'someone@example.com', phone: '+971500000003', idType: 'passport', idNumber: 'P3333333', nationality: 'Spain' });
+    expect(sameNumberDifferentCountry.status).toBe(201); // same passport number, different country -- correctly NOT a match
+  });
+
+  it('a conditional block allows the customer through with a warning, not a rejection', async () => {
+    await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-1111-1111111-1', tier: 'conditional', conditionalNote: 'Requires a 5,000 AED raised deposit and operations-manager sign-off.', reason: 'Minor prior damage dispute, resolved' });
+
+    const res = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Conditional Customer', email: 'conditional@example.com', phone: '+971500000004', idType: 'emirates_id', idNumber: '784-1111-1111111-1' });
+    expect(res.status).toBe(201);
+    expect(res.body.blocklistWarning).toMatch(/raised deposit/i);
+  });
+
+  it('RULE-B04: unblocking requires a DIFFERENT, authorized approver -- the requester cannot decide their own request', async () => {
+    const create = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-2222-2222222-2', tier: 'full', reason: 'Reckless driving' });
+
+    const unblockReq = await request(app)
+      .post(`/api/blocklist/${create.body.id}/unblock-requests`)
+      .set(authAs(OPS_UID))
+      .send({ reason: 'Customer provided evidence disputing the original claim.' });
+    expect(unblockReq.status).toBe(201);
+
+    // Same requester attempting to decide their own request is rejected.
+    const selfDecide = await request(app)
+      .post(`/api/procurement/approvals/${unblockReq.body.approvalRequestId}/decide`)
+      .set(authAs(OPS_UID))
+      .send({ decision: 'approved', note: 'self-approving' });
+    expect(selfDecide.status).toBe(403); // operations isn't a decider role either, blocked before the SoD check even runs
+
+    // A different, authorized decider (CEO) approves it.
+    const decide = await request(app)
+      .post(`/api/procurement/approvals/${unblockReq.body.approvalRequestId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'Evidence reviewed and accepted.' });
+    expect(decide.status).toBe(200);
+
+    // The customer can now be registered -- the block was actually removed.
+    const afterUnblock = await request(app)
+      .post('/api/customers')
+      .set(authAs(SALES_UID))
+      .send({ fullName: 'Unblocked Customer', email: 'unblocked@example.com', phone: '+971500000005', idType: 'emirates_id', idNumber: '784-2222-2222222-2' });
+    expect(afterUnblock.status).toBe(201);
+  });
+
+  it('a role without blocklist-management permission cannot create a block', async () => {
+    const res = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(SALES_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-9999-9999999-9', tier: 'full', reason: 'Attempted' });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () => {
+  it('applies a discount at or below the 5% ceiling immediately, with no approval needed', async () => {
+    const res = await request(app)
+      .post('/api/quotations')
+      .set(authAs(SALES_UID))
+      .send({
+        customerName: 'Within Ceiling Client', vehicleName: 'GT3 RS', dailyRate: 2000, durationDays: 5,
+        discountAmount: 500, // 500 / 10000 = 5% exactly -- at the ceiling, not above it
+        ownerId: SALES_UID, ownerName: 'Test Sales'
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.discountAmount).toBe(500);
+    expect(res.body.discountOverridePending).toBeFalsy();
+    expect(res.body.discountApprovalId).toBeUndefined();
+  });
+
+  it('caps a non-manager discount above the ceiling and opens a pending manager-approval request', async () => {
+    const res = await request(app)
+      .post('/api/quotations')
+      .set(authAs(SALES_UID))
+      .send({
+        customerName: 'Above Ceiling Client', vehicleName: 'Cullinan', dailyRate: 3000, durationDays: 4,
+        discountAmount: 2400, // 2400 / 12000 = 20% -- well above the 5% ceiling
+        ownerId: SALES_UID, ownerName: 'Test Sales'
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.discountOverridePending).toBe(true);
+    expect(res.body.discountAmount).toBe(600); // capped at 5% of 12000
+    expect(res.body.requestedDiscountAmount).toBe(2400);
+    expect(res.body.grandTotal).toBeLessThan(12000); // the capped (safe) total, not the fully-discounted one
+    expect(res.body.discountApprovalId).toBeTruthy();
+
+    const approvals = await request(app).get('/api/procurement/approvals').set(authAs(CEO_UID));
+    const pending = approvals.body.find((a: any) => a.id === res.body.discountApprovalId);
+    expect(pending.entityType).toBe('Quotation');
+    expect(pending.action).toBe('discount_override');
+    expect(pending.status).toBe('pending');
+
+    // A different authorized decider (CEO) approves the full requested discount.
+    const decide = await request(app)
+      .post(`/api/procurement/approvals/${res.body.discountApprovalId}/decide`)
+      .set(authAs(CEO_UID))
+      .send({ decision: 'approved', note: 'VIP client, approved by sales manager.' });
+    expect(decide.status).toBe(200);
+
+    const quotations = await request(app).get('/api/quotations').set(authAs(CEO_UID));
+    const updated = quotations.body.find((q: any) => q.id === res.body.id);
+    expect(updated.discountAmount).toBe(2400);
+    expect(updated.discountOverridePending).toBe(false);
+    expect(updated.grandTotal).toBeLessThan(res.body.grandTotal); // the full discount is now reflected
+  });
+
+  it('a non-manager cannot approve their own quotation discount-override request', async () => {
+    const create = await request(app)
+      .post('/api/quotations')
+      .set(authAs(SALES_UID))
+      .send({ customerName: 'Self Approve Attempt', vehicleName: 'Urus', dailyRate: 1000, durationDays: 10, discountAmount: 3000, ownerId: SALES_UID, ownerName: 'Test Sales' });
+    expect(create.body.discountOverridePending).toBe(true);
+
+    const selfDecide = await request(app)
+      .post(`/api/procurement/approvals/${create.body.discountApprovalId}/decide`)
+      .set(authAs(SALES_UID))
+      .send({ decision: 'approved', note: 'self-approving' });
+    expect(selfDecide.status).toBe(403); // sales isn't a decider role at all, blocked before the SoD check even runs
+  });
+
+  it('ceo/admin can apply any discount immediately -- they are the manager approval, not subject to the ceiling', async () => {
+    const res = await request(app)
+      .post('/api/quotations')
+      .set(authAs(CEO_UID))
+      .send({ customerName: 'Manager Override Client', vehicleName: 'Phantom', dailyRate: 5000, durationDays: 2, discountAmount: 3000, ownerId: CEO_UID, ownerName: 'Test CEO' });
+    expect(res.status).toBe(201);
+    expect(res.body.discountAmount).toBe(3000); // full amount, 30% of 10000, applied without a ceiling check
+    expect(res.body.discountOverridePending).toBeFalsy();
+  });
+});
+
+describe('Vehicle Inspection & Photo Evidence (Splendor Master Rule Set, Module 08)', () => {
+  function seedVehicleForInspection(id: string, overrides: Record<string, any> = {}) {
+    const vehicle = { id, make: 'Test', model: 'Car', plateNumber: `P-${id}`, status: 'available', ...overrides };
+    globalStore.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  function seedContractForInspection(id: string, vehicleId: string, overrides: Record<string, any> = {}) {
+    const contract = { id, vehicleId, contractNumber: id, status: 'active', ...overrides };
+    globalStore.contracts.push(contract);
+    return contract;
+  }
+
+  it('rejects starting an inspection from a role without operational access', async () => {
+    seedVehicleForInspection('VEH-INSP-1');
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(SALES_UID))
+      .send({ vehicleId: 'VEH-INSP-1', type: 'pre_delivery' });
+    expect(res.status).toBe(403);
+  });
+
+  it('requires vehicleId and rejects an unknown vehicle', async () => {
+    const missingField = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ type: 'pre_delivery' });
+    expect(missingField.status).toBe(400);
+
+    const unknownVehicle = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-DOES-NOT-EXIST', type: 'pre_delivery' });
+    expect(unknownVehicle.status).toBe(404);
+  });
+
+  it('rejects a contract that is not actually associated with the given vehicle', async () => {
+    seedVehicleForInspection('VEH-INSP-2');
+    seedVehicleForInspection('VEH-INSP-3');
+    seedContractForInspection('CON-INSP-1', 'VEH-INSP-3');
+
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(OPS_UID))
+      .send({ vehicleId: 'VEH-INSP-2', contractId: 'CON-INSP-1', type: 'handover' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not associated/i);
+  });
+
+  it('requires a contract for a handover inspection', async () => {
+    seedVehicleForInspection('VEH-INSP-4');
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(OPS_UID))
+      .send({ vehicleId: 'VEH-INSP-4', type: 'handover' });
+    expect(res.status).toBe(400);
+  });
+
+  it('starts a draft pre_delivery inspection as operations', async () => {
+    seedVehicleForInspection('VEH-INSP-5');
+    const res = await request(app)
+      .post('/api/inspections')
+      .set(authAs(OPS_UID))
+      .send({ vehicleId: 'VEH-INSP-5', type: 'pre_delivery' });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('draft');
+    expect(res.body.requiredPhotoCategories).toContain('front');
+
+    const fetched = await request(app).get(`/api/inspections/${res.body.id}`).set(authAs(OPS_UID));
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.id).toBe(res.body.id);
+
+    const notFound = await request(app).get('/api/inspections/INS-NOPE').set(authAs(OPS_UID));
+    expect(notFound.status).toBe(404);
+  });
+
+  it('two concurrent identical start requests with the same Idempotency-Key create exactly one inspection', async () => {
+    seedVehicleForInspection('VEH-INSP-6');
+    const body = { vehicleId: 'VEH-INSP-6', type: 'pre_delivery' };
+    const [a, b] = await Promise.all([
+      request(app).post('/api/inspections').set(authAs(OPS_UID)).set('Idempotency-Key', 'insp-concurrent-1').send(body),
+      request(app).post('/api/inspections').set(authAs(OPS_UID)).set('Idempotency-Key', 'insp-concurrent-1').send(body)
+    ]);
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    expect(a.body.id).toBe(b.body.id);
+  });
+
+  it('damage review requires a note and a decider role, and completion is blocked until every damage record is reviewed', async () => {
+    seedVehicleForInspection('VEH-INSP-7');
+    const start = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-INSP-7', type: 'in_rental' });
+    const id = start.body.id;
+
+    const damage = await request(app)
+      .post(`/api/inspections/${id}/damage`)
+      .set(authAs(OPS_UID))
+      .send({ part: 'hood', severity: 'dent', classification: 'new', description: 'Found during rental.' });
+    expect(damage.status).toBe(201);
+    const damageId = damage.body.damages[0].id;
+
+    const noteless = await request(app)
+      .put(`/api/inspections/${id}/damage/${damageId}/review`)
+      .set(authAs(CEO_UID))
+      .send({ liabilityStatus: 'customer_liable', reviewNotes: '' });
+    expect(noteless.status).toBe(400);
+
+    const wrongRole = await request(app)
+      .put(`/api/inspections/${id}/damage/${damageId}/review`)
+      .set(authAs(SALES_UID))
+      .send({ liabilityStatus: 'customer_liable', reviewNotes: 'Confirmed.' });
+    expect(wrongRole.status).toBe(403);
+
+    const beforeReview = await request(app).post(`/api/inspections/${id}/photos`).set(authAs(OPS_UID)).send({ category: 'damage', documentPath: 'vehicle-inspections/x/1.jpg', fileUrl: '/api/documents/file?path=x' });
+    expect(beforeReview.status).toBe(201);
+    const stillPending = await request(app).post(`/api/inspections/${id}/complete`).set(authAs(OPS_UID)).send({});
+    expect(stillPending.status).toBe(409);
+
+    const reviewed = await request(app)
+      .put(`/api/inspections/${id}/damage/${damageId}/review`)
+      .set(authAs(CEO_UID))
+      .send({ liabilityStatus: 'customer_liable', reviewNotes: 'Confirmed against handover photos.' });
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.damages[0].liabilityStatus).toBe('customer_liable');
+
+    const completed = await request(app).post(`/api/inspections/${id}/complete`).set(authAs(OPS_UID)).send({});
+    expect(completed.status).toBe(200);
+    expect(completed.body.status).toBe('completed');
+  });
+
+  it('a completed inspection is immutable -- no further mutation is accepted from anyone', async () => {
+    seedVehicleForInspection('VEH-INSP-8');
+    const start = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-INSP-8', type: 'in_rental' });
+    const id = start.body.id;
+    await request(app).post(`/api/inspections/${id}/photos`).set(authAs(OPS_UID)).send({ category: 'damage', documentPath: 'x', fileUrl: 'y' });
+    const completed = await request(app).post(`/api/inspections/${id}/complete`).set(authAs(OPS_UID)).send({});
+    expect(completed.body.status).toBe('completed');
+
+    const lateEdit = await request(app).patch(`/api/inspections/${id}`).set(authAs(CEO_UID)).send({ notes: 'trying to sneak in a change' });
+    expect(lateEdit.status).toBe(409);
+
+    const lateDamage = await request(app)
+      .post(`/api/inspections/${id}/damage`)
+      .set(authAs(CEO_UID))
+      .send({ part: 'hood', severity: 'dent', classification: 'new', description: 'too late' });
+    expect(lateDamage.status).toBe(409);
+  });
+
+  it('only ceo/admin may void an inspection', async () => {
+    seedVehicleForInspection('VEH-INSP-9');
+    const start = await request(app).post('/api/inspections').set(authAs(OPS_UID)).send({ vehicleId: 'VEH-INSP-9', type: 'pre_delivery' });
+    const id = start.body.id;
+
+    const deniedVoid = await request(app).post(`/api/inspections/${id}/void`).set(authAs(OPS_UID)).send({ reason: 'test' });
+    expect(deniedVoid.status).toBe(403);
+
+    const allowedVoid = await request(app).post(`/api/inspections/${id}/void`).set(authAs(CEO_UID)).send({ reason: 'Started on the wrong vehicle.' });
+    expect(allowedVoid.status).toBe(200);
+    expect(allowedVoid.body.status).toBe('voided');
+  });
+});
+
+describe('WhatsApp Unified Inbox (Splendor Master Rule Set, Module 13)', () => {
+  // Route-level authorization + basic behavior only -- the real state
+  // machine, customer matching, and reservation-creation flow are covered
+  // against the REAL Firestore emulator in tests/whatsappConversation.test.ts
+  // (listConversations()'s .where() queries only work correctly there; this
+  // mock's .where() is a no-op passthrough, same limitation documented for
+  // listInspections() above).
+  function seedConversation(phone: string, overrides: Record<string, any> = {}) {
+    const col = adminMock.store.get('whatsapp_conversations') || new Map();
+    adminMock.store.set('whatsapp_conversations', col);
+    col.set(phone, {
+      id: phone, phone, customerMatchStatus: 'unmatched', state: 'BROWSING', botActive: true,
+      priority: 'normal', tags: [], draft: {}, unread: true,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      ...overrides
+    });
+  }
+
+  it('rejects a non-operational role from reading the inbox', async () => {
+    const res = await request(app).get('/api/whatsapp/conversations').set(authAs(FINANCE_UID));
+    expect(res.status).toBe(403);
+  });
+
+  it('lists conversations for an authorized role', async () => {
+    seedConversation('971500000100');
+    const res = await request(app).get('/api/whatsapp/conversations').set(authAs(OPS_UID));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('404s for an unknown conversation', async () => {
+    const res = await request(app).get('/api/whatsapp/conversations/971500000999').set(authAs(OPS_UID));
+    expect(res.status).toBe(404);
+  });
+
+  it('fetches a single conversation with its message thread', async () => {
+    seedConversation('971500000101');
+    const res = await request(app).get('/api/whatsapp/conversations/971500000101').set(authAs(OPS_UID));
+    expect(res.status).toBe(200);
+    expect(res.body.phone).toBe('971500000101');
+    expect(Array.isArray(res.body.messages)).toBe(true);
+  });
+
+  it('rejects assign/handoff/reply from a role without operational access', async () => {
+    seedConversation('971500000102');
+    const assign = await request(app).post('/api/whatsapp/conversations/971500000102/assign').set(authAs(FINANCE_UID)).send({ priority: 'vip' });
+    expect(assign.status).toBe(403);
+    const handoff = await request(app).post('/api/whatsapp/conversations/971500000102/handoff').set(authAs(FINANCE_UID)).send({ botActive: false });
+    expect(handoff.status).toBe(403);
+    const reply = await request(app).post('/api/whatsapp/conversations/971500000102/reply').set(authAs(FINANCE_UID)).send({ text: 'hi' });
+    expect(reply.status).toBe(403);
+  });
+
+  it('assigns priority/employee as operations, and audits the change', async () => {
+    seedConversation('971500000103');
+    const res = await request(app)
+      .post('/api/whatsapp/conversations/971500000103/assign')
+      .set(authAs(OPS_UID))
+      .send({ priority: 'vip', employeeId: 'USR-002', employeeName: 'Fleet Manager' });
+    expect(res.status).toBe(200);
+    expect(res.body.priority).toBe('vip');
+    expect(res.body.assignedEmployeeId).toBe('USR-002');
+  });
+
+  it('refuses a manual reply while the bot is still active, and accepts one once a human has taken over', async () => {
+    seedConversation('971500000104', { botActive: true });
+    const tooEarly = await request(app).post('/api/whatsapp/conversations/971500000104/reply').set(authAs(OPS_UID)).send({ text: 'hello' });
+    expect(tooEarly.status).toBe(409);
+
+    const handoff = await request(app).post('/api/whatsapp/conversations/971500000104/handoff').set(authAs(OPS_UID)).send({ botActive: false });
+    expect(handoff.status).toBe(200);
+    expect(handoff.body.botActive).toBe(false);
+    expect(handoff.body.state).toBe('HUMAN_ASSISTANCE');
+
+    const reply = await request(app).post('/api/whatsapp/conversations/971500000104/reply').set(authAs(OPS_UID)).send({ text: 'A team member will call you shortly.' });
+    expect(reply.status).toBe(201);
+  });
+
+  it('requires reply text', async () => {
+    seedConversation('971500000105', { botActive: false });
+    const res = await request(app).post('/api/whatsapp/conversations/971500000105/reply').set(authAs(OPS_UID)).send({ text: '' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returning to automation resets state to BROWSING', async () => {
+    seedConversation('971500000106', { botActive: false, state: 'HUMAN_ASSISTANCE' });
+    const res = await request(app).post('/api/whatsapp/conversations/971500000106/handoff').set(authAs(OPS_UID)).send({ botActive: true });
+    expect(res.status).toBe(200);
+    expect(res.body.botActive).toBe(true);
+    expect(res.body.state).toBe('BROWSING');
   });
 });

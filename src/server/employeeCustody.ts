@@ -1,4 +1,4 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import type { RecordAuditFn } from './businessRules';
@@ -25,13 +25,6 @@ export class EmployeeCustodyError extends PersistenceError {
     super(message);
     this.name = 'EmployeeCustodyError';
   }
-}
-
-async function loadCustody(id: string): Promise<EmployeeCustody> {
-  const admin = (await import('firebase-admin')).default;
-  const snap = await admin.firestore().collection('employee_custodies').doc(id).get();
-  if (!snap.exists) throw new EmployeeCustodyError(`Custody account ${id} not found.`);
-  return snap.data() as EmployeeCustody;
 }
 
 async function findCustodyByEmployee(employeeId: string): Promise<EmployeeCustody | null> {
@@ -102,22 +95,37 @@ registerApprovalHandler('EmployeeCustody', 'approve_issue_float', async (request
       newValue: `Opened custody float for ${employeeName}: ${amount.toLocaleString()} AED.`, reason: request.reason
     });
   } else {
-    const custody = await loadCustody(custodyId);
-    const movement: EmployeeCustodyMovement = {
-      id: `${custody.id}-M${custody.movements.length + 1}`,
-      type: 'amount_issued',
-      amount,
-      recordedBy: decider.uid,
-      recordedByName: decider.name,
-      recordedAt: now
-    };
-    const movements = [...custody.movements, movement];
-    const currentBalance = Math.round((custody.currentBalance + amount) * 100) / 100;
-    await updateDurable('employee_custodies', custody.id, { movements, currentBalance, updatedAt: now } as unknown as Record<string, unknown>);
+    // A read-then-overwrite race on the same custody document, same class
+    // as the debt-settlement bug fixed elsewhere in this audit: two
+    // concurrent movements against the same float (an issuance racing a
+    // return, or an issuance racing an expense approval) could both read
+    // the same currentBalance/movements and one write would silently
+    // erase the other. Wrapped in a transaction so a concurrent write to
+    // the same custody document forces a retry against the up-to-date
+    // state.
+    const admin = (await import('firebase-admin')).default;
+    const custodyRef = admin.firestore().collection('employee_custodies').doc(custodyId);
+    const { employeeName, currentBalance } = await runDurableTransaction(async (tx) => {
+      const snap = await tx.get(custodyRef);
+      if (!snap.exists) throw new EmployeeCustodyError(`Custody account ${custodyId} not found.`);
+      const custody = snap.data() as EmployeeCustody;
+      const movement: EmployeeCustodyMovement = {
+        id: `${custody.id}-M${custody.movements.length + 1}`,
+        type: 'amount_issued',
+        amount,
+        recordedBy: decider.uid,
+        recordedByName: decider.name,
+        recordedAt: now
+      };
+      const movements = [...custody.movements, movement];
+      const currentBalance = Math.round((custody.currentBalance + amount) * 100) / 100;
+      tx.set(custodyRef, { movements, currentBalance, updatedAt: now }, { merge: true });
+      return { employeeName: custody.employeeName, currentBalance };
+    });
     await recordAudit({
       userId: decider.uid, userName: decider.name, userRole: decider.role,
-      entityType: 'EmployeeCustody', entityId: custody.id, action: 'update',
-      newValue: `Issued ${amount.toLocaleString()} AED into ${custody.employeeName}'s float. New balance: ${currentBalance.toLocaleString()} AED.`, reason: request.reason
+      entityType: 'EmployeeCustody', entityId: custodyId, action: 'update',
+      newValue: `Issued ${amount.toLocaleString()} AED into ${employeeName}'s float. New balance: ${currentBalance.toLocaleString()} AED.`, reason: request.reason
     });
   }
 });
@@ -129,37 +137,52 @@ export interface RecordCustodyReturnInput {
   note?: string;
 }
 
-/** An employee handing back leftover cash is fact-recording, not a new financial decision -- no approval gate. */
+/**
+ * An employee handing back leftover cash is fact-recording, not a new
+ * financial decision -- no approval gate. Same lost-update race as the
+ * issuance branch above, on the same custody document -- e.g. a return
+ * racing a concurrent expense approval against the same float. Wrapped in
+ * a transaction for the same reason.
+ */
 export async function recordCustodyReturn(input: RecordCustodyReturnInput, recordAudit: RecordAuditFn): Promise<EmployeeCustody> {
   if (typeof input.amount !== 'number' || input.amount <= 0) {
     throw new EmployeeCustodyError('A return requires an amount greater than zero.');
   }
-  const custody = await loadCustody(input.custodyId);
-  if (input.amount > custody.currentBalance) {
-    throw new EmployeeCustodyError(`Return amount (${input.amount.toLocaleString()}) exceeds the current float balance (${custody.currentBalance.toLocaleString()}).`);
-  }
 
   const now = new Date().toISOString();
-  const movement: EmployeeCustodyMovement = {
-    id: `${custody.id}-M${custody.movements.length + 1}`,
-    type: 'amount_returned',
-    amount: input.amount,
-    recordedBy: input.actor.uid,
-    recordedByName: input.actor.name,
-    recordedAt: now,
-    note: input.note
-  };
-  const movements = [...custody.movements, movement];
-  const currentBalance = Math.round((custody.currentBalance - input.amount) * 100) / 100;
-  await updateDurable('employee_custodies', custody.id, { movements, currentBalance, updatedAt: now } as unknown as Record<string, unknown>);
+  const admin = (await import('firebase-admin')).default;
+  const custodyRef = admin.firestore().collection('employee_custodies').doc(input.custodyId);
+
+  const updated = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(custodyRef);
+    if (!snap.exists) throw new EmployeeCustodyError(`Custody account ${input.custodyId} not found.`);
+    const custody = snap.data() as EmployeeCustody;
+    if (input.amount > custody.currentBalance) {
+      throw new EmployeeCustodyError(`Return amount (${input.amount.toLocaleString()}) exceeds the current float balance (${custody.currentBalance.toLocaleString()}).`);
+    }
+
+    const movement: EmployeeCustodyMovement = {
+      id: `${custody.id}-M${custody.movements.length + 1}`,
+      type: 'amount_returned',
+      amount: input.amount,
+      recordedBy: input.actor.uid,
+      recordedByName: input.actor.name,
+      recordedAt: now,
+      note: input.note
+    };
+    const movements = [...custody.movements, movement];
+    const currentBalance = Math.round((custody.currentBalance - input.amount) * 100) / 100;
+    tx.set(custodyRef, { movements, currentBalance, updatedAt: now }, { merge: true });
+    return { ...custody, movements, currentBalance, updatedAt: now };
+  });
 
   await recordAudit({
     userId: input.actor.uid, userName: input.actor.name, userRole: input.actor.role,
-    entityType: 'EmployeeCustody', entityId: custody.id, action: 'update',
-    newValue: `${custody.employeeName} returned ${input.amount.toLocaleString()} AED to their float. New balance: ${currentBalance.toLocaleString()} AED.`
+    entityType: 'EmployeeCustody', entityId: updated.id, action: 'update',
+    newValue: `${updated.employeeName} returned ${input.amount.toLocaleString()} AED to their float. New balance: ${updated.currentBalance.toLocaleString()} AED.`
   });
 
-  return { ...custody, movements, currentBalance, updatedAt: now };
+  return updated;
 }
 
 // ----------------------------------------------------
@@ -250,46 +273,70 @@ export async function submitEmployeeExpense(input: SubmitEmployeeExpenseInput, r
   return { expense, approvalRequestId: approvalRequest.id };
 }
 
+// Same lost-update race as the custody issuance/return fixes above -- the
+// custody-float debit here used to be a separate, non-transactional
+// read-then-write, so two expenses approved moments apart against the
+// same float (or an approval racing an issuance/return) could each read
+// the same currentBalance and one write would erase the other's debit.
+// Both the custody debit and the expense-status write now happen inside
+// one transaction (reads for both documents hoisted before either write,
+// as Firestore transactions require).
 registerApprovalHandler('EmployeeExpense', 'approve_expense', async (request: ProcurementApprovalRequest, decider: ProcurementApprovalActor, recordAudit: RecordAuditFn) => {
   const expenseId = request.payload.expenseId as string;
-  const expense = await loadExpense(expenseId);
-  if (expense.status !== 'pending_review') {
-    throw new EmployeeCustodyError(`Expense ${expenseId} has already been ${expense.status}.`);
-  }
-
   const now = new Date().toISOString();
-  const updates: Partial<EmployeeExpense> = {
-    status: 'approved',
-    approvedBy: decider.uid,
-    approvedByName: decider.name,
-    approvedAt: now,
-    updatedAt: now
-  };
+  const admin = (await import('firebase-admin')).default;
+  const expenseRef = admin.firestore().collection('employee_expenses').doc(expenseId);
 
-  if (expense.fundingSource === 'custody_float' && expense.custodyId) {
-    const custody = await loadCustody(expense.custodyId);
-    if (expense.amount > custody.currentBalance) {
-      throw new EmployeeCustodyError(`Insufficient custody float balance (${custody.currentBalance.toLocaleString()} AED) to cover this expense (${expense.amount.toLocaleString()} AED).`);
+  const expense = await runDurableTransaction(async (tx) => {
+    const expenseSnap = await tx.get(expenseRef);
+    if (!expenseSnap.exists) throw new EmployeeCustodyError(`Expense ${expenseId} not found.`);
+    const expense = expenseSnap.data() as EmployeeExpense;
+    if (expense.status !== 'pending_review') {
+      throw new EmployeeCustodyError(`Expense ${expenseId} has already been ${expense.status}.`);
     }
-    const movement: EmployeeCustodyMovement = {
-      id: `${custody.id}-M${custody.movements.length + 1}`,
-      type: 'expense',
-      amount: expense.amount,
-      relatedExpenseId: expense.id,
-      recordedBy: decider.uid,
-      recordedByName: decider.name,
-      recordedAt: now
-    };
-    const movements = [...custody.movements, movement];
-    const currentBalance = Math.round((custody.currentBalance - expense.amount) * 100) / 100;
-    await updateDurable('employee_custodies', custody.id, { movements, currentBalance, updatedAt: now } as unknown as Record<string, unknown>);
-  } else if (expense.fundingSource === 'employee_own_money') {
-    // The employee paid with their own money -- the company owes it back,
-    // recorded directly, never inferred from a float running dry.
-    updates.amountOwedToEmployee = expense.amount;
-  }
 
-  await updateDurable('employee_expenses', expenseId, updates as unknown as Record<string, unknown>);
+    const custodyRef = expense.fundingSource === 'custody_float' && expense.custodyId
+      ? admin.firestore().collection('employee_custodies').doc(expense.custodyId)
+      : null;
+    const custodySnap = custodyRef ? await tx.get(custodyRef) : null;
+    if (custodyRef && (!custodySnap || !custodySnap.exists)) {
+      throw new EmployeeCustodyError(`Custody account ${expense.custodyId} not found.`);
+    }
+
+    const updates: Partial<EmployeeExpense> = {
+      status: 'approved',
+      approvedBy: decider.uid,
+      approvedByName: decider.name,
+      approvedAt: now,
+      updatedAt: now
+    };
+
+    if (custodyRef && custodySnap) {
+      const custody = custodySnap.data() as EmployeeCustody;
+      if (expense.amount > custody.currentBalance) {
+        throw new EmployeeCustodyError(`Insufficient custody float balance (${custody.currentBalance.toLocaleString()} AED) to cover this expense (${expense.amount.toLocaleString()} AED).`);
+      }
+      const movement: EmployeeCustodyMovement = {
+        id: `${custody.id}-M${custody.movements.length + 1}`,
+        type: 'expense',
+        amount: expense.amount,
+        relatedExpenseId: expense.id,
+        recordedBy: decider.uid,
+        recordedByName: decider.name,
+        recordedAt: now
+      };
+      const movements = [...custody.movements, movement];
+      const currentBalance = Math.round((custody.currentBalance - expense.amount) * 100) / 100;
+      tx.set(custodyRef, { movements, currentBalance, updatedAt: now }, { merge: true });
+    } else if (expense.fundingSource === 'employee_own_money') {
+      // The employee paid with their own money -- the company owes it back,
+      // recorded directly, never inferred from a float running dry.
+      updates.amountOwedToEmployee = expense.amount;
+    }
+
+    tx.set(expenseRef, updates, { merge: true });
+    return { ...expense, ...updates };
+  });
 
   await recordAudit({
     userId: decider.uid, userName: decider.name, userRole: decider.role,

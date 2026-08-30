@@ -1,4 +1,4 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import type { RecordAuditFn } from './businessRules';
@@ -110,7 +110,25 @@ export interface AddDebtSettlementInput {
   recordedByRole: UserRole;
 }
 
-/** Records one settlement movement toward a debt -- any of the fixed payment methods, as many separate movements as needed. */
+/**
+ * Records one settlement movement toward a debt -- any of the fixed
+ * payment methods, as many separate movements as needed.
+ *
+ * This used to read the debt with a plain (non-transactional) get(), then
+ * write the full settlements array back with a plain set() -- a
+ * read-then-overwrite race: two settlements recorded for the same debt
+ * within the same read/write window (a network retry racing the original
+ * request, or two staff members both recording a payment moments apart)
+ * would both compute their new movement id and array from the SAME stale
+ * settlements array, and whichever write landed second would silently
+ * overwrite the first -- one of the two real customer payments would
+ * simply vanish from the record, with both requests reporting success.
+ * Found via a repo-wide audit for concurrency gaps in the Procurement
+ * routes. Fixed by moving the whole read-check-write into one Firestore
+ * transaction, so a concurrent write to the same debt document forces
+ * Firestore to retry the transaction against the up-to-date state instead
+ * of allowing a lost update.
+ */
 export async function addDebtSettlement(input: AddDebtSettlementInput, recordAudit: RecordAuditFn): Promise<Debt> {
   if (typeof input.amount !== 'number' || input.amount <= 0) {
     throw new DebtError('A settlement requires an amount greater than zero.');
@@ -119,40 +137,49 @@ export async function addDebtSettlement(input: AddDebtSettlementInput, recordAud
     throw new DebtError('Selecting "other" as the settlement method requires a description.');
   }
 
-  const debt = await loadDebt(input.debtId);
-  if (debt.status === 'paid' || debt.status === 'cancelled') {
-    throw new DebtError(`This debt is already ${debt.status} and cannot take further settlements.`);
-  }
-  if (input.amount > debt.remainingAmount) {
-    throw new DebtError(`Settlement amount (${input.amount.toLocaleString()}) exceeds the remaining debt (${debt.remainingAmount.toLocaleString()}).`);
-  }
-
   const now = new Date().toISOString();
-  const movement: DebtSettlementMovement = {
-    id: `${debt.id}-M${debt.settlements.length + 1}`,
-    method: input.method,
-    methodOther: input.methodOther,
-    amount: input.amount,
-    recordedBy: input.recordedBy,
-    recordedByName: input.recordedByName,
-    recordedAt: now
-  };
-  const settlements = [...debt.settlements, movement];
-  const { paidAmount, remainingAmount, status } = recomputeFromSettlements({ originalAmount: debt.originalAmount, settlements });
+  const admin = (await import('firebase-admin')).default;
+  const debtRef = admin.firestore().collection('debts').doc(input.debtId);
 
-  await updateDurable('debts', debt.id, { settlements, paidAmount, remainingAmount, status, updatedAt: now } as unknown as Record<string, unknown>);
+  const updated = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(debtRef);
+    if (!snap.exists) throw new DebtError(`Debt ${input.debtId} not found.`);
+    const debt = snap.data() as Debt;
+
+    if (debt.status === 'paid' || debt.status === 'cancelled') {
+      throw new DebtError(`This debt is already ${debt.status} and cannot take further settlements.`);
+    }
+    if (input.amount > debt.remainingAmount) {
+      throw new DebtError(`Settlement amount (${input.amount.toLocaleString()}) exceeds the remaining debt (${debt.remainingAmount.toLocaleString()}).`);
+    }
+
+    const movement: DebtSettlementMovement = {
+      id: `${debt.id}-M${debt.settlements.length + 1}`,
+      method: input.method,
+      methodOther: input.methodOther,
+      amount: input.amount,
+      recordedBy: input.recordedBy,
+      recordedByName: input.recordedByName,
+      recordedAt: now
+    };
+    const settlements = [...debt.settlements, movement];
+    const { paidAmount, remainingAmount, status } = recomputeFromSettlements({ originalAmount: debt.originalAmount, settlements });
+
+    tx.set(debtRef, { settlements, paidAmount, remainingAmount, status, updatedAt: now }, { merge: true });
+    return { ...debt, settlements, paidAmount, remainingAmount, status, updatedAt: now };
+  });
 
   await recordAudit({
     userId: input.recordedBy,
     userName: input.recordedByName,
     userRole: input.recordedByRole,
     entityType: 'Debt',
-    entityId: debt.id,
+    entityId: updated.id,
     action: 'update',
-    newValue: `Settlement of ${input.amount.toLocaleString()} AED via ${input.method} recorded against debt ${debt.id}. Remaining: ${remainingAmount.toLocaleString()} AED.`
+    newValue: `Settlement of ${input.amount.toLocaleString()} AED via ${input.method} recorded against debt ${updated.id}. Remaining: ${updated.remainingAmount.toLocaleString()} AED.`
   });
 
-  return { ...debt, settlements, paidAmount, remainingAmount, status, updatedAt: now };
+  return updated;
 }
 
 export interface RequestDebtSettlementReversalInput {
@@ -199,38 +226,55 @@ export async function requestDebtSettlementReversal(input: RequestDebtSettlement
   return { approvalRequestId: approvalRequest.id };
 }
 
+// Same lost-update race as addDebtSettlement above, on the same debt
+// document -- a settlement recorded via addDebtSettlement while this
+// reversal is mid-flight (or vice versa) could otherwise silently
+// overwrite each other. Both now go through a real transaction against
+// the same document, so Firestore serializes them correctly.
 registerApprovalHandler('Debt', 'approve_settlement_reversal', async (request: ProcurementApprovalRequest, decider: ProcurementApprovalActor, recordAudit: RecordAuditFn) => {
   const debtId = request.payload.debtId as string;
   const movementId = request.payload.movementId as string;
-  const debt = await loadDebt(debtId);
-  const original = debt.settlements.find((m) => m.id === movementId);
-  if (!original) throw new DebtError(`Settlement movement ${movementId} not found on debt ${debtId}.`);
-
+  const admin = (await import('firebase-admin')).default;
+  const debtRef = admin.firestore().collection('debts').doc(debtId);
   const now = new Date().toISOString();
-  const reversal: DebtSettlementMovement = {
-    id: `${debt.id}-M${debt.settlements.length + 1}`,
-    method: original.method,
-    methodOther: original.methodOther,
-    amount: -original.amount,
-    recordedBy: decider.uid,
-    recordedByName: decider.name,
-    recordedAt: now,
-    reversedMovementId: movementId,
-    isReversal: true
-  };
-  const settlements = [...debt.settlements, reversal];
-  const { paidAmount, remainingAmount, status } = recomputeFromSettlements({ originalAmount: debt.originalAmount, settlements });
 
-  await updateDurable('debts', debt.id, { settlements, paidAmount, remainingAmount, status, updatedAt: now } as unknown as Record<string, unknown>);
+  const { debt: updated, reversedAmount, reversedMethod } = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(debtRef);
+    if (!snap.exists) throw new DebtError(`Debt ${debtId} not found.`);
+    const debt = snap.data() as Debt;
+    const original = debt.settlements.find((m) => m.id === movementId);
+    if (!original) throw new DebtError(`Settlement movement ${movementId} not found on debt ${debtId}.`);
+
+    const reversal: DebtSettlementMovement = {
+      id: `${debt.id}-M${debt.settlements.length + 1}`,
+      method: original.method,
+      methodOther: original.methodOther,
+      amount: -original.amount,
+      recordedBy: decider.uid,
+      recordedByName: decider.name,
+      recordedAt: now,
+      reversedMovementId: movementId,
+      isReversal: true
+    };
+    const settlements = [...debt.settlements, reversal];
+    const { paidAmount, remainingAmount, status } = recomputeFromSettlements({ originalAmount: debt.originalAmount, settlements });
+
+    tx.set(debtRef, { settlements, paidAmount, remainingAmount, status, updatedAt: now }, { merge: true });
+    return {
+      debt: { ...debt, settlements, paidAmount, remainingAmount, status, updatedAt: now },
+      reversedAmount: original.amount,
+      reversedMethod: original.method
+    };
+  });
 
   await recordAudit({
     userId: decider.uid,
     userName: decider.name,
     userRole: decider.role,
     entityType: 'Debt',
-    entityId: debt.id,
+    entityId: updated.id,
     action: 'approval',
-    newValue: `Settlement ${movementId} reversed (${original.amount.toLocaleString()} AED via ${original.method}). Remaining: ${remainingAmount.toLocaleString()} AED.`,
+    newValue: `Settlement ${movementId} reversed (${reversedAmount.toLocaleString()} AED via ${reversedMethod}). Remaining: ${updated.remainingAmount.toLocaleString()} AED.`,
     reason: request.reason
   });
 });

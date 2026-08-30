@@ -54,7 +54,8 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
   { key: 'staff_role_changed', category: 'system', labelEn: 'Staff role/permissions changed', labelAr: 'تغيير دور أو صلاحيات موظف' },
   { key: 'bank_statement_imported', category: 'system', labelEn: 'Bank statement imported', labelAr: 'استيراد كشف حساب بنكي' },
   { key: 'bank_discrepancy_found', category: 'system', labelEn: 'Bank reconciliation discrepancy needs review', labelAr: 'وجود اختلاف في المطابقة البنكية يحتاج مراجعة', automated: true },
-  { key: 'system_health_alert', category: 'system', labelEn: 'Operational health check failed (Firestore / WhatsApp / background jobs / dead-letter queue)', labelAr: 'فشل فحص الصحة التشغيلية (قاعدة البيانات / واتساب / المهام الخلفية / قائمة العمليات الفاشلة)', automated: true }
+  { key: 'system_health_alert', category: 'system', labelEn: 'Operational health check failed (Firestore / WhatsApp / background jobs / dead-letter queue)', labelAr: 'فشل فحص الصحة التشغيلية (قاعدة البيانات / واتساب / المهام الخلفية / قائمة العمليات الفاشلة)', automated: true },
+  { key: 'whatsapp_conversation_needs_human', category: 'system', labelEn: 'WhatsApp customer requested human assistance', labelAr: 'طلب عميل واتساب التحدث مع موظف' }
 ];
 
 export function getNotificationEventDef(key: string): NotificationEventDef | undefined {
@@ -82,7 +83,18 @@ export const CUSTOMER_NOTIFICATION_EVENTS: CustomerNotificationEventDef[] = [
   { key: 'customer_payment_due', labelEn: 'Upcoming payment due date reminder', labelAr: 'تذكير باقتراب موعد استحقاق دفعة', automated: true },
   { key: 'customer_payment_overdue', labelEn: 'Overdue payment / arrears reminder', labelAr: 'تذكير بمتأخرات السداد', automated: true },
   { key: 'customer_contract_expiring', labelEn: 'Contract nearing expiry reminder', labelAr: 'تذكير باقتراب انتهاء العقد', automated: true },
-  { key: 'customer_contract_extended', labelEn: 'Contract extension addendum notice', labelAr: 'إشعار ملحق تمديد العقد' }
+  { key: 'customer_contract_extended', labelEn: 'Contract extension addendum notice', labelAr: 'إشعار ملحق تمديد العقد' },
+
+  // Lease-to-Own (Splendor Private Mobility Operating System)
+  { key: 'lto_application_received', labelEn: 'Lease-to-Own application received', labelAr: 'استلام طلب الإيجار المنتهي بالتملك' },
+  { key: 'lto_application_approved', labelEn: 'Lease-to-Own application approved', labelAr: 'الموافقة على طلب الإيجار المنتهي بالتملك' },
+  { key: 'lto_application_rejected', labelEn: 'Lease-to-Own application rejected', labelAr: 'رفض طلب الإيجار المنتهي بالتملك' },
+  { key: 'lto_payment_reminder', labelEn: 'Lease-to-Own upcoming installment reminder', labelAr: 'تذكير باستحقاق قسط الإيجار المنتهي بالتملك' },
+  { key: 'lto_payment_due', labelEn: 'Lease-to-Own installment due today', labelAr: 'استحقاق قسط الإيجار المنتهي بالتملك اليوم' },
+  { key: 'lto_payment_late', labelEn: 'Lease-to-Own installment overdue', labelAr: 'تأخر سداد قسط الإيجار المنتهي بالتملك' },
+  { key: 'lto_statement', labelEn: 'Lease-to-Own account statement', labelAr: 'كشف حساب الإيجار المنتهي بالتملك' },
+  { key: 'lto_settlement', labelEn: 'Lease-to-Own settlement confirmation', labelAr: 'تأكيد تسوية الإيجار المنتهي بالتملك' },
+  { key: 'lto_ownership_transfer', labelEn: 'Lease-to-Own ownership transfer', labelAr: 'نقل ملكية الإيجار المنتهي بالتملك' }
 ];
 
 export function getCustomerNotificationEventDef(key: string): CustomerNotificationEventDef | undefined {

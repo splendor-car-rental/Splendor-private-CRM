@@ -21,6 +21,7 @@ import {
   DEFAULT_SUPPLIER_OPERATION_TYPES, DEFAULT_RETROACTIVE_PO_REASONS, DEFAULT_EXPENSE_CATEGORIES,
   type RetroactivePOReasonDef, type ExpenseCategoryDef
 } from '../config/procurement';
+import { DEFAULT_CUSTOMER_PAYMENT_METHODS, type CustomerPaymentMethodDef } from '../config/payments';
 
 export class DataStore {
   public users: User[] = [
@@ -130,6 +131,7 @@ export class DataStore {
   public supplierOperationTypes: SupplierOperationTypeDef[] = [...DEFAULT_SUPPLIER_OPERATION_TYPES];
   public retroactivePOReasons: RetroactivePOReasonDef[] = [...DEFAULT_RETROACTIVE_PO_REASONS];
   public expenseCategories: ExpenseCategoryDef[] = [...DEFAULT_EXPENSE_CATEGORIES];
+  public paymentMethods: CustomerPaymentMethodDef[] = [...DEFAULT_CUSTOMER_PAYMENT_METHODS];
 
   // Live default Salik/Darb/Parking rates -- starts equal to the fixed
   // defaults the owner confirmed, but is editable at runtime (Settings >

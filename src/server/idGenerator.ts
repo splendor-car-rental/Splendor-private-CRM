@@ -79,7 +79,19 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   newdamageatreturn: { prefix: 'DMGR-', digits: 6 },
   tarsrecord: { prefix: 'TARS-', digits: 6 },
   latefeewaiver: { prefix: 'LFW-', digits: 6 },
-  procurementapproval: { prefix: 'PAPR-', digits: 6 }
+  procurementapproval: { prefix: 'PAPR-', digits: 6 },
+
+  // Lease-to-Own (Splendor Private Mobility Operating System)
+  ltoapplication: { prefix: 'LTOA-', digits: 6 },
+  ltoinstallment: { prefix: 'LTOI-', digits: 6 },
+  ltosettlementrequest: { prefix: 'LTOS-', digits: 6 },
+
+  // Vehicle Master Profile & Verified Vehicle Catalog
+  vehiclecatalogupdaterequest: { prefix: 'VCU-', digits: 6 },
+
+  // Payment Gateway (Production-Grade Payment & Settlement Layer)
+  paymentintent: { prefix: 'PI-', digits: 6 },
+  paymentrefund: { prefix: 'PREF-', digits: 6 }
 };
 
 export class IdGenerationError extends Error {

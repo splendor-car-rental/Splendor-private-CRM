@@ -1,0 +1,36 @@
+name: Synchronize Bun Lockfile
+
+on:
+  push:
+    branches:
+      - hardening/production-100
+
+# The lockfile sync job must not be able to push back to the protected
+# development branch. CI remains read-only; lockfile drift is surfaced as a
+# deterministic failure for an explicit developer commit.
+permissions:
+  contents: read
+
+concurrency:
+  group: bun-lock-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify bun.lock is synchronized
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: hardening/production-100
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - name: Verify lockfile is synchronized
+        run: bun install --frozen-lockfile

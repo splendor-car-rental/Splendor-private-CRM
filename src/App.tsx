@@ -27,6 +27,10 @@ import { AIStudioView } from './components/views/AIStudioView';
 import { TestSuiteRunnerView } from './components/views/TestSuiteRunnerView';
 import { SettingsAuditView } from './components/views/SettingsAuditView';
 import { ProcurementView } from './components/views/ProcurementView';
+import { SecurityBlocklistView } from './components/views/SecurityBlocklistView';
+import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
+import { WhatsAppInboxView } from './components/views/WhatsAppInboxView';
+import { LeaseToOwnView } from './components/views/LeaseToOwnView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -83,6 +87,14 @@ const MainLayout: React.FC = () => {
         return <TasksFollowupsView />;
       case 'procurement':
         return <ProcurementView />;
+      case 'security':
+        return <SecurityBlocklistView />;
+      case 'inspections':
+        return <VehicleInspectionsView />;
+      case 'lease-to-own':
+        return <LeaseToOwnView />;
+      case 'whatsapp-inbox':
+        return <WhatsAppInboxView />;
       case 'ai-studio':
       case 'ai-intelligence':
         return <AIStudioView />;

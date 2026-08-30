@@ -42,7 +42,7 @@ export const DIRECT_LICENSE_RECOGNIZED_COUNTRIES = new Set([
 // ----------------------------------------------------
 // 2. STATE MACHINE TRANSITIONS
 // ----------------------------------------------------
-export const VALID_KYC_TRANSITIONS: Record<KycStatus, KycStatus[]> = {
+export const VALID_KYC_TRANSITIONS: Record<string, KycStatus[]> = {
   UNVERIFIED: ['DOCUMENTS_PENDING', 'UNDER_REVIEW', 'REJECTED'],
   DOCUMENTS_PENDING: ['UNDER_REVIEW', 'REJECTED', 'EXPIRED', 'UNVERIFIED'],
   UNDER_REVIEW: ['VERIFIED', 'REJECTED', 'DOCUMENTS_PENDING'],

@@ -1,9 +1,10 @@
 {
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "/api" }
-  ],
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
-    { "path": "/api/notifications/run-checks", "schedule": "0 */6 * * *" }
+    {
+      "path": "/api/notifications/run-checks",
+      "schedule": "0 0 * * *"
+    }
   ],
   "headers": [
     {
