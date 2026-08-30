@@ -3,7 +3,7 @@
     { "source": "/api/:path*", "destination": "/api" }
   ],
   "crons": [
-    { "path": "/api/notifications/run-checks", "schedule": "0 */6 * * *" }
+    { "path": "/api/notifications/run-checks", "schedule": "0 0 * * *" }
   ],
   "headers": [
     {
