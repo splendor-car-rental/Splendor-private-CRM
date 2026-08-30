@@ -1,10 +1,8 @@
 // Vercel serverless entry point for the Express backend.
-//
-// Import the TypeScript source directly so Vercel's Node.js builder bundles
-// the complete Express application and its local TypeScript dependencies.
-// The previous '../server.js' re-export assumed a compiled server.js file
-// existed beside server.ts at runtime; the repository build actually emits
-// dist/server.cjs instead, which caused production API invocations to fail.
-import app from '../server';
+// Explicitly include the .ts extension so Vercel's function bundler resolves
+// and packages the local TypeScript module. Without the extension, the
+// deployed ESM runtime attempted to resolve /var/task/server and failed with
+// ERR_MODULE_NOT_FOUND before the Express app could initialize.
+import app from '../server.ts';
 
 export default app;
