@@ -4,6 +4,7 @@ import { issueNextNumber } from './idGenerator';
 import { createApprovalRequest, decideApprovalRequest, ApprovalError } from './approvals';
 import { RuleChangeActor, RecordAuditFn } from './businessRules';
 import { DEFAULT_MANUFACTURERS, DEFAULT_CATALOG_MODELS } from '../config/vehicleCatalog';
+import { UAE_CATALOG_EXPANSION_MANUFACTURERS, UAE_CATALOG_EXPANSION_MODELS } from '../config/vehicleCatalogExpansion';
 import type {
   VehicleManufacturer, VehicleCatalogModel, VehicleCatalogUpdateRequest,
   VehicleCatalogRequestStatus, ApprovalRequestStatus
@@ -12,20 +13,11 @@ import type {
 /**
  * SPLENDOR Master Vehicle Catalog -- server-side engine.
  *
- * Mirrors the same architecture as src/server/businessRules.ts
- * (static seed defaults + Firestore-approved additions merged at read time)
- * and reuses the existing Four-Eyes/Segregation-of-Duties approval engine
- * (src/server/approvals.ts, ApprovalRequestType 'vehicle_catalog_update')
- * rather than building a second approval mechanism.
- *
- * Flow mandated by the mission brief: Discovery -> Verification -> Review
- * -> Approval -> Master Catalog. A staff member (or a future discovery
- * process) can only PROPOSE a new manufacturer/model via
- * proposeCatalogUpdate(); nothing is added to the readable catalog until an
- * authorized, DIFFERENT person approves it via decideCatalogUpdate() --
- * enforced by the underlying decideApprovalRequest()'s SoD check. A
- * rejected or still-pending request never appears in listManufacturers()/
- * listModelsForMake().
+ * Static seed/reference data and Firestore-approved additions are merged at
+ * read time. The UAE expansion is curated reference data for the mainstream
+ * manufacturers used by Splendor operations. Model specifications are
+ * reference suggestions only; the real vehicle's VIN/trim remains the source
+ * of truth before publication.
  */
 
 export class VehicleCatalogError extends PersistenceError {
@@ -39,23 +31,22 @@ const REQUESTS_COLLECTION = 'vehicle_catalog_requests';
 const MANUFACTURERS_COLLECTION = 'vehicle_catalog_manufacturers';
 const MODELS_COLLECTION = 'vehicle_catalog_models';
 
-/** Static seed manufacturers plus any staff-proposed, approved additions. Never includes pending/rejected proposals. */
+const STATIC_MANUFACTURERS = [...DEFAULT_MANUFACTURERS, ...UAE_CATALOG_EXPANSION_MANUFACTURERS];
+const STATIC_MODELS = [...DEFAULT_CATALOG_MODELS, ...UAE_CATALOG_EXPANSION_MODELS];
+
+/** Static manufacturers plus approved Firestore additions. Pending/rejected proposals never appear. */
 export async function listManufacturers(): Promise<VehicleManufacturer[]> {
-  if (admin.apps.length === 0) return DEFAULT_MANUFACTURERS;
+  if (admin.apps.length === 0) return STATIC_MANUFACTURERS;
   const db = admin.firestore();
   const snap = await db.collection(MANUFACTURERS_COLLECTION).get();
   const approved = snap.docs.map((d) => d.data() as VehicleManufacturer);
-  const seedIds = new Set(DEFAULT_MANUFACTURERS.map((m) => m.id));
-  return [...DEFAULT_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
+  const seedIds = new Set(STATIC_MANUFACTURERS.map((m) => m.id));
+  return [...STATIC_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
 }
 
-/**
- * Models for one manufacturer only -- callers must always pass a
- * manufacturerId (never a free-text make) so a model list can never leak
- * across manufacturers, per the mission's cascading-dropdown requirement.
- */
+/** Models are strictly scoped to the selected manufacturer. */
 export async function listModelsForManufacturer(manufacturerId: string): Promise<VehicleCatalogModel[]> {
-  const seedModels = DEFAULT_CATALOG_MODELS.filter((m) => m.manufacturerId === manufacturerId);
+  const seedModels = STATIC_MODELS.filter((m) => m.manufacturerId === manufacturerId);
   if (admin.apps.length === 0) return seedModels;
   const db = admin.firestore();
   const snap = await db.collection(MODELS_COLLECTION).where('manufacturerId', '==', manufacturerId).get();
@@ -78,15 +69,6 @@ export interface ProposeCatalogUpdateInput {
   requestedByRole: RuleChangeActor['role'];
 }
 
-/**
- * "الموديل غير موجود؟ طلب إضافة موديل جديد" -- staff-submitted (or future
- * discovery-submitted) request. This ONLY creates a pending record; it
- * never writes to the readable catalog. discoverySource defaults to
- * 'staff_request' -- 'internet_discovery' is schema-ready for a future
- * automated discovery job, but per the mission's absolute rule the
- * internet is discovery-only and every hit still lands here as PENDING,
- * never auto-approved.
- */
 export async function proposeCatalogUpdate(input: ProposeCatalogUpdateInput, recordAudit: RecordAuditFn): Promise<VehicleCatalogUpdateRequest> {
   if (!input.manufacturerName || !input.manufacturerName.trim()) {
     throw new VehicleCatalogError('A manufacturer name is required.');
@@ -97,7 +79,6 @@ export async function proposeCatalogUpdate(input: ProposeCatalogUpdateInput, rec
 
   const id = await issueNextNumber('VehicleCatalogUpdateRequest');
   const now = new Date().toISOString();
-
   const approval = await createApprovalRequest({
     type: 'vehicle_catalog_update',
     entityType: 'VehicleCatalogUpdateRequest',
@@ -147,17 +128,9 @@ function slugify(value: string): string {
 }
 
 /**
- * Decides a pending catalog update request. Reuses decideApprovalRequest()
- * for the actual approve/reject decision -- so the Four-Eyes/SoD check
- * (decider can never be the requester) and the immutable approval-history
- * record are the exact same mechanism every other approval type in this
- * system uses, not a parallel one.
- *
- * Only on 'approved' does this write into the readable catalog collections
- * (vehicle_catalog_manufacturers / vehicle_catalog_models), tagged
- * source: 'staff_entry' since it came from a human-reviewed request rather
- * than an OEM/official reference import. Rejection leaves the catalog
- * completely untouched -- unconfirmed data never enters it.
+ * Approves/rejects catalog proposals using the existing four-eyes approval
+ * engine. Approved additions enter Firestore; reference seed data remains
+ * immutable in source control.
  */
 export async function decideCatalogUpdate(
   requestId: string,
@@ -177,7 +150,6 @@ export async function decideCatalogUpdate(
   }
 
   await decideApprovalRequest(request.approvalRequestId!, decision, note, decider, recordAudit);
-
   const now = new Date().toISOString();
   const decided: VehicleCatalogUpdateRequest = {
     ...request,
@@ -189,39 +161,37 @@ export async function decideCatalogUpdate(
     updatedAt: now
   };
 
-  if (decision === 'approved') {
-    if (request.requestType === 'new_manufacturer' || request.requestType === 'new_model') {
-      const manufacturerId = slugify(request.manufacturerName);
-      const manufacturers = await listManufacturers();
-      const existingManufacturer = manufacturers.find((m) => m.id === manufacturerId);
-      if (!existingManufacturer) {
-        const manufacturer: VehicleManufacturer = {
-          id: manufacturerId,
-          name: request.manufacturerName,
-          source: 'staff_entry',
-          createdAt: now,
-          updatedAt: now
-        };
-        await createDurable(MANUFACTURERS_COLLECTION, manufacturer as unknown as { id: string });
-      }
-      decided.resultingManufacturerId = manufacturerId;
+  if (decision === 'approved' && (request.requestType === 'new_manufacturer' || request.requestType === 'new_model')) {
+    const manufacturerId = slugify(request.manufacturerName);
+    const manufacturers = await listManufacturers();
+    const existingManufacturer = manufacturers.find((m) => m.id === manufacturerId);
+    if (!existingManufacturer) {
+      const manufacturer: VehicleManufacturer = {
+        id: manufacturerId,
+        name: request.manufacturerName,
+        source: 'staff_entry',
+        createdAt: now,
+        updatedAt: now
+      };
+      await createDurable(MANUFACTURERS_COLLECTION, manufacturer as unknown as { id: string });
+    }
+    decided.resultingManufacturerId = manufacturerId;
 
-      if (request.requestType === 'new_model' && request.modelName) {
-        const modelId = `${manufacturerId}-${slugify(request.modelName)}`;
-        const model: VehicleCatalogModel = {
-          id: modelId,
-          manufacturerId,
-          make: request.manufacturerName,
-          model: request.modelName,
-          ...(request.trim ? { trim: request.trim } : {}),
-          ...(request.year !== undefined ? { productionYears: String(request.year) } : {}),
-          source: 'staff_entry',
-          createdAt: now,
-          updatedAt: now
-        };
-        await createDurable(MODELS_COLLECTION, model as unknown as { id: string });
-        decided.resultingModelId = modelId;
-      }
+    if (request.requestType === 'new_model' && request.modelName) {
+      const modelId = `${manufacturerId}-${slugify(request.modelName)}`;
+      const model: VehicleCatalogModel = {
+        id: modelId,
+        manufacturerId,
+        make: request.manufacturerName,
+        model: request.modelName,
+        ...(request.trim ? { trim: request.trim } : {}),
+        ...(request.year !== undefined ? { productionYears: String(request.year) } : {}),
+        source: 'staff_entry',
+        createdAt: now,
+        updatedAt: now
+      };
+      await createDurable(MODELS_COLLECTION, model as unknown as { id: string });
+      decided.resultingModelId = modelId;
     }
   }
 
