@@ -21,7 +21,7 @@
  * run before any Storage call, are tested directly against globalStore.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import pdfParse from 'pdf-parse';
 import { buildLtoContractHtml, renderLtoContractPdf, generateLtoContractDocument } from '../src/server/leaseToOwnContractDocument';
 import { LtoError } from '../src/server/leaseToOwn';
@@ -80,7 +80,6 @@ describe('buildLtoContractHtml', () => {
     expect(html).toContain('30,000.00');
     expect(html).toContain('9,000.00');
     expect(html).toContain(customer.idNumber);
-    // The nine clauses from the real source contract, each present.
     for (const heading of ['البند الأول', 'البند الثاني', 'البند الثالث', 'البند الرابع', 'البند الخامس', 'البند السادس', 'البند السابع', 'البند الثامن', 'البند التاسع']) {
       expect(html).toContain(heading);
     }
@@ -99,12 +98,10 @@ describe('renderLtoContractPdf (real headless Chromium)', () => {
     const pdf = await renderLtoContractPdf(contract, customer, makeInstallments(contract.id));
 
     expect(pdf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
-    expect(pdf.length).toBeGreaterThan(50_000); // the embedded letterhead bands alone are tens of KB
+    expect(pdf.length).toBeGreaterThan(50_000);
 
     const parsed = await pdfParse(pdf);
     expect(parsed.numpages).toBeGreaterThanOrEqual(2);
-    // Latin/date substrings are a safe way to assert the merge actually
-    // happened without depending on how pdf-parse decodes Arabic glyphs.
     expect(parsed.text).toContain('VINTEST0001');
     expect(parsed.text).toContain('2026');
   }, 30_000);
