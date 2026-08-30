@@ -1,9 +1,13 @@
 import { chromium } from 'playwright';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const BASE = 'http://127.0.0.1:3000';
 const AUTH_EMULATOR = 'http://127.0.0.1:9099';
-const SHOTS = '/tmp/claude-0/-home-user-Splendor-private-CRM/08cde651-1d17-541c-bc56-1938b08a8ff2/scratchpad';
+const QA_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'splendor-qa-'));
+const SHOTS = path.join(QA_TMP, 'screenshots');
+fs.mkdirSync(SHOTS, { recursive: true });
 const results = [];
 
 async function getIdToken(email, password) {
@@ -31,10 +35,10 @@ async function login(page, email, password) {
 }
 
 // A tiny valid 1x1 PNG for upload testing.
-const PNG_PATH = '/tmp/claude-0/-home-user-Splendor-private-CRM/08cde651-1d17-541c-bc56-1938b08a8ff2/scratchpad/test-photo.png';
+const PNG_PATH = path.join(QA_TMP, 'test-photo.png');
 function writeTestPng() {
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-  fs.writeFileSync(PNG_PATH, Buffer.from(base64, 'base64'));
+  fs.writeFileSync(PNG_PATH, Buffer.from(base64, 'base64'), { flag: 'wx', mode: 0o600 });
 }
 
 async function main() {
@@ -131,9 +135,6 @@ async function main() {
   log('Starting an in_rental spot-check with new damage requiring review...');
   await page.locator('button', { hasText: /New Inspection/i }).click();
   await page.waitForSelector('text=/Inspection Type/i', { timeout: 5000 });
-  // Scoped to the modal overlay -- page-wide `select` also matches the
-  // workspace's Exterior/Interior condition dropdowns behind the modal,
-  // which are disabled once the first inspection is completed.
   const newInspectionModal = page.locator('div.fixed.inset-0.z-50').last();
   await newInspectionModal.locator('select').nth(1).selectOption('in_rental');
   const [createResponse2] = await Promise.all([
@@ -146,10 +147,8 @@ async function main() {
 
   await page.locator('button', { hasText: /Add Damage/i }).click();
   await page.waitForSelector('text=/Classification/i', { timeout: 5000 });
-  // Scoped to the modal overlay -- page-wide `select` also matches the
-  // workspace's own Exterior/Interior condition dropdowns behind the modal.
   const addDamageModal = page.locator('div.fixed.inset-0.z-50').last();
-  await addDamageModal.locator('select').nth(2).selectOption('new'); // classification select (0=part,1=severity,2=classification)
+  await addDamageModal.locator('select').nth(2).selectOption('new');
   await addDamageModal.locator('textarea').fill('QA test: dent found during rental spot-check.');
   await page.screenshot({ path: `${SHOTS}/i6_add_damage_modal.png` });
   await addDamageModal.locator('button[type="submit"]', { hasText: /^Add$/i }).click();
@@ -159,9 +158,6 @@ async function main() {
   const pendingReviewBadge = await page.locator('text=/pending review/i').first().isVisible().catch(() => false);
   record('New damage shows a pending liability review badge, no charge created', pendingReviewBadge);
 
-  // Fill the required 'damage' photo category via direct API registration
-  // (same Storage-blocked reasoning as above), then attempt to complete --
-  // should still be blocked by the pending liability review.
   if (secondInspectionId) {
     const opsToken2 = await getIdToken('qa-ops@splendor.test', 'Passw0rd!');
     await fetch(`${BASE}/api/inspections/${secondInspectionId}/photos`, {
@@ -191,6 +187,8 @@ async function main() {
   record('Complete becomes enabled once the damage review is resolved', nowEnabled);
 
   await browser.close();
+
+  try { fs.rmSync(QA_TMP, { recursive: true, force: true }); } catch {}
 
   const failed = results.filter(r => !r.ok);
   log(`\n=== SUMMARY: ${results.length - failed.length}/${results.length} checks passed ===`);
