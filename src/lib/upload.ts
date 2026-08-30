@@ -17,7 +17,7 @@ export interface UploadResult {
 export async function uploadFile(
   file: File,
   folder: 'avatars' | 'customer-documents' | 'vehicles' | 'fleet' | 'vehicle-inspections',
-  extra?: { targetUserId?: string; customerId?: string }
+  extra?: { targetUserId?: string; customerId?: string; inspectionId?: string; paymentId?: string; bankBatchId?: string }
 ): Promise<UploadResult> {
   const dataBase64 = await fileToBase64(file);
   try {
