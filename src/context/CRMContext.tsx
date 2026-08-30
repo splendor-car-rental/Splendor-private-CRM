@@ -142,7 +142,12 @@ interface CRMContextType {
   refundDeposit: (depositId: string, amount: number) => Promise<Deposit>;
   
   uploadBankBatch: (batchData: any) => Promise<void>;
-  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string) => Promise<void>;
+  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string, classification?: any, duplicateOverrideReason?: string) => Promise<void>;
+  reclassifyBankTransaction: (txnId: string, classification: any, reason: string) => Promise<void>;
+  previewBankImport: (file: any) => Promise<any>;
+  confirmBankImport: (file: any) => Promise<any>;
+  startVehicleMaintenance: (vehicleId: string, reason: string) => Promise<any>;
+  logVehicleMaintenance: (vehicleId: string, mileageAtService: number, notes: string) => Promise<any>;
   runAutoReconciliation: () => Promise<void>;
   addCompanyBankAccount: (data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
   updateCompanyBankAccount: (id: string, data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
