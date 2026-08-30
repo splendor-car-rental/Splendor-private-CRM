@@ -25,6 +25,3 @@ declare module './index' {
   export interface VehicleTimelineEvent { action: _VehicleTimelineEvent['action']; }
 }
 
-declare module '../context/CRMContext' {
-  export function useCRM(): any;
-}
