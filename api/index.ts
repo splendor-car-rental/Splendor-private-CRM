@@ -1,28 +1,40 @@
-// Vercel serverless function entry point.
-//
-// Everything the app's backend needs to do (auth checks, all /api/*
-// business logic, Firestore access via firebase-admin) already lives in
-// server.ts as a plain Express `app`. This file just re-exports that same
-// app as the default export of a function under /api -- which is Vercel's
-// convention for "this file is a serverless function". Vercel's Node.js
-// runtime knows how to invoke an Express app directly as a request handler.
-//
-// vercel.json rewrites every /api/* request to this one function, and
-// since every route in server.ts is already defined with its full
-// "/api/..." path (e.g. app.get('/api/leads', ...)), no path-stripping or
-// extra routing logic is needed here.
-// NOTE: this specifier says ".js" even though the real file is "server.ts".
-// That's intentional, not a typo -- this project runs as native ESM
-// ("type": "module" in package.json), and Node's own ESM loader (unlike
-// CommonJS require(), and unlike the Vite/esbuild dev tooling this repo
-// otherwise uses) does NOT guess file extensions at runtime; every relative
-// import needs one that resolves to an actual, existing file. Vercel's
-// Node.js builder compiles this project's .ts files to .js before
-// deploying, so ".js" is what will actually exist next to this file at
-// runtime -- writing ".ts" here (or leaving the extension off, as this line
-// used to) is what caused every request to crash with
-// `ERR_MODULE_NOT_FOUND: Cannot find module '/var/task/server'` in
-// production, since Node had no ".ts" file and no un-suffixed "server" file
-// to find. This is the standard, documented convention for TypeScript
-// projects using Node's native ESM module resolution.
-export { default } from '../server.js';
+import type { Request, Response } from 'express';
+import admin from 'firebase-admin';
+import app from '../server.js';
+
+/**
+ * Vercel serverless function entry point.
+ *
+ * The Express application remains the single business/API implementation,
+ * but this boundary adds defense-in-depth for the internal test runner.
+ * server.ts historically exempted /api/tests/run-all from its global auth
+ * middleware because the old UI called it with plain fetch(). The UI is now
+ * authenticated, and this Vercel boundary independently rejects direct
+ * unauthenticated access to that diagnostic workload even if the inner
+ * Express exemption is accidentally reintroduced later.
+ */
+async function handler(req: Request, res: Response) {
+  if (req.path === '/api/tests/run-all') {
+    const authorization = req.headers.authorization || '';
+    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+
+    if (!token || admin.apps.length === 0) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    try {
+      const decoded = await admin.auth().verifyIdToken(token);
+      const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
+      const role = profile.exists ? (profile.data() as any)?.role : null;
+      if (role !== 'ceo' && role !== 'admin') {
+        return res.status(403).json({ error: 'Only CEO or Admin may run the internal diagnostic suite.' });
+      }
+    } catch {
+      return res.status(401).json({ error: 'Invalid or expired session.' });
+    }
+  }
+
+  return app(req, res);
+}
+
+export default handler;
