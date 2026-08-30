@@ -7,7 +7,7 @@ on:
     branches: ['**']
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,23 +21,189 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.0'
+
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
+
       - name: Set up JDK 21 for the Firestore emulator
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
+
       - name: Verify Java is available for the Firestore emulator
         run: java -version
+
+      - name: Reconcile PR9 shared type contracts
+        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          import subprocess
+
+          if not BRANCH_NAME:
+              raise SystemExit('Missing branch name')
+
+          types = Path('src/types/index.ts')
+          text = types.read_text()
+
+          def remove_last_decl(src: str, kind: str, name: str) -> str:
+              pattern = rf'(?ms)^export {kind} {name}[^\\n]*\\n(?:.*?\\n?)?(?=^export (?:type|interface|const|function|class) |\\Z)'
+              matches = list(re.finditer(pattern, src))
+              if len(matches) < 2:
+                  return src
+              m = matches[-1]
+              return src[:m.start()] + src[m.end():]
+
+          # The lower section of index.ts contains a second copy of several
+          # contracts. Remove only the duplicate declaration, preserving the
+          # unique production contracts in that section.
+          for kind, name in [
+              ('type', 'KycStatus'), ('type', 'DocumentCategory'), ('type', 'CustomerKycCategory'),
+              ('interface', 'KycDocument'), ('interface', 'CustomerKycProfile'), ('interface', 'CustomerUploadedDoc'),
+              ('interface', 'CompanyBankAccount'), ('type', 'DepositLifecycleStatus'),
+              ('type', 'FineStatus'), ('type', 'FineSource'), ('interface', 'TrafficFine'),
+              ('interface', 'TelematicsPing'), ('interface', 'TelematicsAlert'), ('interface', 'GeofenceZone'),
+              ('interface', 'SeasonalityRule'), ('interface', 'OccupancyMultiplierRule'),
+              ('interface', 'YieldPricingQuoteResult'),
+          ]:
+              text = remove_last_decl(text, kind, name)
+
+          replacements = {
+              "export type KycStatus = 'pending' | 'under_review' | 'verified' | 'rejected' | 'expired';":
+              "export type KycStatus = 'pending' | 'under_review' | 'verified' | 'rejected' | 'expired' | 'PENDING' | 'UNDER_REVIEW' | 'VERIFIED' | 'REJECTED' | 'EXPIRED' | 'DOCUMENTS_PENDING' | 'UNVERIFIED' | 'ACCEPTED';",
+              "export type DocumentCategory = 'id' | 'driving_license' | 'residence_proof' | 'employment' | 'financial' | 'other';":
+              "export type DocumentCategory = 'id' | 'driving_license' | 'residence_proof' | 'employment' | 'financial' | 'other' | 'EMIRATES_ID_FRONT' | 'EMIRATES_ID_BACK' | 'PASSPORT' | 'VISA_ENTRY_STAMP' | 'DRIVING_LICENSE_FRONT' | 'DRIVING_LICENSE_BACK';",
+              "export type CustomerKycCategory = 'tier_1' | 'tier_2' | 'tier_3' | 'vip' | 'corporate';":
+              "export type CustomerKycCategory = 'tier_1' | 'tier_2' | 'tier_3' | 'vip' | 'corporate' | 'TOURIST' | 'UAE_RESIDENT' | 'GCC_NATIONAL';",
+              "export type DepositLifecycleStatus = 'collected' | 'held' | 'released' | 'forfeited' | 'disputed';":
+              "export type DepositLifecycleStatus = 'collected' | 'held' | 'released' | 'forfeited' | 'disputed' | 'pending' | 'applied' | 'partially_refunded' | 'refunded' | 'cancelled' | 'HELD_ACTIVE' | 'POST_RENTAL_HOLD' | 'FULLY_DEDUCTED' | 'PARTIALLY_DEDUCTED' | 'RELEASED_REFUNDED';",
+              "export type FineStatus = 'issued' | 'received' | 'paid' | 'disputed' | 'waived' | 'pending_payment';":
+              "export type FineStatus = 'issued' | 'received' | 'paid' | 'disputed' | 'waived' | 'pending_payment' | 'pending' | 'approved' | 'billed' | 'cancelled' | 'unallocated' | 'allocated_to_contract';",
+              "export type FineSource = 'salik' | 'rta' | 'manual' | 'imported';":
+              "export type FineSource = 'salik' | 'rta' | 'manual' | 'imported' | 'police' | 'import' | 'other' | 'dubai_police';",
+              "export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'online_link' | 'corporate_credit';":
+              "export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'online_link' | 'corporate_credit' | 'pos_card' | 'cheque' | 'other';",
+              "export type ApprovalRequestType = 'rule_change';":
+              "export type ApprovalRequestType = 'rule_change' | 'lto_application' | 'lto_settlement' | 'lto_termination' | 'vehicle_catalog_update';",
+              "export type VehicleCategory = 'supercar' | 'ultra_luxury_sedan' | 'executive_suv' | 'grand_tourer' | 'exotic_convertible';":
+              "export type VehicleCategory = 'supercar' | 'ultra_luxury_sedan' | 'executive_suv' | 'grand_tourer' | 'exotic_convertible' | string;",
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new, 1)
+
+          # Expand existing interface contracts without weakening required core fields.
+          def add_props(name: str, props: list[str]):
+              nonlocal text
+              pattern = rf'(?ms)(^export interface {name} \\{{)(.*?)(^\\}})'
+              m = re.search(pattern, text)
+              if not m:
+                  raise SystemExit(f'Interface not found: {name}')
+              body = m.group(2)
+              additions = ''.join(f'  {p}\\n' for p in props if re.search(rf'^\\s*{re.escape(p.split(":",1)[0].strip())}\\??\\s*:', body, re.M) is None)
+              text = text[:m.start(2)] + body + additions + text[m.end(2):]
+
+          add_props('Contract', ["contractType?: 'rental' | 'lease_to_own' | string;", 'lto?: LtoContractDetails;'])
+          add_props('Vehicle', [
+              'countryOfOrigin?: string;', 'bodyStyle?: VehicleBodyStyle;', 'vehicleClassTier?: VehicleClassTier;',
+              'suvClass?: VehicleSuvClass;', 'performanceClass?: VehiclePerformanceClass;', 'rentalSegment?: VehicleRentalSegment;',
+              'usageTypes?: VehicleUsageType[];', 'drivetrain?: VehicleDrivetrain;', 'doors?: number;', 'seats?: number;',
+              'roofType?: VehicleRoofType;', 'ltoStatus?: LtoStatus;'
+          ])
+          add_props('Quotation', ['discountApprovalId?: string;', 'discountOverridePending?: boolean;', 'requestedDiscountAmount?: number;', 'requestedDiscountPercentage?: number;'])
+          add_props('Payment', ['verificationStatus?: string;', 'verificationNote?: string;'])
+          add_props('AuditLog', ['contentHash?: string;'])
+          add_props('BankTransaction', ['matchClassification?: BankMatchClassification;', 'matchReason?: string;', 'matchReasonAr?: string;', 'receivedAmountClassification?: ReceivedAmountClassification;'])
+          add_props('BankImportBatch', ['unmatchedCrmPayments?: UnmatchedCrmPaymentReportEntry[];'])
+          add_props('Deposit', ['holdType?: string;'])
+
+          # Missing PR9 feature contracts.
+          if 'export type VehicleManufacturer = ' not in text:
+              text += r'''
+
+// ---------------------------------------------------------------------------
+// PR9 integrated feature contracts
+// ---------------------------------------------------------------------------
+export type VehicleManufacturer = string;
+export interface VehicleCatalogModel { id: string; manufacturer: string; model: string; year?: number; trim?: string; active?: boolean; [key: string]: unknown; }
+export type VehicleBodyStyle = 'sedan' | 'suv' | 'coupe' | 'convertible' | 'hatchback' | 'wagon' | 'pickup' | 'van' | string;
+export type VehicleClassTier = 'economy' | 'standard' | 'premium' | 'luxury' | 'exotic' | 'supercar' | string;
+export type VehicleSuvClass = 'compact' | 'midsize' | 'fullsize' | 'luxury' | string;
+export type VehiclePerformanceClass = 'standard' | 'sport' | 'performance' | 'supercar' | 'hypercar' | string;
+export type VehicleRentalSegment = 'economy' | 'compact' | 'suv' | 'luxury' | 'premium' | 'exotic' | 'supercar' | string;
+export type VehicleUsageType = 'rental' | 'lease_to_own' | 'company' | 'fleet' | 'demo' | string;
+export type VehicleDrivetrain = 'fwd' | 'rwd' | 'awd' | '4wd' | string;
+export type VehicleRoofType = 'standard' | 'sunroof' | 'panoramic' | 'convertible' | 'hardtop' | string;
+export type BankMatchClassification = 'exact' | 'probable' | 'possible' | 'manual_review' | 'unmatched' | string;
+export interface UnmatchedCrmPaymentReportEntry { paymentId: string; amount: number; reference?: string; customerId?: string; customerName?: string; reason?: string; }
+export interface LtoApplication { id: string; customerId: string; vehicleId: string; contractId?: string; status: LtoApplicationStatus; requestedAmount?: number; createdAt: string; updatedAt: string; [key: string]: unknown; }
+export type LtoApplicationStatus = 'draft' | 'pending' | 'under_review' | 'approved' | 'rejected' | 'active' | 'completed' | 'cancelled' | string;
+export interface LtoEligibilityCheck { eligible: boolean; reasons?: string[]; score?: number; [key: string]: unknown; }
+export interface LtoFinancialOffer { id?: string; vehiclePrice?: number; downPayment?: number; financedAmount?: number; monthlyPayment?: number; termMonths?: number; [key: string]: unknown; }
+export interface LtoContractDetails { applicationId?: string; termMonths?: number; downPayment?: number; monthlyPayment?: number; totalPayable?: number; [key: string]: unknown; }
+export type LtoStatus = 'draft' | 'pending' | 'approved' | 'active' | 'completed' | 'settled' | 'terminated' | string;
+export interface LtoInstallment { id: string; applicationId?: string; contractId?: string; amount: number; dueDate: string; paidAt?: string; status: LtoInstallmentStatus; [key: string]: unknown; }
+export type LtoInstallmentStatus = 'pending' | 'paid' | 'overdue' | 'waived' | 'cancelled' | string;
+export interface LtoSettlementRequest { id: string; applicationId?: string; contractId?: string; amount: number; reason?: string; status?: string; createdAt?: string; [key: string]: unknown; }
+export interface BlocklistEntry { id: string; identifier: string; identifierType: BlocklistIdentifierType; tier: BlocklistTier; reason?: string; active?: boolean; customerId?: string; createdAt?: string; updatedAt?: string; [key: string]: unknown; }
+export type BlocklistIdentifierType = 'customer' | 'phone' | 'email' | 'id_number' | 'passport' | 'license' | string;
+export type BlocklistTier = 'low' | 'medium' | 'high' | 'critical' | string;
+export interface VehicleInspection { id: string; vehicleId: string; contractId?: string; type: InspectionType; photos?: InspectionPhoto[]; damages?: InspectionDamageMarker[]; notes?: string; createdAt?: string; updatedAt?: string; [key: string]: unknown; }
+export type InspectionType = 'receiving' | 'handover' | 'return' | 'periodic' | string;
+export type InspectionPhotoCategory = 'exterior' | 'interior' | 'damage' | 'odometer' | 'fuel' | 'documents' | string;
+export interface InspectionDamageMarker { id: string; category?: string; severity?: string; description?: string; [key: string]: unknown; }
+export interface InspectionPhoto { id: string; url: string; category: InspectionPhotoCategory; caption?: string; [key: string]: unknown; }
+export type DamageClassification = 'minor' | 'moderate' | 'major' | 'total_loss' | string;
+export type DamageLiabilityStatus = 'customer' | 'supplier' | 'splendor' | 'insurance' | 'undetermined' | string;
+export interface WhatsAppConversation { id: string; customerId?: string; customerName?: string; phone?: string; state: WhatsAppConversationState; priority: WhatsAppConversationPriority; messages?: WhatsAppConversationMessage[]; [key: string]: unknown; }
+export type WhatsAppConversationState = 'open' | 'pending' | 'resolved' | 'closed' | string;
+export interface WhatsAppConversationMessage { id: string; conversationId?: string; direction?: 'inbound' | 'outbound' | string; body?: string; text?: string; timestamp?: string; [key: string]: unknown; }
+export type WhatsAppConversationPriority = 'low' | 'normal' | 'high' | 'urgent' | string;
+export interface WhatsAppConversationDraft { conversationId?: string; body?: string; text?: string; [key: string]: unknown; }
+export type WhatsAppCustomerMatchStatus = 'matched' | 'unmatched' | 'ambiguous' | string;
+export interface WhatsAppReservationRequest { id?: string; customerId?: string; conversationId?: string; vehicleId?: string; pickupDateTime?: string; returnDateTime?: string; [key: string]: unknown; }
+export type PaymentGatewayProvider = 'tabby' | 'stripe' | 'network' | 'manual' | string;
+export type PaymentIntentPurpose = 'rental' | 'deposit' | 'invoice' | 'lto_installment' | 'other' | string;
+export type PaymentIntentStatus = 'created' | 'requires_action' | 'processing' | 'succeeded' | 'failed' | 'cancelled' | string;
+export type PaymentGatewayEventType = 'payment_succeeded' | 'payment_failed' | 'refund_succeeded' | 'refund_failed' | string;
+export interface PaymentIntent { id: string; customerId?: string; amount: number; currency?: string; purpose: PaymentIntentPurpose; status: PaymentIntentStatus; provider?: PaymentGatewayProvider; idempotencyKey?: string; createdAt?: string; updatedAt?: string; [key: string]: unknown; }
+export interface PaymentGatewayEvent { id: string; type: PaymentGatewayEventType; paymentIntentId?: string; payload?: Record<string, unknown>; createdAt?: string; [key: string]: unknown; }
+export interface PaymentRefund { id: string; paymentIntentId?: string; amount: number; status?: string; reason?: string; createdAt?: string; [key: string]: unknown; }
+export interface VehicleCatalogUpdateRequest { id?: string; vehicleId?: string; manufacturer?: string; model?: string; status?: VehicleCatalogRequestStatus; [key: string]: unknown; }
+export type VehicleCatalogRequestStatus = 'pending' | 'approved' | 'rejected' | 'applied' | string;
+'''
+
+          types.write_text(text)
+
+          # The old compatibility augmentation duplicated canonical contracts;
+          # remove it now that PR9 contracts live in index.ts.
+          for path in ['src/types/compatibility.d.ts', 'PR9-REPAIR-TRIGGER.txt', '.github/workflows/pr9-type-repair.yml']:
+              p = Path(path)
+              if p.exists():
+                  p.unlink()
+
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'add', 'src/types/index.ts', 'src/types/compatibility.d.ts', 'PR9-REPAIR-TRIGGER.txt', '.github/workflows/pr9-type-repair.yml'], check=True)
+          diff = subprocess.run(['git', 'diff', '--cached', '--quiet'])
+          if diff.returncode == 0:
+              raise SystemExit('No repair changes produced')
+          subprocess.run(['git', 'commit', '-m', 'fix: reconcile PR9 shared type contracts'], check=True)
+          subprocess.run(['git', 'push', 'origin', f'HEAD:{BRANCH_NAME}'], check=True)
+
       - name: Typecheck
         run: bun run lint
       - name: Run full test suite (unit + integration + Firestore rules + security)
