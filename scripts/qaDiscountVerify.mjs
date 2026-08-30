@@ -31,34 +31,23 @@ async function main() {
 
   log('Opening Prepare VIP Quotation modal, entering an above-ceiling discount...');
   await page.locator('button', { hasText: /New Quotation|Prepare Quotation|Add Quotation/i }).first().click().catch(async () => {
-    await page.locator('button svg').first(); // fallback handled below
+    await page.locator('button svg').first();
   });
   await page.waitForSelector('text=/Prepare VIP Quotation/i', { timeout: 5000 });
   const modal = page.locator('form').filter({ has: page.locator('text=/Discount \\(AED/i') });
 
-  // Explicitly select the seeded customer/vehicle -- a controlled <select>
-  // whose React state starts at '' won't fire onChange just because the
-  // browser visually defaults to the first <option>, so without this the
-  // submitted form would carry an empty customerId/vehicleId.
   await modal.locator('select').nth(0).selectOption({ index: 0 });
   await modal.locator('select').nth(1).selectOption({ index: 0 });
 
-  // dailyRate defaults to 6500, durationDays defaults to 2 -> baseTotal 13000.
-  // A 2000 AED discount is ~15.4%, well above the default 5% ceiling.
   await modal.locator('label', { hasText: /Discount \(AED/i }).locator('xpath=following-sibling::input[1]').fill('2000');
   await page.screenshot({ path: `${SHOTS}/q2_discount_filled.png` });
   await modal.locator('button[type="submit"]').click();
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${SHOTS}/q3_after_create.png` });
 
-  const bodyText = await page.locator('body').innerText();
   const pendingNoticeVisible = await page.locator('text=/awaiting sales-manager/i').isVisible().catch(() => false);
   record('New quotation shows the discount-pending-approval notice (capped total shown)', pendingNoticeVisible);
 
-  // Sales does not have Procurement & Suppliers in its nav at all (see
-  // ROLE_VIEWS.sales in src/config/permissions.ts) -- checking the pending
-  // request and the decider controls therefore has to happen from a role
-  // that actually has that screen (ceo/admin/operations/finance/fleet).
   log('Logging in as QA CEO in a fresh session to see and approve the discount override...');
   const ctx2 = await browser.newContext();
   const page2 = await ctx2.newPage();
@@ -85,8 +74,6 @@ async function main() {
 
     const approvedToastText = await page2.locator('text=/Quotation QT-/').first().innerText().catch(() => '');
     const approvedQuoteId = (approvedToastText.match(/QT-\d+/) || [])[0];
-    // Dismiss the toast -- it overlaps the bottom of the quotation list and
-    // would otherwise intercept the click on a card underneath it.
     await page2.locator('button', { hasText: '×' }).last().click().catch(() => {});
     await page2.waitForTimeout(300);
     await page2.locator('button', { hasText: /Quotations|عروض/i }).first().click();
