@@ -17,6 +17,28 @@ export interface User {
 export type CustomerType = 'individual' | 'corporate' | 'vip';
 export type CustomerStatus = 'active' | 'inactive' | 'blocklisted' | 'vip';
 
+// ---- Security Blocklist / Watchlist (Splendor Master Rule Set, Module 03) ----
+export type BlocklistIdentifierType = 'passport' | 'emirates_id';
+export type BlocklistTier = 'full' | 'conditional';
+
+export interface BlocklistEntry {
+  id: string; // BLK-000001
+  identifierType: BlocklistIdentifierType;
+  identifierValue: string; // normalized uppercase -- never matched by name
+  identifierCountry?: string; // required, and only meaningful, when identifierType === 'passport'
+  customerName?: string; // display only -- never used as the match key (RULE-B01)
+  tier: BlocklistTier;
+  reason: string;
+  conditionalNote?: string; // required when tier === 'conditional': what's needed to proceed (raised deposit, manager sign-off, etc.)
+  status: 'active' | 'removed';
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  removedAt?: string;
+  removedBy?: string;
+  removedByName?: string;
+}
+
 export interface Customer {
   id: string; // e.g. CUS-000001
   type: CustomerType;
@@ -30,8 +52,6 @@ export interface Customer {
   city: string;
   country: string;
   nationality: string;
-  emirate?: string; // UAE emirate for KYC
-  dateOfBirth?: string; // ISO date for KYC
   
   // IDs & License
   idType: 'emirates_id' | 'passport' | 'gcc_id';
@@ -40,6 +60,10 @@ export interface Customer {
   licenseNumber: string;
   licenseCountry: string;
   licenseExpiryDate: string;
+  /** Optional -- most existing customer records were never asked for this. Added for Lease-to-Own age eligibility (checkLtoEligibility() in src/server/leaseToOwn.ts); absent for an existing customer is treated as "age cannot be verified" (conservatively ineligible for LTO), never guessed. */
+  dateOfBirth?: string;
+  /** Which language a customer-facing WhatsApp message should be sent in, monolingual (no mixing) -- used by the Lease-to-Own notification flows (dispatchCustomerNotification's `language` param). Defaults to 'ar' when absent, never mixed with a guessed opposite language. */
+  preferredLanguage?: 'ar' | 'en';
 
   // CRM details
   source: string;
@@ -57,11 +81,6 @@ export interface Customer {
     smokingPreference?: 'non-smoking' | 'smoking';
   };
   notes: string;
-  
-  // KYC Profile
-  kycProfile?: CustomerKycProfile;
-  kycStatus?: KycStatus;
-  kycCustomerCategory?: CustomerKycCategory;
   
   // Financial metrics
   lifetimeValue: number;
@@ -185,7 +204,7 @@ export interface VehicleTimelineEvent {
   id: string; // EVT-0001
   vehicleId: string;
   date: string;
-  action: 'CREATED' | 'PURCHASED' | 'REGISTERED' | 'PLATE_ASSIGNED' | 'PLATE_TRANSFERRED' | 'RENTAL_STARTED' | 'RENTAL_COMPLETED' | 'MAINTENANCE_LOGGED' | 'PUBLISHED_TO_WEB' | 'UNPUBLISHED_FROM_WEB' | 'FEATURED_ON_WEB' | 'PRICING_UPDATED' | 'SOLD' | 'ARCHIVED' | 'RESTORED';
+  action: 'CREATED' | 'PURCHASED' | 'REGISTERED' | 'PLATE_ASSIGNED' | 'PLATE_TRANSFERRED' | 'RENTAL_STARTED' | 'RENTAL_COMPLETED' | 'MAINTENANCE_STARTED' | 'MAINTENANCE_LOGGED' | 'PUBLISHED_TO_WEB' | 'UNPUBLISHED_FROM_WEB' | 'FEATURED_ON_WEB' | 'PRICING_UPDATED' | 'SOLD' | 'ARCHIVED' | 'RESTORED';
   previousState?: Record<string, any>;
   newState?: Record<string, any>;
   reason?: string;
@@ -231,12 +250,130 @@ export interface VehicleSaleRecord {
   retainedPlateCity?: string;
 }
 
+// ----------------------------------------------------
+// SPLENDOR Vehicle Master Profile & Verified Vehicle Catalog
+// ----------------------------------------------------
+// Additive classification/technical fields on top of the existing Vehicle
+// record -- none of these replace `category` (the existing rental-segment
+// field every pricing/reservation code path already reads), `fuelType`,
+// `engine`, `horsepower`, or `transmission`. They are optional so every
+// pre-existing vehicle record (which never had them) remains valid as-is.
+
+/** نوع الهيكل -- body/silhouette shape, independent of rental category. */
+export type VehicleBodyStyle =
+  | 'sedan' | 'hatchback' | 'liftback' | 'fastback' | 'coupe' | 'convertible' | 'roadster' | 'spider' | 'targa'
+  | 'wagon' | 'shooting_brake' | 'suv' | 'crossover' | 'suv_coupe' | 'mpv' | 'minivan' | 'van' | 'panel_van'
+  | 'minibus' | 'pickup' | 'truck' | 'cab_chassis' | 'limousine' | 'microcar' | 'city_car' | 'kei';
+
+/** فئة المركبة -- general market tier, distinct from the rental-pricing `category` field. */
+export type VehicleClassTier = 'economy' | 'compact' | 'midsize' | 'executive' | 'luxury' | 'ultra_luxury' | 'sport' | 'supercar' | 'hypercar';
+
+/** تصنيف SUV -- only relevant when bodyStyle is an SUV/crossover variant. */
+export type VehicleSuvClass = 'compact_suv' | 'midsize_suv' | 'large_suv' | 'luxury_suv' | 'performance_suv' | 'suv_coupe' | 'offroad_suv';
+
+/** تصنيف الأداء */
+export type VehiclePerformanceClass = 'standard' | 'high_performance' | 'sport' | 'supercar' | 'hypercar';
+
+/** قطاع التأجير -- a richer, optional companion to the existing `category` field (never replaces it). */
+export type VehicleRentalSegment =
+  | 'economy' | 'standard' | 'premium' | 'luxury' | 'ultra_luxury' | 'executive' | 'sport' | 'supercar' | 'hypercar'
+  | 'luxury_suv' | 'vip' | 'chauffeur_driven';
+
+/** الاستخدام -- one vehicle can serve more than one use case. */
+export type VehicleUsageType = 'daily' | 'business' | 'family' | 'vip' | 'chauffeur_driven' | 'luxury' | 'performance' | 'offroad' | 'commercial';
+
+export type VehicleDrivetrain = 'fwd' | 'rwd' | 'awd' | '4wd';
+
+export type VehicleRoofType = 'fixed' | 'sunroof' | 'panoramic' | 'targa' | 'soft_top' | 'retractable_hard_top' | 'folding_hard_top';
+
+/**
+ * Provenance of a reference/technical data point -- tracked internally so
+ * staff/reviewers know how trustworthy a Master Catalog field is; never
+ * shown to the public website unless explicitly appropriate.
+ */
+export type VehicleDataSourceTag = 'oem_official' | 'manufacturer_source' | 'trusted_source' | 'staff_entry' | 'actual_vehicle_data' | 'unverified';
+
+/** Master Manufacturer Catalog entry -- centralized, not a free-text field. */
+export interface VehicleManufacturer {
+  id: string; // slug, e.g. "ferrari"
+  name: string;
+  nameAr?: string;
+  countryOfOrigin?: string;
+  source: VehicleDataSourceTag;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Master Vehicle Catalog entry -- REFERENCE data for a model/generation/
+ * trim in general (per section 19, this is never assumed to be the exact
+ * spec of any one actual Splendor vehicle when a model has more than one
+ * real-world variant; the actual Vehicle record's own confirmed fields are
+ * always the source of truth for what gets published).
+ */
+export interface VehicleCatalogModel {
+  id: string; // e.g. "ferrari-296-gtb"
+  manufacturerId: string;
+  make: string;
+  model: string;
+  generation?: string;
+  productionYears?: string; // e.g. "2021-present" or "2015-2020"
+  trim?: string;
+  bodyStyle?: VehicleBodyStyle;
+  engine?: string;
+  horsepower?: number;
+  transmission?: string;
+  drivetrain?: VehicleDrivetrain;
+  fuelType?: Vehicle['fuelType'];
+  doors?: number;
+  seats?: number;
+  roofType?: VehicleRoofType;
+  countryOfOrigin?: string;
+  discontinued?: boolean;
+  source: VehicleDataSourceTag;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type VehicleCatalogRequestStatus = 'pending' | 'approved' | 'rejected';
+
+/**
+ * "الموديل غير موجود؟ طلب إضافة موديل جديد" -- a staff-submitted request to
+ * add a manufacturer/model to the Master Catalog, or a future automated
+ * discovery hit. Never enters the published catalog until a decider
+ * approves it through the existing Four-Eyes approvals engine
+ * (ApprovalRequestType 'vehicle_catalog_update').
+ */
+export interface VehicleCatalogUpdateRequest {
+  id: string; // VCU-000001
+  requestType: 'new_manufacturer' | 'new_model' | 'model_correction' | 'model_discontinued';
+  manufacturerName: string;
+  modelName?: string;
+  year?: number;
+  trim?: string;
+  details?: string;
+  sourceNote?: string; // where the staff member says this info came from
+  discoverySource: 'staff_request' | 'internet_discovery' | 'manual_admin';
+  status: VehicleCatalogRequestStatus;
+  approvalRequestId?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  resultingManufacturerId?: string;
+  resultingModelId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Vehicle {
   id: string; // VEH-0001
   vin: string;
   plateNumber: string;
   plateCity: string; // Dubai, Abu Dhabi, etc.
-  plateCategory?: string; // Type of plate
   make: string; // Rolls-Royce, Ferrari, Bentley, Lamborghini, Mercedes-Maybach
   model: string; // Spectre, 296 GTB, Revuelto, Flying Spur, S680
   year: number;
@@ -247,42 +384,61 @@ export interface Vehicle {
   engine: string;
   horsepower: number;
   transmission: string;
-  fuelType: 'petrol' | 'electric' | 'hybrid';
-  
-  // Vehicle identifiers and documentation
-  chassisNumber?: string;
-  engineNumber?: string;
-  trafficFileNumber?: string;
-  manufacturingCountry?: string;
-  seatingCapacity?: number;
-  registrationDate?: string;
-  
-  // Insurance and coverage
-  insuranceCompany?: string;
-  insuranceType?: string;
-  insurancePolicyNumber?: string;
-  
-  // Financing
-  mortgagee?: string;
-  
-  // GPS tracking
-  gpsTrackingCompany?: string;
-  gpsCertificateExpiry?: string;
-  
+  fuelType: 'petrol' | 'diesel' | 'hybrid' | 'phev' | 'electric' | 'hydrogen';
+
+  // Master Vehicle Profile classification (Vehicle Master Profile mission)
+  // -- all optional/additive; `category` above remains the field every
+  // existing pricing/reservation/public-DTO code path reads, unchanged.
+  bodyStyle?: VehicleBodyStyle;
+  vehicleClassTier?: VehicleClassTier;
+  suvClass?: VehicleSuvClass;
+  performanceClass?: VehiclePerformanceClass;
+  rentalSegment?: VehicleRentalSegment;
+  usageTypes?: VehicleUsageType[];
+
+  // Master Vehicle Profile technical specs (additive; engine/horsepower/
+  // transmission/fuelType above are unchanged and remain required).
+  drivetrain?: VehicleDrivetrain;
+  doors?: number;
+  seats?: number;
+  roofType?: VehicleRoofType;
+  countryOfOrigin?: string;
+
+  // Master Catalog linkage -- informational/reference only. Per section 19,
+  // the actual vehicle's own confirmed fields above are ALWAYS the source
+  // of truth for what gets published; this link is never used to infer or
+  // auto-fill a real vehicle's specs.
+  catalogModelId?: string;
+  generation?: string;
+  productionYears?: string;
+
+  /** Per-field-group provenance for reference/technical data -- internal only, never shown to the public unless explicitly appropriate. */
+  dataSource?: Partial<Record<'basicInfo' | 'classification' | 'technicalSpecs' | 'pricing', VehicleDataSourceTag>>;
+
   mileage: number;
   dailyRate: number;
   weeklyRate: number;
   monthlyRate: number;
   minDeposit: number;
   
-  // Mileage allowances and extra rates
-  dailyMileageAllowance?: number;
-  monthlyMileageAllowance?: number;
-  extraKmRate?: number;
-  
   status: VehicleStatus;
   lifecycleStatus?: VehicleLifecycleStatus; // Default ACTIVE
   ownershipSource?: VehicleOwnershipSource; // Default OWNED
+  /**
+   * Purely informational/additive marker for a vehicle currently on a
+   * Lease-to-Own track -- never a substitute for `status`/`lifecycleStatus`.
+   * Availability blocking during an active LTO agreement is handled the
+   * exact same way an active rental already blocks other bookings: the LTO
+   * Contract itself carries `status:'active'` and a real
+   * startDateTime/endDateTime spanning the LTO term, so the existing
+   * reserveVehicleSlot() active-contract-date-range conflict check already
+   * excludes it from new reservations with zero new conflict-checking code.
+   * This field only drives UI labeling (Customer 360 / Vehicle Details /
+   * the LTO Dashboard) and is cleared once the vehicle leaves the LTO track
+   * (terminated-and-recovered) or reaches 'owned' (ownership transferred).
+   */
+  ltoStatus?: 'lto_reserved' | 'lto_active' | 'lto_default' | 'lto_settlement' | 'lto_recovery' | 'ownership_transfer_pending' | 'owned';
+  ltoContractId?: string;
   
   // Public website publishing layer
   publicVehicleId?: string;
@@ -340,7 +496,7 @@ export interface PublicVehicleDTO {
   interiorColor: string;
   horsepower: number;
   transmission: string;
-  fuelType: 'petrol' | 'electric' | 'hybrid';
+  fuelType: 'petrol' | 'diesel' | 'hybrid' | 'phev' | 'electric' | 'hydrogen';
   images: string[];
   thumbnail: string;
   features: string[];
@@ -408,6 +564,27 @@ export interface PublicWebsiteReservationRequest {
   idempotencyKey?: string;
 }
 
+/**
+ * Same shape/intent as PublicWebsiteReservationRequest, but for the WhatsApp
+ * channel: email is optional (a WhatsApp customer's identity is their phone
+ * number, not an email address -- forcing an email here would just push
+ * customers to type a throwaway one), and pickupLocation/returnLocation are
+ * collected conversationally rather than posted as one form. Handled by the
+ * SAME reservation-creation transaction (reserveVehicleSlot) as the website
+ * path -- see SplendorConnectEngine.handleWhatsAppReservation().
+ */
+export interface WhatsAppReservationRequest {
+  vehicleId: string; // resolved from the conversation's selected vehicle -- an internal Vehicle.id, not a public slug
+  fullName: string;
+  phone: string;
+  email?: string;
+  pickupDateTime: string;
+  returnDateTime: string;
+  pickupLocation: string;
+  returnLocation: string;
+  idempotencyKey?: string;
+}
+
 export interface WebsiteReconciliationItem {
   websiteVehicleId: string;
   websiteName: string;
@@ -450,6 +627,17 @@ export interface Quotation {
   extraServicesTotal: number;
   discountAmount: number;
   discountPercentage: number;
+  // RULE-P01 (Splendor Master Rule Set): a discount above the configured
+  // staffDiscountCeilingPercent requires sales-manager (ceo/admin) sign-off.
+  // While pending, discountAmount/discountPercentage above reflect the
+  // CAPPED (safe, already-authorized) discount actually applied to
+  // baseTotal/vatAmount/grandTotal -- requestedDiscountAmount/Percentage
+  // preserve what the requester originally asked for, applied in full only
+  // once discountApprovalId is approved.
+  discountOverridePending?: boolean;
+  discountApprovalId?: string;
+  requestedDiscountAmount?: number;
+  requestedDiscountPercentage?: number;
   vatAmount: number; // 5% UAE VAT
   grandTotal: number;
   securityDeposit: number;
@@ -555,6 +743,183 @@ export interface ReturnInspection {
   notes?: string;
 }
 
+// ----------------------------------------------------
+// VEHICLE INSPECTION & PHOTO EVIDENCE (Splendor Master Rule Set, Module 08)
+// ----------------------------------------------------
+// A standalone entity, deliberately separate from the older embedded
+// Contract.handover/returnDetails fields above (which stay exactly as they
+// are -- this is additive, not a replacement of a working system). Every
+// point in a vehicle's lifecycle that needs documented evidence (before a
+// customer ever sees it, at handover, spot-checks during a long rental, at
+// return, and a deeper post-return review) is one InspectionType, so the
+// same data model, photo pipeline, and damage-comparison workflow serves
+// all of them instead of five bespoke ones.
+
+export type InspectionType = 'pre_delivery' | 'handover' | 'in_rental' | 'return' | 'post_return';
+
+export type InspectionStatus = 'draft' | 'completed' | 'voided';
+
+/** Never auto-derived from an image diff -- always a human's explicit judgment call. */
+export type DamageClassification = 'pre_existing' | 'new' | 'uncertain';
+
+/** Whether a piece of recorded damage should become a customer charge is a SEPARATE, reviewable decision from recording the damage itself -- recording damage never auto-creates a charge. */
+export type DamageLiabilityStatus = 'not_applicable' | 'pending_review' | 'customer_liable' | 'not_customer_liable';
+
+/** Configurable per src/config/inspectionPhotoCategories.ts -- not hardcoded into any single inspection type's validation. */
+export type InspectionPhotoCategory = 'front' | 'rear' | 'left' | 'right' | 'interior' | 'dashboard_odometer' | 'fuel_gauge' | 'damage' | 'other';
+
+export interface InspectionPhoto {
+  id: string; // INSPPH-000001
+  inspectionId: string;
+  vehicleId: string;
+  contractId?: string;
+  category: InspectionPhotoCategory;
+  /** Storage path from POST /api/upload (folder 'vehicle-inspections') -- never a raw Storage URL. */
+  documentPath: string;
+  /** GET /api/documents/file?path=... proxy URL -- what the UI actually renders/fetches. */
+  fileUrl: string;
+  /** Position within its category, 1-based -- lets the UI show "Front 1 of 3" and preserves capture order. */
+  sequence: number;
+  uploadedBy: string;
+  uploadedByName: string;
+  uploadedAt: string;
+  notes?: string;
+}
+
+export interface InspectionDamageMarker {
+  id: string;
+  part: VehicleDamageMarker['part'];
+  severity: VehicleDamageMarker['severity'];
+  classification: DamageClassification;
+  description: string;
+  photoIds: string[];
+  liabilityStatus: DamageLiabilityStatus;
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  reviewNotes?: string;
+  recordedBy: string;
+  recordedByName: string;
+  recordedAt: string;
+}
+
+export interface InspectionCustomerAcknowledgement {
+  acknowledgedAt: string;
+  /** The customer doesn't hold a login -- this records the name they gave in person/on the phone, witnessed and entered by staff. Not a signature-capture system (out of this mission's scope); see RULE-C04 for the separate, still-unbuilt OTP-signature concept. */
+  acknowledgedByName: string;
+  witnessedBy: string;
+  witnessedByName: string;
+  notes?: string;
+}
+
+export interface VehicleInspection {
+  id: string; // INSP-000001
+  vehicleId: string;
+  vehicleName: string;
+  contractId?: string;
+  contractNumber?: string;
+  type: InspectionType;
+  status: InspectionStatus;
+  inspectorId: string;
+  inspectorName: string;
+  startedAt: string;
+  completedAt?: string;
+  voidedAt?: string;
+  voidedBy?: string;
+  voidedByName?: string;
+  voidReason?: string;
+  mileage?: number;
+  fuelLevelPercent?: number;
+  exteriorCondition?: 'pristine' | 'clean' | 'fair' | 'needs_detailing';
+  interiorCondition?: 'pristine' | 'clean' | 'fair' | 'needs_detailing';
+  damages: InspectionDamageMarker[];
+  /** Snapshotted at creation from the current config default for this type -- so changing the default later never rewrites what a past inspection actually required. */
+  requiredPhotoCategories: InspectionPhotoCategory[];
+  /** Embedded, not a separate collection -- one inspection's photos are always read/written together with the inspection itself, so there's no benefit to a second collection and a real cost in cross-document consistency. */
+  photos: InspectionPhoto[];
+  /** e.g. a 'return' inspection points back at its 'handover' counterpart so the UI can render both photo sets and damage lists side by side for a human to compare. */
+  compareAgainstInspectionId?: string;
+  customerAcknowledgement?: InspectionCustomerAcknowledgement;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ----------------------------------------------------
+// WHATSAPP CONVERSATIONAL COMMERCE (Splendor Master Rule Set, Module 10)
+// ----------------------------------------------------
+// A real, persisted conversation state machine per customer phone number --
+// distinct from `whatsapp_inbound_events` (the low-level, append-only raw
+// webhook log used purely for delivery idempotency/audit) and from
+// `WhatsAppMessageLogEntry` (the Control Center's outbound broadcast log).
+// This is the CRM's own record of "where is this customer in the
+// conversation," so the bot and a human agent are always looking at the
+// exact same state.
+
+export type WhatsAppConversationState =
+  | 'NEW'
+  | 'BROWSING'
+  | 'VEHICLE_SELECTED'
+  | 'DATES_PENDING'
+  | 'LOCATION_PENDING'
+  | 'RESERVATION_CONFIRM'
+  | 'RESERVATION_CREATED'
+  | 'HUMAN_ASSISTANCE'
+  | 'CLOSED';
+
+export type WhatsAppConversationPriority = 'normal' | 'high' | 'vip';
+
+export type WhatsAppCustomerMatchStatus = 'matched' | 'unmatched' | 'ambiguous_review';
+
+/** In-progress booking details the customer is building through the chat -- never itself a Reservation; only handWhatsAppReservation() in splendorConnectEngine.ts, calling the real reservation engine, can turn this into one. */
+export interface WhatsAppConversationDraft {
+  vehicleId?: string;
+  vehiclePublicId?: string;
+  vehicleName?: string;
+  category?: VehicleCategory;
+  pickupDateTime?: string;
+  returnDateTime?: string;
+  pickupLocation?: string;
+  returnLocation?: string;
+  fullName?: string;
+  email?: string;
+}
+
+export interface WhatsAppConversation {
+  id: string; // normalized phone (digits only), also the Firestore doc id
+  phone: string;
+  customerId?: string;
+  customerName?: string;
+  customerMatchStatus: WhatsAppCustomerMatchStatus;
+  state: WhatsAppConversationState;
+  /** false once a human has taken over -- the bot goes silent (no automated replies) until a staff member explicitly hands the conversation back. */
+  botActive: boolean;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
+  priority: WhatsAppConversationPriority;
+  tags: string[];
+  draft: WhatsAppConversationDraft;
+  lastReservationId?: string;
+  lastInboundAt?: string;
+  lastOutboundAt?: string;
+  lastMessagePreview?: string;
+  /** true when the last inbound message has not yet been seen by staff (cleared by GET /api/whatsapp/conversations/:phone). Irrelevant while botActive, since the bot is already handling it. */
+  unread: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One message in a conversation's `whatsapp_conversations/{phone}/messages` subcollection -- a subcollection rather than an embedded array (unlike InspectionPhoto[] above) because a chat thread grows unboundedly over a customer's lifetime, while an inspection's photo set is small and bounded by definition. */
+export interface WhatsAppConversationMessage {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  type: 'text' | 'interactive' | 'image' | 'document' | 'system';
+  body: string;
+  sentBy?: string; // 'bot', or a staff uid for a manual reply
+  sentByName?: string;
+  timestamp: string;
+}
+
 export interface Contract {
   id: string; // CON-000001
   contractNumber: string;
@@ -578,28 +943,181 @@ export interface Contract {
   grandTotal: number;
   depositAmount: number;
   mileageAllowancePerDay: number; // default 200 km/day -- editable per contract
-  monthlyMileageAllowance?: number; // for longer contracts
   extraKmRate: number; // e.g. 15 AED / km
   depositReleaseDays: number; // default 21 days -- editable per contract
-  
-  // Currency handling for international contracts
-  currency?: string; // e.g. 'AED', 'USD', 'EUR'
-  exchangeRate?: number; // if currency is not AED
   
   status: ContractStatus;
   handover?: HandoverInspection;
   returnDetails?: ReturnInspection;
-  
+
   paymentStatus: 'unpaid' | 'partially_paid' | 'paid';
   depositStatus: 'pending' | 'collected' | 'held' | 'applied' | 'partially_refunded' | 'refunded';
-  
+
   notes: string;
   termsAccepted: boolean;
   createdAt: string;
   updatedAt: string;
+
+  /** Absent/undefined = an ordinary rental contract (every contract created before this field existed, and every one created by the rental flow going forward). Only 'lease_to_own' contracts carry an `lto` block -- this is a pure addition, never a change to how rental contracts are read or written. */
+  contractType?: 'rental' | 'lease_to_own';
+  lto?: LtoContractDetails;
 }
 
-export type ChargeType = 
+// ----------------------------------------------------
+// LEASE-TO-OWN (Splendor Private Mobility Operating System)
+// ----------------------------------------------------
+// A full product module built entirely on top of the existing Customer /
+// KYC / Vehicle / Reservation / Contract / Financial / Audit / RBAC / SoD /
+// WhatsApp / Document architecture -- no parallel systems. An LTO deal is
+// still a Contract (contractType:'lease_to_own', see above); its own
+// lifecycle data lives in the `lto` block; its installment schedule is a
+// new, genuinely new concept (a fixed recurring due-date obligation, a
+// different shape from the existing itemized Invoice or the ad-hoc Debt
+// ledger) tracked in its own collection, but actual money received is
+// still recorded through the existing Payment entity/route -- one
+// financial ledger, never two.
+
+export type LtoApplicationStatus = 'draft' | 'submitted' | 'under_review' | 'approved' | 'rejected' | 'cancelled';
+
+export interface LtoEligibilityCheck {
+  eligible: boolean;
+  reasons: string[]; // human-readable failure reasons when eligible=false; empty when eligible=true
+  checkedAt: string;
+}
+
+export interface LtoFinancialOffer {
+  vehiclePrice: number;
+  downPayment: number;
+  termMonths: number;
+  monthlyInstallment: number;
+  /** The portion of each monthly installment that counts toward the ownership-equity build-up (principal), vs. the markup/finance-cost portion -- per Splendor's own LTO contract template (Clause 3), the payment schedule must show "the ownership-right value out of the base rent value" for each installment. */
+  monthlyPrincipalPortion: number;
+  monthlyMarkupPortion: number;
+  finalPayment: number; // balloon payment; 0 if the term has none
+  processingFee: number;
+  vatAmount: number;
+  totalContractValue: number; // downPayment + (monthlyInstallment * termMonths) + finalPayment + processingFee + vatAmount
+  computedAt: string;
+  /** The exact policy inputs used, snapshotted so a later change to the Business Rules Engine's LTO policy never silently rewrites what an already-issued offer promised the customer. */
+  policySnapshot: {
+    monthlyMarkupRatePercent: number;
+    processingFeeAed: number;
+  };
+}
+
+export interface LtoApplication {
+  id: string; // LTOA-000001
+  customerId: string;
+  customerName: string;
+  vehicleId: string;
+  vehicleName: string;
+  requestedTermMonths: number;
+  requestedDownPayment: number;
+  vehiclePrice: number; // staff-entered target sale price for this deal -- never derived from the rental daily/weekly/monthly rate (that would be an invented accounting policy)
+  notes: string;
+  status: LtoApplicationStatus;
+  eligibilityCheck?: LtoEligibilityCheck;
+  offer?: LtoFinancialOffer;
+  approvalRequestId?: string;
+  contractId?: string; // set once the Agreement/Contract is created after approval
+  temporaryHoldId?: string; // the vehicle hold placed while the application is under review
+  submittedAt?: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decisionReason?: string;
+  cancelledAt?: string;
+  cancelledReason?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LtoStatus =
+  | 'active'
+  | 'settlement_requested'
+  | 'settled'
+  | 'default'
+  | 'termination_requested'
+  | 'terminated'
+  | 'ownership_transfer_pending'
+  | 'ownership_transferred'
+  | 'completed';
+
+export interface LtoContractDetails {
+  applicationId: string;
+  termMonths: number;
+  downPayment: number;
+  monthlyInstallment: number;
+  finalPayment: number;
+  vehiclePrice: number;
+  processingFee: number;
+  vatAmount: number;
+  totalContractValue: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  ltoStatus: LtoStatus;
+  ownershipTransferredAt?: string;
+  defaultedAt?: string;
+  defaultReason?: string;
+  terminationRequestedAt?: string;
+  terminationRequestedReason?: string;
+  terminatedAt?: string;
+  settlementRequestId?: string;
+}
+
+export type LtoInstallmentStatus = 'upcoming' | 'due' | 'partially_paid' | 'paid' | 'late' | 'overdue' | 'settled';
+
+export interface LtoInstallment {
+  id: string; // LTOI-000001
+  contractId: string;
+  customerId: string;
+  customerName: string;
+  installmentNumber: number; // 1-based; the final balloon payment (if any) is the highest number, flagged below
+  isFinalPayment: boolean;
+  dueDate: string;
+  amount: number;
+  /** Per Splendor's LTO contract template (Clause 3): how much of `amount` counts toward the ownership-right build-up (principal) vs. finance/markup cost. Snapshotted from the offer at schedule-generation time. */
+  principalPortion: number;
+  markupPortion: number;
+  paidAmount: number;
+  remainingAmount: number;
+  status: LtoInstallmentStatus;
+  paidAt?: string;
+  lastReminderAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LtoSettlementRequestStatus = 'pending' | 'approved' | 'rejected' | 'completed';
+
+export interface LtoSettlementRequest {
+  id: string; // LTOS-000001
+  contractId: string;
+  customerId: string;
+  customerName: string;
+  outstandingBalance: number;
+  /** A flat ownership-transfer processing fee borne by the customer -- NOT a percentage penalty on the balance. Splendor's own LTO contract template (Clause 6) sets no early-settlement discount or penalty: full payoff simply means the outstanding balance is paid and ownership transfers immediately, "at the expense of" the customer for the transfer itself. */
+  ownershipTransferFee: number;
+  adjustments: number;
+  adjustmentReason?: string;
+  finalSettlementAmount: number;
+  status: LtoSettlementRequestStatus;
+  approvalRequestId?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  completedAt?: string;
+  paymentId?: string; // the Payment record that actually settled the balance
+  notes?: string;
+}
+
+export type ChargeType =
   | 'extra_km' 
   | 'extra_hour' 
   | 'late_return' 
@@ -655,16 +1173,47 @@ export interface Deposit {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Payment Gateway integration (additive; a manually-collected deposit --
+   * cash/bank transfer -- never sets these). When set, this deposit's
+   * "held" funds are a real, uncaptured card authorization hold rather
+   * than money already collected -- release voids the authorization,
+   * refund captures-then-refunds. Both still only ever change `status`
+   * once a gateway webhook confirms the result.
+   */
+  holdType?: 'gateway_authorization' | 'manual';
+  gatewayPaymentIntentId?: string;
 }
 
-export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'online_link' | 'corporate_credit';
+// Widened additively (Collections & Bank Reconciliation mission) to name
+// the specific manual methods staff actually use day-to-day -- 'card'
+// stays for backward compatibility with existing records; 'pos_card' is
+// the distinct in-person POS-terminal card path, 'cheque' and 'other' are
+// new. See src/config/payments.ts for the manageable catalog of methods
+// (labels, active/inactive, whether a reference/proof is required) that
+// this literal union is validated against.
+export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'pos_card' | 'cheque' | 'online_link' | 'corporate_credit' | 'other';
 export type PaymentStatus = 'received' | 'validated' | 'allocated' | 'refunded';
+
+/**
+ * Whether a second person has confirmed a manually-recorded payment is
+ * genuine (matches its proof, correct amount/reference) -- additive to the
+ * existing `status` lifecycle (received/validated/allocated/refunded),
+ * which already tracks allocation, not verification. A payment recorded
+ * without proof (e.g. cash handed over in person) can be verified
+ * immediately by the same recorder; one requiring proof (bank transfer,
+ * cheque, POS) is 'pending_review' until someone actually checks the
+ * attached proof against the claimed amount/reference.
+ */
+export type PaymentVerificationStatus = 'pending_review' | 'verified' | 'rejected';
 
 export interface Payment {
   id: string; // PAY-000001
   customerId: string;
   customerName: string;
   contractId?: string;
+  /** Additive -- a payment can be tied to a reservation before any contract exists yet (e.g. a booking deposit). */
+  reservationId?: string;
   invoiceId?: string;
   amount: number;
   method: PaymentMethod;
@@ -679,6 +1228,121 @@ export interface Payment {
   receiptNumber: string;
   notes: string;
   createdAt: string;
+  /** Set only when this Payment was created from a gateway-confirmed PaymentIntent -- never when manually recorded (cash/bank transfer). */
+  gatewayPaymentIntentId?: string;
+
+  // ---- Manual payment recording enrichment (Collections & Bank Reconciliation mission) ----
+  /** Links to the existing Document system (CRMDocument.id) -- proof of payment (receipt photo, transfer confirmation, cheque scan). Never a raw file blob on the Payment record itself. */
+  proofDocumentId?: string;
+  verificationStatus?: PaymentVerificationStatus;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  verifiedAt?: string;
+  verificationNote?: string;
+}
+
+// ----------------------------------------------------
+// PAYMENT GATEWAY (Production-Grade Payment & Settlement Layer)
+// ----------------------------------------------------
+// Extends the existing Payment/Invoice/Deposit/LtoInstallment lifecycle --
+// no parallel financial ledger. A PaymentIntent is the server-authoritative
+// record of "we asked the gateway to charge/authorize X"; its `status`
+// only ever changes in response to a verified gateway webhook event
+// (PaymentGatewayEvent), never a client-reported "it worked". No raw card
+// data is ever modeled or stored here -- only the gateway's own opaque
+// reference ids.
+
+/** The active gateway is selected by PAYMENT_GATEWAY_PROVIDER (env), never hardcoded; 'sandbox' is the safe default with no real money movement. */
+export type PaymentGatewayProvider = 'sandbox' | 'stripe' | 'checkout_com' | 'telr' | 'network_international';
+
+/** What a PaymentIntent is for -- determines which existing entity's lifecycle a confirmed webhook advances. Deliberately narrow: only the purposes this mission asked for. */
+export type PaymentIntentPurpose = 'invoice_payment' | 'lto_installment' | 'security_deposit';
+
+export type PaymentIntentStatus =
+  | 'requires_payment' // created, awaiting the customer to complete payment at the gateway
+  | 'processing' // gateway has received a payment attempt, not yet confirmed
+  | 'requires_capture' // authorized (funds held) but not yet captured -- the security-deposit-hold state
+  | 'succeeded'
+  | 'failed'
+  | 'canceled';
+
+export interface PaymentIntent {
+  id: string; // PI-000001
+  provider: PaymentGatewayProvider;
+  providerIntentId: string; // the gateway's own opaque reference
+  purpose: PaymentIntentPurpose;
+  amount: number;
+  currency: string; // 'AED'
+  status: PaymentIntentStatus;
+  customerId?: string;
+  customerName?: string;
+  contractId?: string;
+  invoiceId?: string;
+  depositId?: string; // set once a resulting Deposit record exists (security_deposit purpose)
+  ltoInstallmentId?: string;
+  idempotencyKey?: string;
+  clientSecret?: string; // handed to the frontend gateway SDK only; never a card number/CVV
+  failureReason?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt?: string;
+  canceledAt?: string;
+}
+
+export type PaymentGatewayEventType =
+  | 'payment_intent.requires_capture'
+  | 'payment_intent.succeeded'
+  | 'payment_intent.failed'
+  | 'payment_intent.canceled'
+  | 'refund.succeeded'
+  | 'refund.failed';
+
+/**
+ * A durable log of every webhook delivery, keyed `${provider}:${providerEventId}`
+ * so a redelivered event (every real gateway retries webhooks) is a no-op,
+ * not a double-applied effect -- the idempotency mechanism for the webhook
+ * layer itself, separate from (and in addition to) the Idempotency-Key
+ * mechanism client-initiated mutations already use.
+ */
+export interface PaymentGatewayEvent {
+  id: string; // `${provider}:${providerEventId}`
+  provider: PaymentGatewayProvider;
+  providerEventId: string;
+  type: PaymentGatewayEventType;
+  providerIntentId?: string;
+  providerRefundId?: string;
+  receivedAt: string;
+  processedAt?: string;
+  processingError?: string;
+}
+
+export type PaymentRefundStatus = 'pending' | 'processing' | 'succeeded' | 'failed';
+
+/**
+ * The operational record of one gateway-processed reversal of an original
+ * PaymentIntent (invoice payment, LTO installment, or a captured security
+ * deposit). This is NOT a duplicate of CustomerRefundRequest (Procurement's
+ * credit-balance payout workflow) or of Deposit's own refund fields -- it
+ * is the async gateway-call/webhook-confirmation record for reversing a
+ * SPECIFIC prior charge, exactly analogous to what PaymentIntent is for a
+ * charge. Only a confirmed `refund.succeeded` webhook applies the actual
+ * reversal to the underlying Invoice/Deposit/LtoInstallment.
+ */
+export interface PaymentRefund {
+  id: string; // PREF-000001
+  paymentIntentId: string;
+  provider: PaymentGatewayProvider;
+  providerRefundId?: string;
+  amount: number;
+  reason: string;
+  status: PaymentRefundStatus;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  confirmedAt?: string;
+  failureReason?: string;
 }
 
 export interface Invoice {
@@ -770,6 +1434,54 @@ export interface BankTransaction {
   status: BankTransactionStatus;
   reconciled: boolean;
   notes?: string;
+  // FIN-002: what this received amount actually represents. Required at
+  // reconcile time (never guessed); reclassifiable afterward via
+  // POST /api/bank-transactions/:id/reclassify, which never touches
+  // paidAmount/balanceDue -- classification is metadata about the money,
+  // not a change to the money itself.
+  receivedAmountClassification?: ReceivedAmountClassification;
+  classificationHistory?: ReceivedAmountClassificationEvent[];
+
+  // ---- Bank Reconciliation Engine matching classification (Collections &
+  // Bank Reconciliation mission) -- purely additive metadata computed by
+  // src/server/bankReconciliation.ts at import/refresh time. Never drives
+  // reconciliation on its own: `status`/`reconciled` above still only ever
+  // change via a human's explicit POST /api/bank-transactions/:id/reconcile
+  // call. This is the "why" shown to the reconciler, not an approval. ----
+  matchClassification?: BankMatchClassification;
+  matchReason?: string;
+  matchReasonAr?: string;
+  /** Set only when matchClassification is 'duplicate_transaction' -- the id of the earlier bank transaction this appears to repeat. */
+  duplicateOfTransactionId?: string;
+}
+
+/**
+ * The reconciler-facing outcome of comparing one bank statement line
+ * against everything already recorded in the CRM (Payments, Invoices,
+ * customers/contracts) -- distinct from `BankTransactionStatus` above,
+ * which tracks the human WORKFLOW (unmatched -> suggested -> approved ->
+ * reconciled). This is the WHY: matched, needs a human look, a transfer
+ * with nothing recorded for it yet, a recorded amount that doesn't equal
+ * the bank's amount, or a line that repeats an earlier import.
+ */
+export type BankMatchClassification =
+  | 'matched'
+  | 'needs_review'
+  | 'unrecorded_transfer'
+  | 'amount_mismatch'
+  | 'duplicate_transaction';
+
+/** A CRM-recorded Payment for the statement's period that no imported bank line could be matched to -- "دفعة غير موجودة بالبنك" (payment not found in the bank). Computed per batch, never stored as a fabricated BankTransaction (there is no bank line for it). */
+export interface UnmatchedCrmPaymentReportEntry {
+  paymentId: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  method: PaymentMethod;
+  referenceNumber: string;
+  receivedAt: string;
+  reasonAr: string;
+  reasonEn: string;
 }
 
 export interface BankImportBatch {
@@ -780,6 +1492,8 @@ export interface BankImportBatch {
   statementPeriod: string;
   uploadedBy: string;
   uploadedAt: string;
+  /** Recorded CRM payments in this statement's period with no matching bank line -- see UnmatchedCrmPaymentReportEntry. */
+  unmatchedCrmPayments?: UnmatchedCrmPaymentReportEntry[];
   totalTransactions: number;
   matchedCount: number;
   unmatchedCount: number;
@@ -837,12 +1551,12 @@ export interface Communication {
 export interface CRMDocument {
   id: string; // DOC-000001
   title: string;
-  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'other';
+  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'other';
   fileName: string;
   fileSize: string;
   fileType: string;
   fileUrl: string;
-  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice';
+  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch';
   relatedEntityId: string;
   relatedEntityName?: string;
   expiryDate?: string;
@@ -870,12 +1584,15 @@ export interface AuditLog {
   userRole: string;
   entityType: string;
   entityId: string;
-  action: 'create' | 'update' | 'delete' | 'status_change' | 'approval' | 'refund' | 'reconcile' | 'merge' | 'rule_change' | 'kill_switch' | 'approval_decision';
+  action: 'create' | 'update' | 'delete' | 'status_change' | 'approval' | 'refund' | 'reconcile' | 'reclassify' | 'merge' | 'rule_change' | 'kill_switch' | 'approval_decision';
   previousValue?: string;
   newValue?: string;
   reason?: string;
   ipAddress?: string;
   timestamp: string;
+  /** Tamper-evidence hash chain (RULE-A01) -- see src/server/auditIntegrity.ts. Absent on entries written before this feature existed; those are treated as unverifiable, not tampered. */
+  contentHash?: string;
+  previousHash?: string;
 }
 
 // ----------------------------------------------------
@@ -945,7 +1662,7 @@ export interface BusinessRule {
   sourceNote?: string;
 }
 
-export type ApprovalRequestType = 'rule_change';
+export type ApprovalRequestType = 'rule_change' | 'lto_application' | 'lto_settlement' | 'lto_termination' | 'vehicle_catalog_update';
 export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export interface ApprovalRequest {
@@ -1600,6 +2317,25 @@ export type ReceivedAmountClassification =
   | 'settlement' | 'advance_payment' | 'security_deposit' | 'credit_balance'
   | 'settlement_adjustment' | 'other_approved' | 'unclassified';
 
+// FIN-002: the runtime-checkable form of the type above -- used by the
+// server to validate an incoming classification value (never guessed;
+// 'unclassified' is a real, explicit choice a reconciler makes, not a
+// silent default for a missing field) and by the UI to render the
+// dropdown. Wired into POST /api/bank-transactions/:id/reconcile and
+// /reclassify -- see server.ts.
+export const RECEIVED_AMOUNT_CLASSIFICATIONS: ReceivedAmountClassification[] = [
+  'settlement', 'advance_payment', 'security_deposit', 'credit_balance',
+  'settlement_adjustment', 'other_approved', 'unclassified'
+];
+
+export interface ReceivedAmountClassificationEvent {
+  classification: ReceivedAmountClassification;
+  setBy: string;
+  setByName: string;
+  setAt: string;
+  reason?: string; // required for a reclassification, not for the initial classification at reconcile time
+}
+
 // ---- Debts / charges (the spec's own fixed list -- distinct from the existing ChargeType) ----
 export type DebtType =
   | 'late_fee' | 'traffic_fine' | 'salik' | 'damage' | 'fuel_shortage'
@@ -1856,202 +2592,4 @@ export interface LateFeeWaiver {
   waivedBy: string;
   waivedByName: string;
   waivedAt: string;
-}
-
-// ============================================================================
-// KYC (Know Your Customer) - Document & Profile Management
-// ============================================================================
-export type KycStatus = 'pending' | 'under_review' | 'verified' | 'rejected' | 'expired';
-export type DocumentCategory = 'id' | 'driving_license' | 'residence_proof' | 'employment' | 'financial' | 'other';
-
-export interface KycDocument {
-  id: string;
-  customerId: string;
-  category: DocumentCategory;
-  documentType: string;
-  fileName: string;
-  fileUrl: string;
-  expiryDate?: string;
-  verificationStatus: 'pending' | 'verified' | 'rejected';
-  uploadedAt: string;
-  verifiedAt?: string;
-  verifiedBy?: string;
-}
-
-export interface CustomerKycProfile {
-  kycStatus: KycStatus;
-  dateOfBirth?: string;
-  nationality?: string;
-  documents?: KycDocument[];
-  verificationNotes?: string;
-  lastVerifiedAt?: string;
-  lastVerifiedBy?: string;
-}
-
-export type CustomerKycCategory = 'tier_1' | 'tier_2' | 'tier_3' | 'vip' | 'corporate';
-
-export interface CustomerUploadedDoc {
-  id: string;
-  customerId: string;
-  fileName: string;
-  fileUrl: string;
-  fileType: string;
-  fileSize: number;
-  uploadedAt: string;
-  uploadedBy: string;
-}
-
-// ============================================================================
-// Company Bank Accounts & Financial
-// ============================================================================
-export interface CompanyBankAccount {
-  id: string;
-  bankName: string;
-  accountName: string;
-  accountNumber: string;
-  iban?: string;
-  swiftCode?: string;
-  currency: string;
-  isDefault: boolean;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ============================================================================
-// Security Deposits & Lifecycle Management
-// ============================================================================
-export type DepositLifecycleStatus = 'collected' | 'held' | 'released' | 'forfeited' | 'disputed';
-
-export interface SecurityDepositRecord {
-  id: string;
-  customerId: string;
-  contractId: string;
-  amount: number;
-  currency: string;
-  status: DepositLifecycleStatus;
-  collectionDate: string;
-  releaseDueDate: string;
-  releaseDate?: string;
-  reason?: string;
-  deductedCharges?: Array<{
-    chargeId: string;
-    amount: number;
-    reason: string;
-  }>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ============================================================================
-// Traffic Fines & Violations
-// ============================================================================
-export type FineStatus = 'issued' | 'received' | 'paid' | 'disputed' | 'waived' | 'pending_payment';
-export type FineSource = 'salik' | 'rta' | 'manual' | 'imported';
-
-export interface TrafficFine {
-  id: string; // FINE-000001
-  vehicleId: string;
-  vehiclePlate: string;
-  fineNumber: string;
-  fineDate: string;
-  amount: number;
-  currency: string;
-  reason: string;
-  source: FineSource;
-  status: FineStatus;
-  contractId?: string;
-  customerId?: string;
-  customerName?: string;
-  issueDate: string;
-  dueDate?: string;
-  paidDate?: string;
-  paymentReference?: string;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ============================================================================
-// Telematics & Vehicle Tracking
-// ============================================================================
-export interface TelematicsPing {
-  id: string;
-  vehicleId: string;
-  timestamp: string;
-  latitude: number;
-  longitude: number;
-  speed: number; // km/h
-  heading?: number; // degrees
-  accuracy?: number; // meters
-  source: 'gps' | 'network';
-  recordedAt: string;
-}
-
-export interface TelematicsAlert {
-  id: string;
-  vehicleId: string;
-  type: 'speeding' | 'harsh_acceleration' | 'harsh_braking' | 'geofence_violation' | 'maintenance_due' | 'battery_low';
-  severity: 'low' | 'medium' | 'high';
-  timestamp: string;
-  details?: Record<string, any>;
-  acknowledged: boolean;
-  acknowledgedBy?: string;
-  acknowledgedAt?: string;
-  createdAt: string;
-}
-
-export interface GeofenceZone {
-  id: string;
-  name: string;
-  center: { latitude: number; longitude: number };
-  radius: number; // meters
-  type: 'safe_zone' | 'restricted_zone' | 'service_area';
-  alertOnExit: boolean;
-  alertOnEntry: boolean;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ============================================================================
-// Yield Pricing & Dynamic Pricing
-// ============================================================================
-export interface SeasonalityRule {
-  id: string;
-  season: string; // e.g., 'summer', 'winter', 'peak'
-  startDate: string;
-  endDate: string;
-  priceMultiplier: number; // 1.0 = no change, 1.2 = 20% increase
-  description?: string;
-  appliedVehicleIds?: string[];
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface OccupancyMultiplierRule {
-  id: string;
-  occupancyThreshold: number; // e.g., 80 (percent)
-  multiplier: number; // price multiplier
-  description?: string;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface YieldPricingQuoteResult {
-  vehicleId: string;
-  basePrice: number;
-  seasonalityMultiplier: number;
-  occupancyMultiplier: number;
-  finalPrice: number;
-  breakdown: {
-    baseDaily: number;
-    seasonalAdjustment: number;
-    occupancyAdjustment: number;
-    totalDaily: number;
-  };
-  validUntil: string;
-  calculatedAt: string;
 }
