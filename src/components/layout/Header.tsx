@@ -30,7 +30,7 @@ export const Header: React.FC<HeaderProps> = ({
   const { language, setLanguage, t } = useLanguage();
   const {
     globalSearchOpen, setGlobalSearchOpen,
-    notifications, fetchData, loading, firebaseSyncState
+    notifications, fetchData, loading
   } = useCRM();
 
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
