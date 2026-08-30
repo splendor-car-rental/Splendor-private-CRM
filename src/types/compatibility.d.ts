@@ -21,7 +21,7 @@ declare module './index' {
   export interface GeofenceZone { id: string; name: string; nameAr?: string; description?: string; latitude?: number; longitude?: number; radiusMeters?: number; isRestricted?: boolean; coordinates?: Array<{ lat: number; lng: number }>; radius?: number; zoneType?: string; penaltyAmountAed?: number; active?: boolean; polygon?: Array<{ lat: number; lng: number }>; createdAt?: string; updatedAt?: string; }
   export interface SeasonalityRule { id: string; name: string; nameAr?: string; startDate?: string; endDate?: string; multiplier: number; active?: boolean; priority?: number; applicableCategories?: string[]; baseDailyRate?: number; minRentalDays?: number; }
   export interface OccupancyMultiplierRule { id: string; minOccupancy?: number; maxOccupancy?: number; minOccupancyPercent?: number; maxOccupancyPercent?: number; multiplier: number; active?: boolean; priority?: number; }
-  export interface YieldPricingQuoteResult { vehicleId?: string; dailyRate: number; baseDailyRate?: number; weeklyRate?: number; monthlyRate?: number; currency?: string; durationDays?: number; occupancyMultiplier?: number; seasonalityMultiplier?: number; seasonalityApplied?: any; occupancyPercent?: number; durationDiscountPercent?: number;: number; breakdown?: Record<string, number>; }
+  export interface YieldPricingQuoteResult { vehicleId?: string; dailyRate: number; baseDailyRate?: number; weeklyRate?: number; monthlyRate?: number; currency?: string; durationDays?: number; occupancyMultiplier?: number; seasonalityMultiplier?: number; seasonalityApplied?: any; occupancyPercent?: number; durationDiscountPercent?: number; breakdown?: Record<string, number>; }
   export interface VehicleTimelineEvent { action: _VehicleTimelineEvent['action']; }
 }
 
