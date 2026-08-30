@@ -1,8 +1,5 @@
 name: CI
 
-# Production validation gate. Every push and PR must pass typecheck,
-# the full test suite (including Firestore emulator/rules/security tests),
-# and the production build before it is considered mergeable.
 on:
   push:
     branches: ['**']
