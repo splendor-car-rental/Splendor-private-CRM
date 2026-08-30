@@ -31,8 +31,6 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      # The committed lockfile is lockfile v2. Pin the compatible Bun major
-      # instead of tracking latest, which can change the lockfile format.
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -51,13 +49,13 @@ jobs:
         run: java -version
 
       - name: Typecheck
-        run: npm run lint
+        run: bun run lint
 
       - name: Run full test suite (unit + integration + Firestore rules + security)
-        run: npm test
+        run: bun run test
 
       - name: Production build
-        run: npm run build
+        run: bun run build
 
       - name: Verify build output exists
         run: |
