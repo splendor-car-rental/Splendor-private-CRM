@@ -40,8 +40,7 @@ export interface SlotCheckInput {
  * the new reservation/contract. This is a Firestore contention anchor:
  * Firestore serializes concurrent transactions that read and write the same
  * vehicle document. Without that write, two transactions could both query an
- * empty reservations collection (a classic phantom-read/double-booking race)
- * and both commit successfully on separate serverless instances.
+ * empty reservations collection and both commit successfully.
  */
 export async function reserveVehicleSlot<T extends { id: string }>(
   input: SlotCheckInput,
@@ -107,17 +106,11 @@ export async function reserveVehicleSlot<T extends { id: string }>(
     }
 
     const doc = buildDoc();
-
-    // Contention anchor: make the vehicle document a write participant in
-    // every successful booking transaction. A concurrent transaction for the
-    // same vehicle must therefore retry against the committed reservation
-    // state instead of both observing the same empty query result.
     const currentAvailabilityVersion = Number(vehicle.availabilityVersion || 0);
     tx.set(vehicleRef, {
       availabilityVersion: currentAvailabilityVersion + 1,
       availabilityLastCheckedAt: new Date().toISOString()
     }, { merge: true });
-
     tx.create(db.collection(newCollection).doc(doc.id), doc as unknown as Record<string, unknown>);
 
     if (input.excludeHoldId) {
@@ -148,12 +141,6 @@ export interface TemporaryHold {
   expiresAt: string;
 }
 
-/**
- * RULE-R04: creates a short-lived, durable vehicle hold. The same vehicle
- * contention anchor used by reserveVehicleSlot is written on successful
- * holds, preventing two simultaneous holds from both passing an empty
- * conflict scan.
- */
 export async function placeTemporaryHold(input: PlaceTemporaryHoldInput): Promise<TemporaryHold> {
   const targetStart = new Date(input.startIso).getTime();
   const targetEnd = new Date(input.endIso).getTime();
@@ -222,5 +209,28 @@ export async function placeTemporaryHold(input: PlaceTemporaryHoldInput): Promis
     }, { merge: true });
     tx.create(db.collection('temporary_holds').doc(id), hold as unknown as Record<string, unknown>);
     return hold;
+  });
+}
+
+/** Release a soft hold immediately when checkout is cancelled or converted. */
+export async function releaseTemporaryHold(holdId: string): Promise<void> {
+  const id = String(holdId || '').trim();
+  if (!id) return;
+
+  await runDurableTransaction(async (tx, db) => {
+    const ref = db.collection('temporary_holds').doc(id);
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const hold = snap.data() as TemporaryHold;
+    const vehicleRef = db.collection('vehicles').doc(hold.vehicleId);
+    const vehicleSnap = await tx.get(vehicleRef);
+    if (vehicleSnap.exists) {
+      const vehicle = vehicleSnap.data() as any;
+      tx.set(vehicleRef, {
+        availabilityVersion: Number(vehicle.availabilityVersion || 0) + 1,
+        availabilityLastCheckedAt: new Date().toISOString()
+      }, { merge: true });
+    }
+    tx.delete(ref);
   });
 }
