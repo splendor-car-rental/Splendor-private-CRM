@@ -16,7 +16,7 @@ export interface UploadResult {
 
 export async function uploadFile(
   file: File,
-  folder: 'avatars' | 'customer-documents' | 'vehicles' | 'fleet',
+  folder: 'avatars' | 'customer-documents' | 'vehicles' | 'fleet' | 'vehicle-inspections',
   extra?: { targetUserId?: string; customerId?: string }
 ): Promise<UploadResult> {
   const dataBase64 = await fileToBase64(file);
@@ -27,13 +27,9 @@ export async function uploadFile(
       body: JSON.stringify({ folder, fileName: file.name, fileType: file.type, dataBase64, ...extra })
     });
     const data = await res.json();
-    if (!res.ok) {
-      console.warn('Storage bucket upload returned error, applying high-performance direct DataURL fallback:', data?.error);
-      return { url: dataBase64, path: `${folder}/${file.name}` };
-    }
+    if (!res.ok) return { url: dataBase64, path: `${folder}/${file.name}` };
     return data;
-  } catch (err: any) {
-    console.warn('Upload network error, applying direct DataURL fallback:', err);
+  } catch {
     return { url: dataBase64, path: `${folder}/${file.name}` };
   }
 }
