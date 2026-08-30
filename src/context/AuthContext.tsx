@@ -3,6 +3,9 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
   type User as FirebaseUser
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
@@ -88,7 +91,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const authUnsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser);
 
-      // Tear down any previous profile subscription before starting a new one.
       if (profileUnsubscribe) {
         profileUnsubscribe();
         profileUnsubscribe = null;
@@ -110,18 +112,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const newProfile: Omit<User, 'id'> = { ...seed, status: 'active' };
             await setDoc(profileRef, newProfile, { merge: true });
           }
-          // If no seed either, leave the doc missing -- the live subscription
-          // below will keep profile === null (Access Pending screen) until
-          // an administrator provisions the account.
         }
       } catch (error) {
         console.warn('Failed to bootstrap user profile:', error);
       }
 
-      // Live subscription (not a one-time read) so that any change to this
-      // user's own profile document -- their own avatar upload, or an
-      // admin editing their role/details from Settings -- reflects in the
-      // app immediately, without needing to log out and back in.
       profileUnsubscribe = onSnapshot(
         profileRef,
         (snap) => {
@@ -142,7 +137,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Read-only staff directory, once signed in.
   useEffect(() => {
     if (!firebaseUser) {
       setStaffDirectory([]);
@@ -158,9 +152,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, [firebaseUser]);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string, rememberMe: boolean) => {
     setAuthErrorKey(null);
     try {
+      await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) {
       setAuthErrorKey(mapAuthErrorToKey(error?.code));
@@ -176,8 +171,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async (data: Partial<Pick<User, 'avatar' | 'name' | 'nameAr' | 'phone'>>) => {
       if (!firebaseUser) return;
       await updateDoc(doc(db, 'users', firebaseUser.uid), data as Record<string, any>);
-      // No local setProfile() call needed -- the onSnapshot subscription
-      // above picks up this write and updates `profile` automatically.
     },
     [firebaseUser]
   );
