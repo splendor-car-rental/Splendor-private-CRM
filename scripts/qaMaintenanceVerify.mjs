@@ -1,7 +1,10 @@
 import { chromium } from 'playwright';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const BASE = 'http://127.0.0.1:3000';
-const SHOTS = '/tmp/claude-0/-home-user-Splendor-private-CRM/08cde651-1d17-541c-bc56-1938b08a8ff2/scratchpad';
+const SHOTS = fs.mkdtempSync(path.join(os.tmpdir(), 'splendor-qa-maintenance-'));
 const results = [];
 
 function log(msg) { console.log(`[verify] ${msg}`); }
@@ -67,6 +70,7 @@ async function main() {
   record('Vehicle returns to Optimal after logging the completed service', backToOptimal);
 
   await browser.close();
+  try { fs.rmSync(SHOTS, { recursive: true, force: true }); } catch {}
 
   const failed = results.filter(r => !r.ok);
   log(`\n=== SUMMARY: ${results.length - failed.length}/${results.length} checks passed ===`);
