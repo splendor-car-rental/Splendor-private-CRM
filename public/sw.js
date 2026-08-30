@@ -1,26 +1,39 @@
-const CACHE_NAME = 'splendor-crm-shell-v1';
+const CACHE_NAME = 'splendor-crm-assets-v1';
+const CACHEABLE_DESTINATIONS = new Set(['script', 'style', 'image', 'font']);
 
 self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key)),
+      ),
+    ).then(() => self.clients.claim()),
+  );
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET' || event.request.mode === 'navigate') {
-    return;
-  }
+  const request = event.request;
+  if (request.method !== 'GET' || request.mode === 'navigate') return;
 
-  const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) {
-    return;
-  }
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (!CACHEABLE_DESTINATIONS.has(request.destination)) return;
 
-  // Network-first keeps the CRM current while allowing previously cached
-  // assets to remain available when a transient network error occurs.
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request)),
+    fetch(request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(request)),
   );
 });
