@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, AlertCircle, LogOut, Loader2 } from 'lucide-react';
+import { Lock, Mail, AlertCircle, LogOut, Loader2, Check } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { SplendorLogo } from '../common/SplendorLogo';
 import splendorLogoImage from '../../assets/splendor-logo.png';
@@ -21,18 +21,21 @@ export const AuthLoadingScreen: React.FC = () => {
 };
 
 interface LoginScreenProps {
-  onLogin: (email: string, password: string) => Promise<void>;
+  onLogin: (email: string, password: string, rememberMe: boolean) => Promise<void>;
   errorKey: string | null;
 }
 
 /**
  * Real email/password sign-in screen backed by Firebase Authentication.
- * Replaces the previous no-auth "default user" flow.
+ * The remember-device option controls Firebase's persistence layer; the
+ * password is never written to localStorage, IndexedDB, or application state
+ * beyond the live form value.
  */
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, errorKey }) => {
   const { t, language, direction } = useLanguage();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => localStorage.getItem('splendor_login_email') || '');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('splendor_remember_device') !== 'false');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -40,11 +43,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, errorKey }) =
     if (!email || !password || submitting) return;
     setSubmitting(true);
     try {
-      await onLogin(email.trim(), password);
+      if (rememberMe) {
+        localStorage.setItem('splendor_login_email', email.trim());
+        localStorage.setItem('splendor_remember_device', 'true');
+      } else {
+        localStorage.removeItem('splendor_login_email');
+        localStorage.setItem('splendor_remember_device', 'false');
+      }
+      await onLogin(email.trim(), password, rememberMe);
     } finally {
       setSubmitting(false);
     }
   };
+
+  const rememberLabel = language === 'ar' ? 'تذكرني على هذا الجهاز' : 'Remember me on this device';
+  const securityHint = language === 'ar'
+    ? 'لا يتم حفظ كلمة المرور داخل التطبيق.'
+    : 'Your password is never stored by the CRM.';
 
   return (
     <div dir={direction} className={`min-h-screen bg-zinc-950 flex items-center justify-center p-4 ${language === 'ar' ? 'font-arabic' : ''}`}>
@@ -111,6 +126,29 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, errorKey }) =
                 className="w-full ps-9 pe-3 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-sm focus:outline-none focus:border-[#D4AF37]/60 focus:ring-1 focus:ring-[#D4AF37]/40 transition-colors"
               />
             </div>
+          </div>
+
+          <div className="flex items-start justify-between gap-3 pt-0.5">
+            <label className="inline-flex items-start gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="sr-only"
+              />
+              <span
+                aria-hidden="true"
+                className={`mt-0.5 w-4 h-4 rounded-md border flex items-center justify-center transition-all ${
+                  rememberMe
+                    ? 'bg-[#D4AF37] border-[#D4AF37] text-zinc-950'
+                    : 'bg-zinc-950 border-zinc-700 text-transparent'
+                }`}
+              >
+                <Check className="w-3 h-3" strokeWidth={3} />
+              </span>
+              <span className="text-xs text-zinc-300 leading-5">{rememberLabel}</span>
+            </label>
+            <span className="text-[10px] text-zinc-500 text-end leading-4 max-w-[150px]">{securityHint}</span>
           </div>
 
           <button
