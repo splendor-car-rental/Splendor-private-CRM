@@ -1,8 +1,12 @@
-name: Splendor Production CodeQL
-
+# CodeQL configuration for Splendor Production
 # The production security gate scans executable application code only.
 # Tests, QA harnesses, documentation, and scratch tooling are validated by
 # CI but are not part of the deployed runtime attack surface.
+
+disable-default-queries: false
+queries:
+  - uses: security-and-quality
+
 paths:
   - src
   - api
