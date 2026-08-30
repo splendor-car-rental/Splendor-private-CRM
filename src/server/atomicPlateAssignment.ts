@@ -1,4 +1,3 @@
-import admin from 'firebase-admin';
 import type { PlateAssignmentHistory, Vehicle, VehicleTimelineEvent, AuditLog } from '../types';
 import { globalStore } from './dataStore';
 import { runDurableTransaction } from './persistence';
@@ -55,7 +54,6 @@ export async function assignPlateAtomically(
         .where('plateCity', '==', normalizedCity)
         .limit(1);
 
-      // All reads happen before any transaction write.
       const [vehicleSnap, plateSnap] = await Promise.all([
         tx.get(vehicleRef),
         tx.get(plateQuery)
@@ -159,9 +157,6 @@ export async function assignPlateAtomically(
         updatedAt: effectiveDate
       };
 
-      // Use a unique audit id inside the same transaction. This keeps the
-      // audit record inseparable from the plate mutation without consuming
-      // the global numbering sequence before transaction commit.
       const auditId = `AUD-PLATE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const auditLog: AuditLog = {
         id: auditId,
@@ -195,7 +190,6 @@ export async function assignPlateAtomically(
       };
     });
 
-    // Only update the process cache after Firestore has committed.
     const vehicleIndex = globalStore.vehicles.findIndex(v => v.id === vehicleId);
     if (vehicleIndex !== -1) globalStore.vehicles[vehicleIndex] = outcome.vehicle;
 
