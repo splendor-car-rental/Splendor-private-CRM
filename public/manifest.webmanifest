@@ -1,0 +1,29 @@
+{
+  "name": "Splendor CRM",
+  "short_name": "Splendor CRM",
+  "description": "Executive Automotive CRM & Fleet Operations Platform — Splendor Car Rental.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "theme_color": "#09090b",
+  "background_color": "#09090b",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/splendor-logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
