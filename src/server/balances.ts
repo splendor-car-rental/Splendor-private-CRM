@@ -1,4 +1,4 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import type { RecordAuditFn } from './businessRules';
@@ -168,6 +168,43 @@ export async function computePartyBalance(partyType: 'supplier' | 'customer', pa
   };
 }
 
+/**
+ * Same recomputation as computePartyBalance's net-amount logic, but reading
+ * through a live transaction so a concurrent write to either collection
+ * (in particular, another offset approval for the same party) forces this
+ * transaction to retry against up-to-date data instead of deciding against
+ * a stale snapshot. Used by the approve_offset handler below -- see the
+ * race it closes there.
+ */
+async function computePartyNetAmountInTransaction(
+  tx: FirebaseFirestore.Transaction,
+  db: FirebaseFirestore.Firestore,
+  partyType: 'supplier' | 'customer',
+  partyId: string
+): Promise<number> {
+  const openingSnap = await tx.get(db.collection('party_opening_balances'));
+  const offsetsSnap = await tx.get(db.collection('offset_requests'));
+
+  let net = 0;
+  for (const doc of openingSnap.docs) {
+    const ob = doc.data() as PartyOpeningBalance;
+    if (ob.partyType !== partyType || ob.partyId !== partyId) continue;
+    if (ob.direction === 'owed_to_us') net += ob.amount;
+    else if (ob.direction === 'owed_by_us') net -= ob.amount;
+  }
+
+  const approvedOffsets = offsetsSnap.docs
+    .map((d) => d.data() as OffsetRequest)
+    .filter((o) => o.partyType === partyType && o.partyId === partyId && o.status === 'approved')
+    .sort((a, b) => (a.requestedAt < b.requestedAt ? -1 : 1));
+  for (const offset of approvedOffsets) {
+    if (net > 0) net = Math.max(0, net - offset.offsetAmount);
+    else if (net < 0) net = Math.min(0, net + offset.offsetAmount);
+  }
+
+  return net;
+}
+
 export interface RequestBalanceOffsetInput {
   partyType: 'supplier' | 'customer';
   partyId: string;
@@ -238,33 +275,58 @@ export async function requestBalanceOffset(input: RequestBalanceOffsetInput, rec
   return { offsetRequest, approvalRequestId: approvalRequest.id };
 }
 
-async function loadOffsetRequest(id: string): Promise<OffsetRequest> {
-  const admin = (await import('firebase-admin')).default;
-  const snap = await admin.firestore().collection('offset_requests').doc(id).get();
-  if (!snap.exists) throw new BalanceError(`Offset request ${id} not found.`);
-  return snap.data() as OffsetRequest;
-}
-
+// Two offset requests against the SAME party can each be individually
+// valid when requested (both validated against the balance that existed at
+// their own request time), then both approved. Approving used to trust the
+// stale offsetRequest.balanceBefore captured at request time instead of
+// re-checking the live balance, and read+wrote non-transactionally -- so
+// two concurrent approvals for the same party could together apply more
+// offsetting than the party ever actually owed. Fixed by re-deriving the
+// CURRENT live balance inside the same transaction that decides and writes
+// this approval: if the offset no longer fits the live remaining balance,
+// this approval is rejected outright (the requester must re-request at the
+// correct amount) rather than silently over-applying it. Reading the
+// opening-balance and offset-request collections inside the transaction
+// also means a second concurrent approval for the same party is forced to
+// retry against up-to-date data rather than racing this one.
 registerApprovalHandler('OffsetRequest', 'approve_offset', async (request: ProcurementApprovalRequest, decider: ProcurementApprovalActor, recordAudit: RecordAuditFn) => {
   const id = request.payload.offsetRequestId as string;
-  const offsetRequest = await loadOffsetRequest(id);
-  if (offsetRequest.status !== 'pending_approval') {
-    throw new BalanceError(`Offset request ${id} has already been ${offsetRequest.status}.`);
-  }
-
   const now = new Date().toISOString();
-  const balanceAfter = offsetRequest.balanceBefore > 0
-    ? Math.max(0, offsetRequest.balanceBefore - offsetRequest.offsetAmount)
-    : Math.min(0, offsetRequest.balanceBefore + offsetRequest.offsetAmount);
+  const admin = (await import('firebase-admin')).default;
+  const offsetRef = admin.firestore().collection('offset_requests').doc(id);
 
-  await updateDurable('offset_requests', id, {
-    status: 'approved',
-    decidedBy: decider.uid,
-    decidedByName: decider.name,
-    decidedAt: now,
-    decisionNote: request.decisionNote,
-    balanceAfter
-  } as unknown as Record<string, unknown>);
+  const { offsetRequest, balanceBeforeLive, balanceAfter } = await runDurableTransaction(async (tx, db) => {
+    const snap = await tx.get(offsetRef);
+    if (!snap.exists) throw new BalanceError(`Offset request ${id} not found.`);
+    const offsetRequest = snap.data() as OffsetRequest;
+    if (offsetRequest.status !== 'pending_approval') {
+      throw new BalanceError(`Offset request ${id} has already been ${offsetRequest.status}.`);
+    }
+
+    const balanceBeforeLive = await computePartyNetAmountInTransaction(tx, db, offsetRequest.partyType, offsetRequest.partyId);
+    if (offsetRequest.offsetAmount > Math.abs(balanceBeforeLive)) {
+      throw new BalanceError(
+        `This offset (${offsetRequest.offsetAmount.toLocaleString()} AED) no longer fits the party's current outstanding balance ` +
+        `(${Math.abs(balanceBeforeLive).toLocaleString()} AED) -- another offset was approved in the meantime. Reject this request and ` +
+        `have it re-requested at the correct amount.`
+      );
+    }
+
+    const balanceAfter = balanceBeforeLive > 0
+      ? Math.max(0, balanceBeforeLive - offsetRequest.offsetAmount)
+      : Math.min(0, balanceBeforeLive + offsetRequest.offsetAmount);
+
+    tx.set(offsetRef, {
+      status: 'approved',
+      decidedBy: decider.uid,
+      decidedByName: decider.name,
+      decidedAt: now,
+      decisionNote: request.decisionNote,
+      balanceAfter
+    }, { merge: true });
+
+    return { offsetRequest, balanceBeforeLive, balanceAfter };
+  });
 
   await recordAudit({
     userId: decider.uid,
@@ -273,7 +335,7 @@ registerApprovalHandler('OffsetRequest', 'approve_offset', async (request: Procu
     entityType: 'OffsetRequest',
     entityId: id,
     action: 'approval',
-    newValue: `Offset ${id} approved: ${offsetRequest.partyType} ${offsetRequest.partyId} balance ${offsetRequest.balanceBefore.toLocaleString()} -> ${balanceAfter.toLocaleString()} AED.`,
+    newValue: `Offset ${id} approved: ${offsetRequest.partyType} ${offsetRequest.partyId} balance ${balanceBeforeLive.toLocaleString()} -> ${balanceAfter.toLocaleString()} AED.`,
     reason: request.reason
   });
 });

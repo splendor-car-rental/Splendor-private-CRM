@@ -40,25 +40,40 @@ report for exactly what this affected.
 
 ## Running it
 
-```bash
-# 1. Start Auth + Firestore emulators (no config file needed beyond what's used here)
-npx firebase emulators:start --project demo-splendor-audit --only auth,firestore
+**The emulator project ID must be `splendor-private-crm`** — the exact
+`projectId` hardcoded into `src/firebase/config.ts`'s `firebaseConfig`. The
+Firestore/Auth emulator partitions data by project ID internally, so
+starting it under any other demo project ID (e.g. `demo-splendor-audit`,
+used in an earlier draft of this doc) silently puts the client and the
+seed data in two different, mutually invisible namespaces: login succeeds
+but the client's `getDoc(users/{uid})` finds nothing, and every signed-in
+user is stuck on the "Access Pending" screen even though `users/{uid}`
+plainly exists when queried directly against the emulator's REST API.
+This is not a permissions error and prints no console warning, so it's
+easy to misdiagnose as a hydration bug rather than a project-ID mismatch
+— confirmed the hard way during the Blocklist/Watchlist QA pass.
 
-# 2. Start the backend against the emulators
+```bash
+# 1. Start Auth + Firestore emulators, project ID MUST match firebaseConfig.projectId
+npx firebase emulators:start --project splendor-private-crm --only auth,firestore
+
+# 2. Seed at least one QA user per role (Auth user + matching users/{uid} Firestore doc)
+node scripts/qaSeed.mjs
+
+# 3. Start the backend AND frontend together against the emulators (server.ts's
+#    dev-mode Vite middleware serves both from one process/port)
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
-GCLOUD_PROJECT=demo-splendor-audit \
+GCLOUD_PROJECT=splendor-private-crm \
+VITE_USE_FIREBASE_EMULATORS=true \
 npx tsx server.ts
-
-# 3. Start the frontend pointed at the emulators
-VITE_USE_FIREBASE_EMULATORS=true npx vite
 ```
 
-Seed at least one user per role directly against the running emulators
-(via the Auth emulator's REST API for the login credential, and a
-matching Firestore `users/{uid}` document for the role) before testing —
-there is no seed script checked into this repository, since production
-never needs one and this is QA-only tooling.
+`scripts/qaSeed.mjs` and `scripts/qaBlocklistVerify.mjs` (a real-Chromium
+Playwright script, run via `node scripts/qaBlocklistVerify.mjs` once the
+server above is up) are checked-in QA-only tooling — never invoked in
+production or in `npm test`. `playwright` is a devDependency for exactly
+this purpose.
 
 **Never** set `VITE_USE_FIREBASE_EMULATORS` or `FIRESTORE_EMULATOR_HOST`
 in a real deployment (Vercel) environment — doing so would point the

@@ -1,4 +1,4 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import type { RecordAuditFn } from './businessRules';
@@ -181,34 +181,60 @@ async function loadCustomerRefundRequest(id: string): Promise<CustomerRefundRequ
   return snap.data() as CustomerRefundRequest;
 }
 
+// The credit balance is "spent" at approval time, not execution time -- the
+// comment here used to claim this prevents two concurrently-approved refund
+// requests from together overdrawing the same credit balance, but the actual
+// read (loadCustomerCreditBalance) and write (updateDurable) were two
+// separate, non-transactional calls: two refund requests approved moments
+// apart against the SAME credit balance could both read the same
+// creditBalance.amount and both compute their own "remaining", and the
+// second write would silently overwrite the first's decrement -- the
+// balance could be left overdrawn rather than fully spent. Both documents
+// are now read and written inside a single transaction, so a concurrent
+// approval against the same credit balance is forced to retry against the
+// up-to-date amount.
 registerApprovalHandler('CustomerRefundRequest', 'approve_refund', async (request: ProcurementApprovalRequest, decider: ProcurementApprovalActor, recordAudit: RecordAuditFn) => {
   const id = request.payload.refundRequestId as string;
-  const refundRequest = await loadCustomerRefundRequest(id);
-  if (refundRequest.status !== 'pending_approval') {
-    throw new CustomerRefundError(`Refund request ${id} has already been ${refundRequest.status}.`);
-  }
-
+  const admin = (await import('firebase-admin')).default;
+  const refundRef = admin.firestore().collection('customer_refund_requests').doc(id);
   const now = new Date().toISOString();
-  await updateDurable('customer_refund_requests', id, {
-    status: 'approved',
-    decidedBy: decider.uid,
-    decidedByName: decider.name,
-    decidedAt: now,
-    decisionNote: request.decisionNote
-  } as unknown as Record<string, unknown>);
 
-  // The credit balance is "spent" at approval time, not execution time --
-  // this prevents two concurrently-approved refund requests from together
-  // overdrawing the same credit balance.
-  if (refundRequest.creditBalanceId) {
-    const creditBalance = await loadCustomerCreditBalance(refundRequest.creditBalanceId);
-    const remaining = Math.round((creditBalance.amount - refundRequest.amount) * 100) / 100;
-    await updateDurable('customer_credit_balances', creditBalance.id, {
-      amount: remaining,
-      status: remaining <= 0 ? 'refunded' : 'partially_used',
-      updatedAt: now
-    } as unknown as Record<string, unknown>);
-  }
+  const { refundRequest } = await runDurableTransaction(async (tx) => {
+    const refundSnap = await tx.get(refundRef);
+    if (!refundSnap.exists) throw new CustomerRefundError(`Refund request ${id} not found.`);
+    const refundRequest = refundSnap.data() as CustomerRefundRequest;
+    if (refundRequest.status !== 'pending_approval') {
+      throw new CustomerRefundError(`Refund request ${id} has already been ${refundRequest.status}.`);
+    }
+
+    const creditBalanceRef = refundRequest.creditBalanceId
+      ? admin.firestore().collection('customer_credit_balances').doc(refundRequest.creditBalanceId)
+      : null;
+    const creditBalanceSnap = creditBalanceRef ? await tx.get(creditBalanceRef) : null;
+    if (creditBalanceRef && (!creditBalanceSnap || !creditBalanceSnap.exists)) {
+      throw new CustomerRefundError(`Credit balance ${refundRequest.creditBalanceId} not found.`);
+    }
+
+    tx.set(refundRef, {
+      status: 'approved',
+      decidedBy: decider.uid,
+      decidedByName: decider.name,
+      decidedAt: now,
+      decisionNote: request.decisionNote
+    }, { merge: true });
+
+    if (creditBalanceRef && creditBalanceSnap) {
+      const creditBalance = creditBalanceSnap.data() as CustomerCreditBalance;
+      const remaining = Math.round((creditBalance.amount - refundRequest.amount) * 100) / 100;
+      tx.set(creditBalanceRef, {
+        amount: remaining,
+        status: remaining <= 0 ? 'refunded' : 'partially_used',
+        updatedAt: now
+      }, { merge: true });
+    }
+
+    return { refundRequest };
+  });
 
   await recordAudit({
     userId: decider.uid,

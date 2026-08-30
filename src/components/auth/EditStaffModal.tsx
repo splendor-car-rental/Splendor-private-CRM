@@ -8,7 +8,6 @@ import { apiFetch } from '../../lib/apiFetch';
 import { uploadFile } from '../../lib/upload';
 import { User, UserRole } from '../../types';
 import { assignableRoles } from '../../config/permissions';
-import { InternationalPhoneInput } from '../common/InternationalPhoneInput';
 
 interface EditStaffModalProps {
   isOpen: boolean;
@@ -149,12 +148,9 @@ export const EditStaffModal: React.FC<EditStaffModalProps> = ({ isOpen, onClose,
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <InternationalPhoneInput
-              value={phone}
-              onChange={setPhone}
-              label={t('staffFieldPhone')}
-              isAr={language === 'ar'}
-            />
+            <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldPhone')}</label>
+            <input value={phone} onChange={e => setPhone(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-sm focus:outline-none focus:border-[#D4AF37]/60" />
           </div>
           <div>
             <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldBranch')}</label>

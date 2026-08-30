@@ -4,12 +4,16 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation, TollType } from './src/types';
+import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
+import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { vatPortion, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
+import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/server/bankImportGuard';
+import { parseBankStatementExcel, parseBankStatementCsv, type ParsedBankStatementFile, type ParsedBankStatementRow } from './src/server/bankStatementParsers';
+import { classifyBankRow, findUnmatchedCrmPayments } from './src/server/bankReconciliation';
 import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
@@ -17,15 +21,28 @@ import { NOTIFICATION_EVENTS } from './src/config/notificationEvents';
 import { issueNextNumber, resetNumbering } from './src/server/idGenerator';
 import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence';
 import { asyncHandler } from './src/server/asyncHandler';
-import { reserveVehicleSlot, AvailabilityConflictError } from './src/server/availability';
+import { reserveVehicleSlot, AvailabilityConflictError, placeTemporaryHold, releaseTemporaryHold } from './src/server/availability';
 import { createContractDurable, ContractValidationError } from './src/server/contractOps';
-import { runIdempotent } from './src/server/idempotency';
+import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
+import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
+import { createBlocklistEntry, checkBlocklist, listBlocklistEntries, requestUnblock, BlocklistError } from './src/server/blocklist';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
   RuleValidationError, RuleNotEditableError, RuleForbiddenError, RuleNotFoundError
 } from './src/server/businessRules';
 import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
+import {
+  listManufacturers, listModelsForManufacturer, proposeCatalogUpdate,
+  decideCatalogUpdate, listCatalogUpdateRequests, VehicleCatalogError
+} from './src/server/vehicleCatalog';
+import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate';
+import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './src/server/payments';
+import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './src/server/deposits';
+import {
+  createPaymentIntent, getPaymentIntent, refundPaymentIntent, releaseSecurityDepositHold,
+  handleGatewayWebhook, PaymentIntentError
+} from './src/server/paymentIntents';
 import { detectAnomalies } from './src/server/anomalyDetection';
 import { checkOperationalHealth } from './src/server/operationalHealth';
 import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers';
@@ -70,9 +87,31 @@ import {
 import { computeLateFee, requestLateFeeWaiver, LateFeeError } from './src/server/lateFees';
 import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
-  ProcurementApprovalError
+  registerApprovalHandler, ProcurementApprovalError,
+  type ProcurementApprovalRequest, type ProcurementApprovalActor
 } from './src/server/procurementApprovals';
 import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
+import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance';
+import {
+  startInspection, updateInspectionDetails, addDamageMarker, reviewDamageLiability,
+  registerInspectionPhoto, acknowledgeInspection, completeInspection, voidInspection,
+  getInspection, listInspections, InspectionError
+} from './src/server/vehicleInspections';
+import {
+  processInboundWhatsAppMessage, getConversation, listConversations, listConversationMessages,
+  assignConversation, setConversationBotActive, sendManualReply, markConversationRead,
+  normalizePhone, ConversationError
+} from './src/server/whatsappConversation';
+import {
+  checkLtoEligibility, createLtoApplication, submitLtoApplication, cancelLtoApplication,
+  decideLtoApplication, listLtoInstallments, recordLtoInstallmentPayment, runLtoCollectionsSweep,
+  requestLtoEarlySettlement, decideLtoEarlySettlement, markLtoDefault, requestLtoTermination,
+  decideLtoTermination, markLtoVehicleRecovered, requestLtoOwnershipTransfer, confirmLtoOwnershipTransfer,
+  completeLtoAgreement, getLtoApplicationById, listLtoApplications, getLtoContractView, listLtoContracts,
+  getLtoSummaryForCustomer, getLtoSummaryForVehicle, LtoError
+} from './src/server/leaseToOwn';
+import { computeLtoFinancialOffer, LtoPolicyNotConfiguredError } from './src/server/leaseToOwnPolicy';
+import { generateLtoContractDocument } from './src/server/leaseToOwnContractDocument';
 import { canReadRuleTier } from './src/config/businessRules';
 import type { AuditLog } from './src/types';
 
@@ -132,6 +171,18 @@ function initFirebaseAdmin() {
   // completely unchanged. See docs/QA_TEST_ENVIRONMENT.md.
   if (process.env.FIRESTORE_EMULATOR_HOST) {
     admin.initializeApp({ projectId: process.env.GCLOUD_PROJECT || 'demo-splendor-audit' });
+    // Every route builds its Firestore-bound object by spreading optional
+    // fields straight out of req.body (e.g. POST /api/suppliers), so a field
+    // the client legitimately omits arrives here as `undefined`. Firestore's
+    // real SDK rejects that outright; only the mocked test double is lenient
+    // about it. This setting makes the server's actual behavior match what
+    // every route already assumes: omitted optional fields are just absent
+    // from the stored document, not a fatal error. Guarded because test
+    // suites mock admin.firestore() with a plain object that has no
+    // .settings() method.
+    if (typeof admin.firestore().settings === 'function') {
+      admin.firestore().settings({ ignoreUndefinedProperties: true });
+    }
     console.log(`[auth] Firebase Admin initialized against LOCAL EMULATORS (project: ${process.env.GCLOUD_PROJECT || 'demo-splendor-audit'}) -- this is not the real production project.`);
     return;
   }
@@ -149,6 +200,14 @@ function initFirebaseAdmin() {
       credential: admin.credential.cert(serviceAccount),
       storageBucket: 'splendor-private-crm.firebasestorage.app'
     });
+    // See the emulator branch above: routes routinely spread optional
+    // req.body fields into Firestore-bound objects, so an omitted field is
+    // `undefined`, not absent. Without this, the real Admin SDK throws on
+    // that -- unlike the test suite's mock -- crashing writes that never
+    // fail in CI. See docs/QA_TEST_ENVIRONMENT.md for how this was found.
+    if (typeof admin.firestore().settings === 'function') {
+      admin.firestore().settings({ ignoreUndefinedProperties: true });
+    }
     console.log('[auth] Firebase Admin initialized -- API requests will be verified.');
   } catch (error) {
     console.error('[auth] Failed to parse/initialize FIREBASE_SERVICE_ACCOUNT_KEY:', error);
@@ -191,12 +250,18 @@ app.use('/api', (req, res, next) => {
   // handshake checks hub.verify_token, and the POST delivery handler
   // verifies the X-Hub-Signature-256 HMAC below -- see that handler's
   // comment for why an exemption here is safe.
+  //
+  // /payment-gateway/webhook is the same situation for the Payment Gateway:
+  // called directly by the gateway's servers, never carrying a Firebase ID
+  // token. Its trust boundary is the HMAC signature verified inside
+  // handleGatewayWebhook() (src/server/paymentIntents.ts), not a session.
   if (
     req.path === '/health' ||
     req.path.startsWith('/public/') ||
     req.path === '/tests/run-all' ||
     req.path === '/notifications/run-checks' ||
-    req.path === '/whatsapp/webhook'
+    req.path === '/whatsapp/webhook' ||
+    req.path === '/payment-gateway/webhook'
   ) {
     return next();
   }
@@ -255,7 +320,13 @@ async function getRequesterRole(uid: string): Promise<string | null> {
  */
 async function recordAudit(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<AuditLog> {
   const id = await issueNextNumber('AuditLog');
-  const entry: AuditLog = { ...log, id, timestamp: new Date().toISOString() } as AuditLog;
+  const timestamp = new Date().toISOString();
+  const baseEntry = { ...log, id, timestamp } as AuditLog;
+  // RULE-A01: hash-chain this entry to the previous one before persisting,
+  // so a later deletion or direct-Firestore edit is detectable via
+  // verifyAuditChainIntegrity() -- see src/server/auditIntegrity.ts.
+  const { contentHash, previousHash } = await appendToAuditChain(baseEntry as unknown as AuditChainFields);
+  const entry: AuditLog = { ...baseEntry, contentHash, previousHash };
   await createDurable('audit_logs', entry as unknown as { id: string });
   globalStore.auditLogs.unshift(entry);
   return entry;
@@ -622,16 +693,37 @@ app.post('/api/upload', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    const { folder, fileName, fileType, dataBase64, targetUserId, customerId } = req.body || {};
+    const { folder, fileName, fileType, dataBase64, targetUserId, customerId, inspectionId, paymentId, bankBatchId } = req.body || {};
     if (!folder || !fileName || !dataBase64) {
       return res.status(400).json({ error: 'folder, fileName, and dataBase64 are required.' });
     }
-    if (!['avatars', 'customer-documents'].includes(folder)) {
+    if (!['avatars', 'customer-documents', 'vehicle-inspections', 'payment-proofs', 'bank-statements'].includes(folder)) {
       return res.status(400).json({ error: 'Invalid upload folder.' });
     }
 
     let storagePath: string;
-    if (folder === 'avatars') {
+    if (folder === 'vehicle-inspections') {
+      if (!inspectionId) {
+        return res.status(400).json({ error: 'inspectionId is required for vehicle-inspection photo uploads.' });
+      }
+      storagePath = `vehicle-inspections/${inspectionId}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else if (folder === 'payment-proofs') {
+      // Proof-of-payment attachment (RULE requirement: every manually
+      // recorded payment must link to an "إثبات" / proof). Keyed by
+      // paymentId when the Payment already exists, falling back to
+      // customerId for the common "attach proof, then record the payment"
+      // order the collections UI actually uses.
+      const owner = paymentId || customerId;
+      if (!owner) {
+        return res.status(400).json({ error: 'paymentId or customerId is required for payment proof uploads.' });
+      }
+      storagePath = `payment-proofs/${owner}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else if (folder === 'bank-statements') {
+      // The original uploaded statement file, kept for audit purposes
+      // alongside the parsed BankImportBatch -- this route only stores the
+      // raw file; parsing happens separately in POST /api/bank-batches.
+      storagePath = `bank-statements/${bankBatchId || 'unassigned'}/${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    } else if (folder === 'avatars') {
       let ownerUid = requesterUid;
       if (targetUserId && targetUserId !== requesterUid) {
         // Uploading someone else's avatar -- only CEO/Admin may do this.
@@ -679,10 +771,10 @@ app.post('/api/upload', async (req, res) => {
       userId: requesterUid,
       userName: uploaderActor?.name || requesterUid,
       userRole: uploaderActor?.role || 'operations',
-      entityType: folder === 'avatars' ? 'Avatar' : 'CustomerDocument',
+      entityType: folder === 'avatars' ? 'Avatar' : folder === 'vehicle-inspections' ? 'InspectionPhotoFile' : folder === 'payment-proofs' ? 'PaymentProof' : folder === 'bank-statements' ? 'BankStatementFile' : 'CustomerDocument',
       entityId: storagePath,
       action: 'create',
-      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}.`
+      newValue: `Uploaded "${fileName}" to ${folder}${customerId ? ` for customer ${customerId}` : ''}${inspectionId ? ` for inspection ${inspectionId}` : ''}${paymentId ? ` for payment ${paymentId}` : ''}.`
     });
 
     res.json({ url, path: storagePath });
@@ -700,7 +792,7 @@ app.post('/api/upload', async (req, res) => {
 // two folders POST /api/upload itself ever writes to, both server-
 // generated (never a client-supplied filesystem/Storage path), which rules
 // out path traversal to an unrelated object in the same bucket.
-const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/'];
+const ALLOWED_DOCUMENT_PATH_PREFIXES = ['avatars/', 'customer-documents/', 'vehicle-inspections/', 'lease-to-own-contracts/', 'payment-proofs/', 'bank-statements/'];
 
 app.get('/api/documents/file', asyncHandler(async (req, res) => {
   const path = String(req.query.path || '');
@@ -810,6 +902,25 @@ const VEHICLE_SERVER_OWNED_FIELDS = [
 
 app.post('/api/customers', asyncHandler(async (req, res) => {
   const data = req.body || {};
+
+  // RULE-B01/B03 (Splendor Master Rule Set): the proactive blocklist check
+  // fires the moment a passport or Emirates ID is entered for a NEW
+  // customer -- matched only by the exact identifier pair, never by name.
+  // A 'full' block rejects the record outright; a 'conditional' block lets
+  // it through with a warning the caller must act on (raised deposit /
+  // manager sign-off, per the block's own note) rather than silently
+  // proceeding as if nothing was flagged.
+  let blocklistWarning: string | undefined;
+  if (data.idType === 'emirates_id' || data.idType === 'passport') {
+    const match = await checkBlocklist(data.idType, data.idNumber, data.idType === 'passport' ? data.nationality : undefined);
+    if (match) {
+      if (match.tier === 'full') {
+        return res.status(403).json({ error: 'This customer cannot be registered at this time.' });
+      }
+      blocklistWarning = `Conditional block on file (${match.id}): ${match.conditionalNote}`;
+    }
+  }
+
   const newId = await issueNextNumber('Customer');
   const newCustomer = {
     ...data,
@@ -851,7 +962,7 @@ app.post('/api/customers', asyncHandler(async (req, res) => {
     console.error('WhatsApp dispatch failed (customer_created):', err);
   }
 
-  res.status(201).json(newCustomer);
+  res.status(201).json({ ...newCustomer, blocklistWarning });
 }));
 
 app.put('/api/customers/:id', asyncHandler(async (req, res) => {
@@ -1208,6 +1319,40 @@ app.post('/api/fleet/availability', (req, res) => {
   res.json(result);
 });
 
+// RULE-R04 (Splendor Master Rule Set): a short-lived soft hold on a
+// vehicle/window while a customer is mid-checkout. Requires authentication
+// (staff-initiated checkout today) since no public booking flow exists in
+// this repository yet (see DECISION-05) -- ready for a future public
+// website integration without changing this contract.
+app.post('/api/fleet/holds', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const { vehicleId, startDate, endDate, holdMinutes } = req.body || {};
+  if (!vehicleId || !startDate || !endDate) {
+    return res.status(400).json({ error: 'vehicleId, startDate, and endDate are required.' });
+  }
+  try {
+    const hold = await placeTemporaryHold({
+      vehicleId,
+      startIso: new Date(startDate).toISOString(),
+      endIso: new Date(endDate).toISOString(),
+      holderKey: actor.uid,
+      holdMinutes: typeof holdMinutes === 'number' ? holdMinutes : undefined
+    });
+    res.status(201).json(hold);
+  } catch (error: any) {
+    if (error instanceof AvailabilityConflictError) return res.status(409).json({ error: error.message, conflicts: error.conflicts });
+    throw error;
+  }
+}));
+
+app.delete('/api/fleet/holds/:id', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  await releaseTemporaryHold(req.params.id);
+  res.status(204).end();
+}));
+
 // Plate Assignment & Transfer with Historical Audit Trail
 app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const { plateNumber, plateCity, reason, assignedBy, assignedByName, effectiveDate } = req.body;
@@ -1232,23 +1377,50 @@ app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), as
   res.json({ success: true, vehicle: result.vehicle });
 }));
 
-// Vehicle Website Publication & Visibility Management
+// Vehicle Website Publication & Visibility Management -- the "Verified
+// Publish Gate" (Vehicle Master Profile mission, section 21). Publishing
+// (enabled:true) is blocked unless evaluateVehiclePublishReadiness()
+// confirms every required basic/technical/display/commercial field is
+// present and real; an already-published vehicle is re-verified the same
+// way on every subsequent publish-affecting edit. Unpublishing (enabled:
+// false) is always allowed -- the gate only guards what MAY be shown
+// publicly, never the ability to take something down.
 app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
   const vehicle = globalStore.vehicles.find(v => v.id === req.params.id);
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
 
-  const { publication, actorId, actorName } = req.body;
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+
+  const { publication } = req.body;
+  if (!publication || typeof publication !== 'object') {
+    return res.status(400).json({ error: 'publication is required.' });
+  }
   const now = new Date().toISOString();
+
+  const mergedWebsite = {
+    ...vehicle.website,
+    ...publication,
+    lastPublishedAt: now,
+    lastPublishedBy: actor.uid,
+    lastPublishedByName: actor.name
+  };
+
+  if (publication.enabled) {
+    const gate = evaluateVehiclePublishReadiness({ ...vehicle, website: mergedWebsite } as Vehicle);
+    if (!gate.ready) {
+      return res.status(400).json({
+        error: 'غير جاهز للنشر — بيانات ناقصة / تحتاج تحقق',
+        errorEn: 'Not ready to publish — missing or unverified data.',
+        missingReasons: gate.missingReasons,
+        missingReasonsEn: gate.missingReasonsEn
+      });
+    }
+  }
 
   const updatedVehicle = {
     ...vehicle,
-    website: {
-      ...vehicle.website,
-      ...publication,
-      lastPublishedAt: now,
-      lastPublishedBy: actorId || 'USR-001',
-      lastPublishedByName: actorName || 'Admin'
-    },
+    website: mergedWebsite,
     updatedAt: now,
     timeline: [
       ...(vehicle.timeline || []),
@@ -1263,8 +1435,8 @@ app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), 
           publicDailyRate: publication.dailyRate || vehicle.dailyRate
         },
         reason: publication.reason || (publication.enabled ? 'Showroom website publication updated' : 'Unpublished from public website'),
-        userId: actorId || 'USR-001',
-        userName: actorName || 'Admin',
+        userId: actor.uid,
+        userName: actor.name,
         createdAt: now
       }
     ]
@@ -1279,9 +1451,9 @@ app.put('/api/fleet/:id/website-publish', requireRole('ceo', 'admin', 'fleet'), 
   if (index !== -1) globalStore.vehicles[index] = updatedVehicle as any;
 
   await recordAudit({
-    userId: actorId || 'USR-001',
-    userName: actorName || 'Admin',
-    userRole: 'admin',
+    userId: actor.uid,
+    userName: actor.name,
+    userRole: actor.role as any,
     entityType: 'Vehicle',
     entityId: vehicle.id,
     action: 'update',
@@ -1346,6 +1518,56 @@ app.put('/api/fleet/:id/lifecycle', requireRole('ceo', 'admin', 'fleet'), asyncH
   });
 
   res.json({ success: true, vehicle: updatedVehicle });
+}));
+
+// RULE-M03 (Splendor Master Rule Set): marks a vehicle as physically at the
+// workshop right now -- flips it unavailable for new bookings and pins
+// maintenanceStatus at 'in_service' so the mileage-driven auto-recompute
+// (see computeMaintenanceScheduleUpdate, applied on every contract return)
+// never silently overwrites it back to optimal/due_soon.
+app.post('/api/fleet/:id/start-maintenance', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { reason } = req.body || {};
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to take a vehicle into maintenance.' });
+  }
+
+  let vehicle;
+  try {
+    vehicle = await startMaintenance(req.params.id, actor as any, recordAudit, String(reason).trim());
+  } catch (err) {
+    if (err instanceof MaintenanceError) return res.status(err.message.includes('not found') ? 404 : 409).json({ error: err.message });
+    throw err;
+  }
+
+  const index = globalStore.vehicles.findIndex(v => v.id === req.params.id);
+  if (index !== -1) globalStore.vehicles[index] = vehicle;
+  res.json(vehicle);
+}));
+
+// RULE-M03: records a completed service -- rolls the next-due threshold
+// forward from the service mileage and returns the vehicle to service.
+app.post('/api/fleet/:id/log-maintenance', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { mileageAtService, notes } = req.body || {};
+
+  let vehicle;
+  try {
+    vehicle = await logMaintenanceCompleted(
+      { vehicleId: req.params.id, mileageAtService: mileageAtService !== undefined ? Number(mileageAtService) : undefined, notes },
+      actor as any,
+      recordAudit
+    );
+  } catch (err) {
+    if (err instanceof MaintenanceError) return res.status(err.message.includes('not found') ? 404 : 409).json({ error: err.message });
+    throw err;
+  }
+
+  const index = globalStore.vehicles.findIndex(v => v.id === req.params.id);
+  if (index !== -1) globalStore.vehicles[index] = vehicle;
+  res.json(vehicle);
 }));
 
 // Fleet Reconciliation Report
@@ -1609,13 +1831,44 @@ app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(asy
   const body: Record<string, any> = { ...(req.body || {}) };
   for (const field of VEHICLE_SERVER_OWNED_FIELDS) delete body[field];
 
-  const updated = {
+  const updated: Vehicle = {
     ...prev,
     ...body,
     id: prev.id, // never let a client redirect this write to a different vehicle's document
     updatedAt: new Date().toISOString()
   };
-  await updateDurable('vehicles', updated.id, updated);
+
+  // Verified Publish Gate re-verification (Vehicle Master Profile mission,
+  // section 21.6): editing a vehicle that is already live on the public
+  // website must never leave a now-incomplete/unconfirmed record showing
+  // as published. If this edit invalidates a field the gate requires, the
+  // vehicle is automatically taken off the public website rather than
+  // continuing to serve stale "verified" data -- staff must re-publish
+  // explicitly (through the gated website-publish route) once the data is
+  // complete again.
+  let autoUnpublishedReasons: string[] | null = null;
+  if (prev.website?.enabled && updated.website?.enabled) {
+    const gate = evaluateVehiclePublishReadiness(updated);
+    if (!gate.ready) {
+      autoUnpublishedReasons = gate.missingReasons;
+      updated.website = { ...updated.website, enabled: false };
+      updated.timeline = [
+        ...(updated.timeline || []),
+        {
+          id: `EVT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          vehicleId: updated.id,
+          date: updated.updatedAt,
+          action: 'UNPUBLISHED_FROM_WEB',
+          reason: `Auto-unpublished on re-verification: ${gate.missingReasons.join('، ')}`,
+          userId: 'system',
+          userName: 'System (Publish Gate re-verification)',
+          createdAt: updated.updatedAt
+        }
+      ];
+    }
+  }
+
+  await updateDurable('vehicles', updated.id, updated as unknown as Record<string, unknown>);
   globalStore.vehicles[index] = updated;
 
   const statusChanged = prev.status !== updated.status;
@@ -1631,7 +1884,21 @@ app.put('/api/fleet/:id', requireRole('ceo', 'admin', 'fleet'), asyncHandler(asy
     reason: statusChanged ? (req.body.statusReason || 'Fleet operational status change') : (req.body.auditReason || 'Vehicle profile update')
   });
 
-  res.json(updated);
+  if (autoUnpublishedReasons) {
+    await recordAudit({
+      userId: 'system',
+      userName: 'System (Publish Gate re-verification)',
+      userRole: 'admin',
+      entityType: 'Vehicle',
+      entityId: updated.id,
+      action: 'update',
+      previousValue: 'website.enabled: true',
+      newValue: 'website.enabled: false',
+      reason: `Auto-unpublished: this edit left required data missing/unconfirmed -- ${autoUnpublishedReasons.join('; ')}`
+    });
+  }
+
+  res.json({ ...updated, ...(autoUnpublishedReasons ? { autoUnpublishedReasons } : {}) });
 }));
 
 // ----------------------------------------------------
@@ -1644,14 +1911,36 @@ app.get('/api/quotations', (req, res) => {
 app.post('/api/quotations', asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Quotation');
   const data = req.body;
+  const actor = await getRequesterActor(req);
 
   // Calculate pricing
   const dailyRate = Number(data.dailyRate) || 0;
   const duration = Number(data.durationDays) || 1;
   const baseTotal = dailyRate * duration;
   const extraServicesTotal = (data.extraServices || []).reduce((s: number, e: any) => s + (e.included ? Number(e.price) : 0), 0);
-  const discountAmount = Number(data.discountAmount) || 0;
-  const subtotal = Math.max(0, baseTotal + extraServicesTotal - discountAmount);
+  const requestedDiscountAmount = Math.max(0, Number(data.discountAmount) || 0);
+  const preDiscountSubtotal = baseTotal + extraServicesTotal;
+  const requestedDiscountPercentage = preDiscountSubtotal > 0 ? (requestedDiscountAmount / preDiscountSubtotal) * 100 : 0;
+
+  // RULE-P01 (Splendor Master Rule Set, Blueprint item 11/REQ-BP11-5): a
+  // non-manager (anyone but ceo/admin) cannot apply a discount above the
+  // configured ceiling without a separate, logged manager sign-off. Rather
+  // than reject the quotation outright, the discount is safely CAPPED to
+  // the ceiling and applied immediately (never more than the requester is
+  // actually authorized for), while the full requested discount is held as
+  // a pending Segregation-of-Duties approval -- the same generic engine
+  // already used for Debt/CustomerRefund/EmployeeCustody/BlocklistEntry
+  // this session. If the requester's role can't be verified, the safest
+  // default is to treat them as non-manager rather than skip the check.
+  const discountCeilingPercent = getRuleValue('staffDiscountCeilingPercent', 5);
+  const isManager = actor?.role === 'ceo' || actor?.role === 'admin';
+  const needsDiscountApproval = !isManager && requestedDiscountPercentage > discountCeilingPercent;
+
+  const discountAmount = needsDiscountApproval
+    ? Math.round((preDiscountSubtotal * discountCeilingPercent) / 100 * 100) / 100
+    : requestedDiscountAmount;
+  const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
+  const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
   const vatAmount = vatPortion(subtotal);
   const grandTotal = subtotal + vatAmount;
 
@@ -1660,11 +1949,16 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
     id: newId,
     baseTotal,
     extraServicesTotal,
+    discountAmount,
+    discountPercentage,
     vatAmount,
     grandTotal,
     status: data.status || 'draft',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ...(needsDiscountApproval
+      ? { discountOverridePending: true, requestedDiscountAmount, requestedDiscountPercentage }
+      : {})
   };
   await createDurable('quotations', quote);
   globalStore.quotations.unshift(quote);
@@ -1679,8 +1973,73 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
     newValue: `Created quotation for ${quote.customerName} (${quote.vehicleName}) Total: ${grandTotal} AED`
   });
 
+  if (needsDiscountApproval && actor) {
+    const approval = await createProcurementApproval({
+      entityType: 'Quotation',
+      entityId: newId,
+      action: 'discount_override',
+      payload: { requestedDiscountAmount, requestedDiscountPercentage, discountCeilingPercent, cappedDiscountAmount: discountAmount },
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as UserRole,
+      reason: data.discountReason || `Discount of ${requestedDiscountPercentage.toFixed(1)}% requested, above the ${discountCeilingPercent}% ceiling.`
+    }, recordAudit);
+    quote.discountApprovalId = approval.id;
+    await updateDurable('quotations', newId, { discountApprovalId: approval.id });
+    const cached = globalStore.quotations.find(q => q.id === newId);
+    if (cached) cached.discountApprovalId = approval.id;
+  }
+
   res.status(201).json(quote);
 }));
+
+// RULE-P01: applying the full requested discount once a manager (a
+// different person than the requester, per the generic SoD engine's own
+// enforcement) approves it. Reads the quotation fresh inside a transaction
+// and re-derives every downstream total from it, rather than trusting
+// anything computed at request time -- the quotation's baseTotal/
+// extraServicesTotal can't have changed, but re-deriving keeps this
+// handler correct even if that assumption ever stops holding.
+registerApprovalHandler('Quotation', 'discount_override', async (request: ProcurementApprovalRequest, decider: ProcurementApprovalActor, recordAuditFn) => {
+  const quotationId = request.entityId;
+  const requestedDiscountAmount = Number(request.payload.requestedDiscountAmount) || 0;
+  const ref = admin.firestore().collection('quotations').doc(quotationId);
+
+  const updated = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new ProcurementApprovalError(`Quotation ${quotationId} not found.`);
+    const current = snap.data() as Quotation;
+    if (!current.discountOverridePending) {
+      throw new ProcurementApprovalError(`Quotation ${quotationId} has no pending discount override.`);
+    }
+    const preDiscountSubtotal = current.baseTotal + current.extraServicesTotal;
+    const discountAmount = Math.min(requestedDiscountAmount, preDiscountSubtotal);
+    const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
+    const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
+    const vatAmount = vatPortion(subtotal);
+    const grandTotal = subtotal + vatAmount;
+    const patch = {
+      discountAmount, discountPercentage, vatAmount, grandTotal,
+      discountOverridePending: false, updatedAt: new Date().toISOString()
+    };
+    tx.set(ref, patch, { merge: true });
+    return { ...current, ...patch };
+  });
+
+  const cached = globalStore.quotations.find(q => q.id === quotationId);
+  if (cached) Object.assign(cached, updated);
+
+  await recordAuditFn({
+    userId: decider.uid,
+    userName: decider.name,
+    userRole: decider.role,
+    entityType: 'Quotation',
+    entityId: quotationId,
+    action: 'approval',
+    newValue: `Discount override approved: ${updated.discountAmount} AED (${updated.discountPercentage.toFixed(1)}%). New total: ${updated.grandTotal} AED.`,
+    reason: request.reason
+  });
+});
 
 // Uses the same transactional availability gate as POST /api/reservations
 // (reserveVehicleSlot) so a quotation acceptance can't double-book a
@@ -2050,6 +2409,13 @@ app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'
   let updatedContract: any;
   try {
     updatedContract = await runDurableTransaction(async (tx, db) => {
+      // Real Firestore transactions require ALL reads before ANY writes;
+      // this route used to write the contract, then read the vehicle and
+      // customer afterward -- illegal against real Firestore, invisible to
+      // the mocked test suite (found via real-emulator browser testing
+      // while auditing every transaction in this file for the same
+      // pattern that produced an earlier reconcile-route bug). Reads are
+      // now all hoisted before the first write.
       const snap = await tx.get(contractRef);
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
@@ -2058,19 +2424,20 @@ app.post('/api/contracts/:id/handover', requireRole('ceo', 'admin', 'operations'
         throw new PersistenceError(`This contract is ${contract.status} and cannot be handed over.`);
       }
 
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+
       const updated = { ...contract, handover: handoverData, status: 'active', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
 
-      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-      const vehicleSnap = await tx.get(vehicleRef);
       if (vehicleSnap.exists) {
         const vehicleUpdate: Record<string, unknown> = { status: 'rented', currentCustomerId: contract.customerId, currentContractId: contract.id, updatedAt: now };
         if (handoverData.startMileage) vehicleUpdate.mileage = handoverData.startMileage;
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
       }
 
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const customerSnap = await tx.get(customerRef);
       if (customerSnap.exists) {
         tx.set(customerRef, { totalRentals: ((customerSnap.data() as any).totalRentals || 0) + 1, updatedAt: now }, { merge: true });
       }
@@ -2129,6 +2496,9 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   let chargeDoc: any = null;
   try {
     ({ updatedContract, chargeDoc } = await runDurableTransaction(async (tx, db) => {
+      // Same real-Firestore-vs-mock ordering issue as the handover route
+      // above: all reads must happen before any write in a real Firestore
+      // transaction. Reads hoisted before the first tx.set/tx.create.
       const snap = await tx.get(contractRef);
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
@@ -2137,23 +2507,31 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
         throw new PersistenceError(`This contract is ${contract.status}, not active, and cannot be returned yet.`);
       }
 
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+
       const updated = { ...contract, returnDetails: returnData, status: 'completed', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
 
-      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-      const vehicleSnap = await tx.get(vehicleRef);
       if (vehicleSnap.exists) {
         const v = vehicleSnap.data() as any;
         const vehicleUpdate: Record<string, unknown> = {
           status: 'available', currentCustomerId: null, currentContractId: null,
           totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now
         };
-        if (returnData.endMileage) vehicleUpdate.mileage = returnData.endMileage;
+        if (returnData.endMileage) {
+          vehicleUpdate.mileage = returnData.endMileage;
+          // RULE-M02: recompute the preventive-maintenance schedule from
+          // the newly-recorded odometer reading -- the return event is the
+          // only place mileage genuinely changes, so it's the natural
+          // (and only) trigger point, no separate polling job needed.
+          Object.assign(vehicleUpdate, computeMaintenanceScheduleUpdate(v, returnData.endMileage));
+        }
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
       }
 
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const customerSnap = await tx.get(customerRef);
       if (customerSnap.exists) {
         tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
       }
@@ -2195,7 +2573,10 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
     vehicle.status = 'available';
     vehicle.currentCustomerId = undefined;
     vehicle.currentContractId = undefined;
-    if (returnData.endMileage) vehicle.mileage = returnData.endMileage;
+    if (returnData.endMileage) {
+      Object.assign(vehicle, computeMaintenanceScheduleUpdate(vehicle, returnData.endMileage));
+      vehicle.mileage = returnData.endMileage;
+    }
     vehicle.totalRevenue += updatedContract.grandTotal;
   }
   const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
@@ -2224,6 +2605,428 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   }
 
   res.json({ success: true, contract: updatedContract });
+}));
+
+// ----------------------------------------------------
+// VEHICLE INSPECTION & PHOTO EVIDENCE (Splendor Master Rule Set, Module 08)
+// ----------------------------------------------------
+// A standalone workflow alongside (not replacing) the handover/return
+// routes above -- see src/server/vehicleInspections.ts for why. Covers
+// pre_delivery / handover / in_rental / return / post_return, each with
+// configurable required photo evidence, damage classification
+// (pre_existing/new/uncertain, never auto-detected), and a customer
+// acknowledgement gate before completion where the type requires one.
+// InspectionError covers three different real HTTP situations under one
+// class (matching how the module itself throws): "not found" -> 404; a
+// plain missing-field validation error on THIS request -> 400; everything
+// else (the resource's current state blocks the action -- missing photo
+// evidence, an unreviewed damage record, an already-completed/voided
+// inspection) -> 409, matching this codebase's existing convention
+// (see e.g. MaintenanceError's routes) of treating "can't do this given
+// the record's current state" as a conflict rather than a bad request.
+function inspectionErrorStatus(message: string): number {
+  if (message.includes('not found')) return 404;
+  const isFieldValidation = message.includes('is required') || message.includes('requires an associated') || message.includes('must reference');
+  return isFieldValidation ? 400 : 409;
+}
+app.post('/api/inspections', requireRole('ceo', 'admin', 'operations', 'fleet'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const body = req.body || {};
+  if (!body.vehicleId) return res.status(400).json({ error: 'vehicleId is required.' });
+  const vehicle = globalStore.vehicles.find(v => v.id === body.vehicleId);
+  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found.' });
+  if (body.contractId) {
+    const contract = globalStore.contracts.find(c => c.id === body.contractId);
+    if (!contract) return res.status(404).json({ error: 'Contract not found.' });
+    if (contract.vehicleId !== body.vehicleId) {
+      return res.status(400).json({ error: 'This contract is not associated with the given vehicle.' });
+    }
+  }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
+
+  try {
+    const { result: inspection, replayed } = await startInspection({
+      vehicleId: body.vehicleId,
+      vehicleName: vehicle.plateNumber ? `${vehicle.make} ${vehicle.model}` : body.vehicleId,
+      contractId: body.contractId,
+      contractNumber: body.contractId ? globalStore.contracts.find(c => c.id === body.contractId)?.contractNumber : undefined,
+      type: body.type,
+      compareAgainstInspectionId: body.compareAgainstInspectionId
+    }, actor as any, idempotencyKey, fingerprintRequest(body), recordAudit);
+    res.status(201).json(inspection);
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof InspectionError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/inspections', asyncHandler(async (req, res) => {
+  const inspections = await listInspections({
+    vehicleId: req.query.vehicleId as string | undefined,
+    contractId: req.query.contractId as string | undefined
+  });
+  res.json(inspections);
+}));
+
+app.get('/api/inspections/:id', asyncHandler(async (req, res) => {
+  try {
+    res.json(await getInspection(req.params.id));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.patch('/api/inspections/:id', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await updateInspectionDetails(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/damage', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await addDamageMarker(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.put('/api/inspections/:id/damage/:damageId/review', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await reviewDamageLiability(req.params.id, { damageId: req.params.damageId, ...req.body }, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/photos', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await registerInspectionPhoto(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/acknowledge', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await acknowledgeInspection(req.params.id, req.body || {}, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/complete', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result: inspection, replayed } = await completeInspection(req.params.id, idempotencyKey, actor as any, recordAudit);
+    res.json({ ...inspection, replayed });
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/inspections/:id/void', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await voidInspection(req.params.id, req.body?.reason, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof InspectionError) return res.status(inspectionErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ---------------------------------------------------------------------------
+// Lease-to-Own (Splendor Private Mobility Operating System) -- every route
+// below is a thin HTTP wrapper over src/server/leaseToOwn.ts, which is the
+// actual orchestration layer. Reuses the same requireRole/kill-switch/
+// getRequesterActor/recordAudit conventions as every other module -- no
+// parallel auth or audit path. killSwitch.contractLifecycle gates the
+// agreement lifecycle (application/approval/settlement/termination/
+// ownership transfer, since an LTO agreement IS a Contract); killSwitch.
+// paymentsRefunds gates installment payment recording, matching how every
+// other money-received route in this app is gated.
+function ltoErrorStatus(message: string): number {
+  if (message.includes('not found')) return 404;
+  const isFieldValidation = message.includes('is required') || message.includes('must be') || message.includes('cannot be negative');
+  return isFieldValidation ? 400 : 409;
+}
+
+app.post('/api/lto/eligibility', asyncHandler(async (req, res) => {
+  const { customerId, vehicleId } = req.body || {};
+  if (!customerId || !vehicleId) return res.status(400).json({ error: 'customerId and vehicleId are required.' });
+  res.json(await checkLtoEligibility(customerId, vehicleId));
+}));
+
+app.post('/api/lto/offer-preview', requireRole('ceo', 'admin', 'operations', 'sales', 'finance'), asyncHandler(async (req, res) => {
+  const { vehiclePrice, downPayment, termMonths, hasFinalPayment, finalPaymentAmount } = req.body || {};
+  try {
+    res.json(computeLtoFinancialOffer({ vehiclePrice, downPayment, termMonths, hasFinalPayment: !!hasFinalPayment, finalPaymentAmount }));
+  } catch (error: any) {
+    if (error instanceof LtoPolicyNotConfiguredError) return res.status(409).json({ error: error.message });
+    return res.status(400).json({ error: error.message });
+  }
+}));
+
+app.post('/api/lto/applications', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result: application, replayed } = await createLtoApplication(req.body || {}, actor as any, idempotencyKey, fingerprintRequest(req.body), recordAudit);
+    res.status(201).json({ ...application, replayed });
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/applications', asyncHandler(async (req, res) => {
+  res.json(await listLtoApplications(req.query.status ? { status: req.query.status as any } : undefined));
+}));
+
+app.get('/api/lto/applications/:id', asyncHandler(async (req, res) => {
+  try {
+    res.json(await getLtoApplicationById(req.params.id));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/applications/:id/submit', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await submitLtoApplication(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/applications/:id/cancel', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await cancelLtoApplication(req.params.id, req.body?.reason || '', actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// RULE-LTO0x SoD: decider must not be the same person who created/submitted
+// the application -- enforced inside decideLtoApplication() via the shared
+// Four-Eyes engine (decideApprovalRequest), not re-checked here.
+app.post('/api/lto/applications/:id/decide', requireRole('ceo', 'admin', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { decision, note, offer } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  if (decision === 'approved' && !offer) return res.status(400).json({ error: 'A financial offer (downPayment, termMonths, hasFinalPayment, finalPaymentAmount) is required to approve.' });
+  try {
+    res.json(await decideLtoApplication(req.params.id, decision, note || '', decision === 'approved' ? offer : null, decider as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof ApprovalError) return res.status(403).json({ error: error.message });
+    if (error instanceof LtoPolicyNotConfiguredError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/contracts', asyncHandler(async (req, res) => {
+  res.json(await listLtoContracts(req.query.ltoStatus ? { ltoStatus: req.query.ltoStatus as any } : undefined));
+}));
+
+app.get('/api/lto/contracts/:id', asyncHandler(async (req, res) => {
+  try {
+    res.json(await getLtoContractView(req.params.id));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(404).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/contracts/:id/installments', asyncHandler(async (req, res) => {
+  res.json(await listLtoInstallments(req.params.id));
+}));
+
+app.post('/api/lto/installments/:id/payments', requireRole('ceo', 'admin', 'operations', 'finance', 'sales'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { amount, method } = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result, replayed } = await recordLtoInstallmentPayment(req.params.id, amount, method, actor as any, idempotencyKey, fingerprintRequest(req.body), recordAudit);
+    res.status(201).json({ ...result, replayed });
+  } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/early-settlement', requireRole('ceo', 'admin', 'operations', 'finance', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await requestLtoEarlySettlement(req.params.id, Number(req.body?.adjustments) || 0, req.body?.adjustmentReason, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoPolicyNotConfiguredError) return res.status(409).json({ error: error.message });
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/settlements/:id/decide', requireRole('ceo', 'admin', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  try {
+    res.json(await decideLtoEarlySettlement(req.params.id, decision, note || '', decider as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Only FLAGS eligibility for default -- never terminates or repossesses on
+// its own, per this module's explicit "no automatic legal action" rule.
+app.post('/api/lto/contracts/:id/flag-default', requireRole('ceo', 'admin', 'finance', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await markLtoDefault(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/termination', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await requestLtoTermination(req.params.id, req.body?.reason || '', actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/termination/decide', requireRole('ceo', 'admin'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Could not verify your session.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  try {
+    res.json(await decideLtoTermination(req.params.id, decision, note || '', decider as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Staff-confirmed, never automatic -- the actual physical recovery happens
+// off-system; this only records that it happened, per the mission's
+// explicit "no automatic vehicle repossession" rule.
+app.post('/api/lto/contracts/:id/vehicle-recovered', requireRole('ceo', 'admin', 'operations', 'fleet'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await markLtoVehicleRecovered(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// The actual RTA ownership/plate transfer is an EXTERNAL, manual dependency
+// -- no RTA API integration exists or is invented. These two routes only
+// record that staff started, then confirmed, that external process.
+app.post('/api/lto/contracts/:id/ownership-transfer', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await requestLtoOwnershipTransfer(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/ownership-transfer/confirm', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await confirmLtoOwnershipTransfer(req.params.id, req.body?.documentPath, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/lto/contracts/:id/complete', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await completeLtoAgreement(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Generates the actual signable Lease-to-Own contract PDF from the
+// system's own approved template (letterhead + paraphrased clauses + live
+// merge data -- see src/server/leaseToOwnContractDocument.ts) and files it
+// through the EXISTING Document pipeline (Firebase Storage + a real
+// CRMDocument record), never a parallel storage system. Regeneration is
+// allowed (e.g. after a data correction) -- each call creates a new
+// Document rather than mutating one in place, preserving history.
+app.post('/api/lto/contracts/:id/generate-contract', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.status(201).json(await generateLtoContractDocument(req.params.id, actor as any, recordAudit));
+  } catch (error: any) {
+    if (error instanceof LtoError) return res.status(ltoErrorStatus(error.message)).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/lto/customers/:id/summary', asyncHandler(async (req, res) => {
+  res.json(await getLtoSummaryForCustomer(req.params.id));
+}));
+
+app.get('/api/lto/vehicles/:id/summary', asyncHandler(async (req, res) => {
+  res.json(await getLtoSummaryForVehicle(req.params.id));
 }));
 
 // Extends an active contract's end date -- e.g. a customer wants a few more
@@ -2357,46 +3160,7 @@ app.get('/api/deposits', (req, res) => {
 });
 
 app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
-  const newId = await issueNextNumber('Deposit');
-  const amount = Number(req.body.amount) || 0;
-  const now = new Date().toISOString();
-  const deposit = {
-    ...req.body,
-    id: newId,
-    amount,
-    appliedAmount: 0,
-    refundedAmount: 0,
-    balance: amount,
-    status: req.body.status || 'held',
-    createdAt: now,
-    updatedAt: now
-  };
-
-  const customerRef = req.body.customerId ? admin.firestore().collection('customers').doc(req.body.customerId) : null;
-  await runDurableTransaction(async (tx, db) => {
-    tx.create(db.collection('deposits').doc(newId), deposit);
-    if (customerRef) {
-      const snap = await tx.get(customerRef);
-      if (snap.exists) {
-        tx.set(customerRef, { securityDepositsHeld: ((snap.data() as any).securityDepositsHeld || 0) + amount, updatedAt: now }, { merge: true });
-      }
-    }
-  });
-
-  globalStore.deposits.unshift(deposit);
-  const customer = globalStore.customers.find(c => c.id === deposit.customerId);
-  if (customer) customer.securityDepositsHeld += amount;
-
-  await recordAudit({
-    userId: req.body.actorId || 'USR-004',
-    userName: req.body.actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: newId,
-    action: 'create',
-    newValue: `Took a ${amount.toLocaleString()} AED security deposit${deposit.customerId ? ` from customer ${deposit.customerId}` : ''}.`
-  });
-
+  const deposit = await createSecurityDeposit(req.body || {}, recordAudit);
   res.status(201).json(deposit);
 }));
 
@@ -2434,6 +3198,11 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
       if (charge.deductedFromDepositId) throw new PersistenceError('Charge has already been deducted from a deposit');
       if (amt > charge.totalAmount) throw new PersistenceError('Apply amount exceeds the charge\'s own total amount');
 
+      // Real Firestore transactions require all reads before any writes --
+      // read the customer now, before the deposit/charge writes below.
+      const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
+      const customerSnap = customerRef ? await tx.get(customerRef) : null;
+
       const updated = {
         ...deposit,
         appliedAmount: deposit.appliedAmount + amt,
@@ -2445,13 +3214,9 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
       tx.set(depositRef, updated, { merge: true });
       tx.set(chargeRef, { deductedFromDepositId: deposit.id }, { merge: true });
 
-      if (deposit.customerId) {
-        const customerRef = db.collection('customers').doc(deposit.customerId);
-        const customerSnap = await tx.get(customerRef);
-        if (customerSnap.exists) {
-          const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-          tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-        }
+      if (customerRef && customerSnap?.exists) {
+        const held = (customerSnap.data() as any).securityDepositsHeld || 0;
+        tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
       }
       return updated;
     });
@@ -2486,63 +3251,15 @@ app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyn
 
 app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
   const { refundAmount, actorId, actorName } = req.body;
-  const now = new Date().toISOString();
-
-  const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
-  let updatedDeposit: any;
-  let amt = 0;
   try {
-    updatedDeposit = await runDurableTransaction(async (tx, db) => {
-      const snap = await tx.get(depositRef);
-      if (!snap.exists) throw new PersistenceError('Deposit not found');
-      const deposit = snap.data() as any;
-      amt = Number(refundAmount) || deposit.balance;
-      if (amt > deposit.balance) throw new PersistenceError('Refund amount exceeds held balance');
-
-      const updated = {
-        ...deposit,
-        refundedAmount: deposit.refundedAmount + amt,
-        balance: deposit.balance - amt,
-        status: deposit.balance - amt === 0 ? 'refunded' : 'partially_refunded',
-        refundDate: now,
-        updatedAt: now
-      };
-      tx.set(depositRef, updated, { merge: true });
-
-      if (deposit.customerId) {
-        const customerRef = db.collection('customers').doc(deposit.customerId);
-        const customerSnap = await tx.get(customerRef);
-        if (customerSnap.exists) {
-          const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-          tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-        }
-      }
-      return updated;
-    });
+    const updatedDeposit = await refundOrReleaseDeposit(req.params.id, refundAmount, { id: actorId || 'USR-004', name: actorName || 'Finance Manager' }, recordAudit);
+    res.json({ success: true, deposit: updatedDeposit });
   } catch (err) {
-    if (err instanceof PersistenceError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
+    if (err instanceof DepositError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
       return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
     }
     throw err;
   }
-
-  const index = globalStore.deposits.findIndex(d => d.id === req.params.id);
-  if (index !== -1) globalStore.deposits[index] = updatedDeposit;
-  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
-  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
-
-  await recordAudit({
-    userId: actorId || 'USR-004',
-    userName: actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: updatedDeposit.id,
-    action: 'refund',
-    newValue: `Processed deposit refund of ${amt} AED to customer ${updatedDeposit.customerName}`,
-    reason: 'Vehicle return inspection clear with no outstanding penalties'
-  });
-
-  res.json({ success: true, deposit: updatedDeposit });
 }));
 
 app.get('/api/invoices', (req, res) => {
@@ -2559,96 +3276,56 @@ app.get('/api/payments', (req, res) => {
 // double-crediting the customer. The whole payment+invoice+customer write
 // is now one atomic transaction, replayed (not repeated) on a matching key.
 app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
-  const data = req.body || {};
-  const amount = Number(data.amount) || 0;
-  if (amount <= 0) {
-    return res.status(400).json({ error: 'A positive payment amount is required.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { result: payment } = await createConfirmedPayment(req.body || {}, idempotencyKey, recordAudit);
+    res.status(201).json(payment);
+  } catch (err) {
+    if (err instanceof PaymentError) return res.status(400).json({ error: err.message });
+    throw err;
   }
-  const idempotencyKey = (req.header('Idempotency-Key') || data.idempotencyKey || null) as string | null;
+}));
 
-  const newId = await issueNextNumber('Payment');
-  const receiptNum = await issueNextNumber('Receipt');
+// Sets a Payment's human verification status -- separate from and never
+// implied by bank reconciliation (see /api/bank-transactions/:id/reconcile):
+// a payment can be recorded and later verified (proof checked, reference
+// confirmed) purely by a finance reviewer, with no bank statement involved
+// at all. Never auto-set by any importer or matching engine.
+app.post('/api/payments/:id/verify', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
+  const { verificationStatus, note } = req.body || {};
+  const VALID: ReadonlyArray<string> = ['pending_review', 'verified', 'rejected'];
+  if (!verificationStatus || !VALID.includes(verificationStatus)) {
+    return res.status(400).json({ error: `verificationStatus is required and must be one of: ${VALID.join(', ')}.` });
+  }
+  const payment = globalStore.payments.find(p => p.id === req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found.' });
+
+  const actor = await getRequesterActor(req);
   const now = new Date().toISOString();
+  const previousStatus = payment.verificationStatus || 'pending_review';
 
-  const { result: payment, replayed } = await runIdempotent('payment-create', idempotencyKey, async (tx, db) => {
-    const paymentDoc = {
-      ...data,
-      id: newId,
-      amount,
-      receiptNumber: receiptNum,
-      status: 'allocated' as const,
-      receivedAt: now,
-      createdAt: now
-    };
+  const updates = {
+    verificationStatus,
+    verifiedBy: actor?.uid || 'USR-004',
+    verifiedByName: actor?.name || 'Finance Team',
+    verifiedAt: now,
+    verificationNote: note ? String(note).trim() : payment.verificationNote
+  };
+  await updateDurable('payments', payment.id, updates);
+  Object.assign(payment, updates);
 
-    let invoiceRef: FirebaseFirestore.DocumentReference | null = null;
-    let invoiceSnap: FirebaseFirestore.DocumentSnapshot | null = null;
-    if (data.invoiceId) {
-      invoiceRef = db.collection('invoices').doc(data.invoiceId);
-      invoiceSnap = await tx.get(invoiceRef);
-    }
-    let customerRef: FirebaseFirestore.DocumentReference | null = null;
-    let customerSnap: FirebaseFirestore.DocumentSnapshot | null = null;
-    if (data.customerId) {
-      customerRef = db.collection('customers').doc(data.customerId);
-      customerSnap = await tx.get(customerRef);
-    }
-
-    tx.create(db.collection('payments').doc(newId), paymentDoc);
-
-    if (invoiceRef && invoiceSnap?.exists) {
-      const inv = invoiceSnap.data() as any;
-      const paidAmount = inv.paidAmount + amount;
-      const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
-      tx.set(invoiceRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
-    }
-    if (customerRef && customerSnap?.exists) {
-      const cust = customerSnap.data() as any;
-      tx.set(customerRef, { outstandingBalance: Math.max(0, (cust.outstandingBalance || 0) - amount), updatedAt: now }, { merge: true });
-    }
-
-    return paymentDoc;
+  await recordAudit({
+    userId: actor?.uid || 'USR-004',
+    userName: actor?.name || 'Finance Team',
+    userRole: actor?.role || 'finance',
+    entityType: 'Payment',
+    entityId: payment.id,
+    action: 'update',
+    previousValue: `Verification status: ${previousStatus}`,
+    newValue: `Verification status: ${verificationStatus}${note ? ` -- ${String(note).trim()}` : ''}`
   });
 
-  if (!replayed) {
-    globalStore.payments.unshift(payment as any);
-    if (data.invoiceId) {
-      const inv = globalStore.invoices.find(i => i.id === data.invoiceId);
-      if (inv) {
-        inv.paidAmount += amount;
-        inv.balanceDue = Math.max(0, inv.totalAmount - inv.paidAmount);
-        inv.status = inv.balanceDue === 0 ? 'paid' : 'partially_paid';
-      }
-    }
-    const customer = globalStore.customers.find(c => c.id === data.customerId);
-    if (customer) customer.outstandingBalance = Math.max(0, customer.outstandingBalance - amount);
-
-    await recordAudit({
-      userId: data.receivedById || 'USR-004',
-      userName: data.receivedByName || 'Faisal Al-Hashimi',
-      userRole: 'finance',
-      entityType: 'Payment',
-      entityId: newId,
-      action: 'create',
-      newValue: `Recorded payment of ${amount} AED (${data.method}) from ${data.customerName}. Receipt: ${receiptNum}`
-    });
-
-    try {
-      await dispatchNotificationEvent('payment_received',
-        `Payment of ${amount} AED received from ${data.customerName} (${data.method}). Receipt ${receiptNum}.`,
-        `تم استلام دفعة بقيمة ${amount} درهم من ${data.customerName} (${data.method}). إيصال ${receiptNum}.`
-      );
-      if (data.customerId) {
-        await dispatchCustomerNotification('customer_payment_receipt', data.customerId, data.customerName, customer?.phone,
-          `Payment received -- ${amount.toLocaleString()} AED (${data.method}). Receipt No. ${receiptNum}. Thank you.`,
-          `تم استلام دفعتكم بقيمة ${amount.toLocaleString()} درهم (${data.method}). رقم الإيصال ${receiptNum}. شكراً لكم.`);
-      }
-    } catch (err) {
-      console.error('WhatsApp dispatch failed (payment_received):', err);
-    }
-  }
-
-  res.status(201).json(payment);
+  res.json(payment);
 }));
 
 app.get('/api/statements/:customerId', (req, res) => {
@@ -2656,6 +3333,87 @@ app.get('/api/statements/:customerId', (req, res) => {
   if (!statement) return res.status(404).json({ error: 'Customer not found' });
   res.json(statement);
 });
+
+// ----------------------------------------------------
+// PAYMENT GATEWAY (Production-Grade Payment & Settlement Layer)
+// ----------------------------------------------------
+// Extends the existing Invoice/Payment/Deposit/LtoInstallment lifecycle --
+// see src/server/paymentIntents.ts for the full design rationale. The
+// active gateway (sandbox by default) is selected purely by the
+// PAYMENT_GATEWAY_PROVIDER environment variable -- never by anything a
+// client sends.
+app.post('/api/payment-intents', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  try {
+    const { intent, replayed } = await createPaymentIntent(req.body || {}, { uid: actor.uid, name: actor.name }, recordAudit, idempotencyKey);
+    res.status(201).json({ ...intent, replayed });
+  } catch (error: any) {
+    if (error instanceof PaymentIntentError) return res.status(400).json({ error: error.message });
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.get('/api/payment-intents/:id', asyncHandler(async (req, res) => {
+  const intent = await getPaymentIntent(req.params.id);
+  if (!intent) return res.status(404).json({ error: 'Payment intent not found.' });
+  res.json(intent);
+}));
+
+// Requests a refund of a succeeded PaymentIntent. This only ever creates a
+// 'processing' PaymentRefund record and asks the gateway to act -- the
+// underlying Invoice/Deposit/LtoInstallment is NOT touched until a
+// `refund.succeeded` webhook confirms it actually happened (see the
+// webhook handler below).
+app.post('/api/payment-intents/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    const refund = await refundPaymentIntent({ paymentIntentId: req.params.id, amount: req.body?.amount, reason: req.body?.reason }, { uid: actor.uid, name: actor.name }, recordAudit);
+    res.status(201).json(refund);
+  } catch (error: any) {
+    if (error instanceof PaymentIntentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Releases (voids) an uncaptured security-deposit authorization hold. The
+// Deposit itself only moves to 'refunded' once the gateway's
+// payment_intent.canceled webhook confirms the void.
+app.post('/api/payment-intents/:id/release', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    const intent = await releaseSecurityDepositHold(req.params.id, { uid: actor.uid, name: actor.name }, recordAudit);
+    res.json(intent);
+  } catch (error: any) {
+    if (error instanceof PaymentIntentError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Called directly by the payment gateway's servers -- exempted from
+// requireAuth in the /api middleware above (see that exemption list),
+// exactly like /api/whatsapp/webhook. Its trust boundary is entirely the
+// HMAC signature verified inside handleGatewayWebhook(), not a Firebase
+// session. Always returns 200 once the delivery is durably logged (even a
+// rejected/duplicate one) so the gateway doesn't retry a delivery this
+// server has already seen -- the one exception is an invalid signature,
+// which gets a 403 so a forged delivery is never acknowledged as received.
+app.post('/api/payment-gateway/webhook', webhookRateLimiter(300), asyncHandler(async (req, res) => {
+  const rawBody: Buffer | undefined = (req as any).rawBody;
+  const signatureHeader = req.headers['x-gateway-signature'] as string | undefined;
+  if (!rawBody) return res.sendStatus(400);
+
+  const outcome = await handleGatewayWebhook(rawBody, signatureHeader, recordAudit);
+  if (!outcome.processed && outcome.reason === 'invalid_signature') {
+    console.warn('[payment gateway webhook] rejected a delivery with a missing or invalid signature.');
+    return res.sendStatus(403);
+  }
+  res.status(200).json({ received: true, ...outcome });
+}));
 
 // ----------------------------------------------------
 // 9. BANK IMPORT & RECONCILIATION
@@ -2668,70 +3426,130 @@ app.get('/api/bank-transactions', (req, res) => {
   res.json(globalStore.bankTransactions);
 });
 
+// Real CSV/Excel bank statement import with a preview-then-confirm flow
+// (mirrors POST /api/tolls/import exactly): a preview call (confirm !==
+// true) parses and classifies every row without writing anything or
+// burning a real BATCH-/BTX- number, so the review screen can show
+// classifications before anything is persisted. Only confirm:true writes.
+//
+// PDF-readiness (mission requirement): detectBankImportFileKind() already
+// recognizes a PDF upload; adding real PDF support later is a new
+// parseBankStatementPdfText() feeding the exact same parseGridToBankRows()
+// row shape into the exact same classification/persistence code below --
+// zero changes to this route's structure or to bankReconciliation.ts.
+//
+// Legacy compatibility: a caller that still sends a pre-parsed
+// `transactions` array (rather than a real file) is supported unchanged --
+// routed through the SAME classification engine as a real file, never a
+// second matching implementation.
 app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
-  const { fileName, bankName, accountNumber, transactions, uploadedBy } = req.body;
-  const batchSeq = await issueNextNumber('BankBatch');
-  const batchId = `BATCH-${new Date().toISOString().slice(0, 7)}-${batchSeq.replace(/\D/g, '').slice(-2).padStart(2, '0')}`;
-  
-  const parsedTxns: any[] = [];
-  (transactions || []).forEach((t: any, idx: number) => {
-    const txnId = `BTX-${batchId.slice(-4)}-${String(idx + 1).padStart(3, '0')}`;
-    
-    // Auto-match heuristic
-    const amount = Number(t.credit) || Number(t.debit) || 0;
-    const desc = (t.description || '').toUpperCase();
-    let suggestedMatch = undefined;
+  const { fileBase64, fileName, bankName, accountNumber, statementPeriod, uploadedBy, confirm, transactions } = req.body || {};
 
-    // Search for customer match in description
-    for (const cust of globalStore.customers) {
-      const nameParts = (cust.fullName || '').toUpperCase().split(' ');
-      const matched = nameParts.some(p => p.length > 3 && desc.includes(p)) || 
-                      (cust.companyName && desc.includes(cust.companyName.toUpperCase().slice(0, 8)));
-      
-      if (matched) {
-        // Find open invoice
-        const openInv = globalStore.invoices.find(i => i.customerId === cust.id && i.balanceDue > 0);
-        suggestedMatch = {
-          customerId: cust.id,
-          customerName: cust.fullName,
-          invoiceId: openInv ? openInv.id : undefined,
-          confidence: openInv && Math.abs(openInv.balanceDue - amount) < 1 ? 98 : 86,
-          rationale: `Matched customer ${cust.fullName} from bank wire description narrative.`,
-          rationaleAr: `تمت مطابقة اسم العميل ${cust.fullName} من النص المرفق بالحوالة البنكية.`
-        };
-        break;
-      }
+  let rows: ParsedBankStatementRow[];
+  let parseWarnings: string[] = [];
+  let detectedMeta: { accountNumber?: string; bankName?: string } = {};
+  let fileFormat: 'excel' | 'csv' | 'legacy' = 'legacy';
+
+  if (fileBase64) {
+    const buffer = Buffer.from(String(fileBase64).split(',').pop() || '', 'base64');
+    if (buffer.length === 0) return res.status(400).json({ error: 'Uploaded file is empty.' });
+    if (buffer.length > BANK_IMPORT_MAX_FILE_BYTES) {
+      return res.status(400).json({ error: `File is too large (${Math.round(BANK_IMPORT_MAX_FILE_BYTES / (1024 * 1024))}MB max).` });
     }
-
-    parsedTxns.push({
-      id: txnId,
-      batchId,
+    const kind = detectBankImportFileKind(buffer);
+    if (!kind) {
+      return res.status(400).json({ error: 'Unsupported or unrecognized file format. Please upload a bank statement CSV or Excel export.' });
+    }
+    if (kind === 'pdf') {
+      return res.status(400).json({ error: 'PDF bank statements are not supported yet -- please export a CSV or Excel statement from your bank instead.' });
+    }
+    let parsed: ParsedBankStatementFile;
+    try {
+      parsed = kind === 'excel' ? await parseBankStatementExcel(buffer) : await parseBankStatementCsv(buffer);
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || 'Failed to parse the uploaded file.' });
+    }
+    rows = parsed.rows;
+    parseWarnings = parsed.warnings;
+    detectedMeta = parsed.meta;
+    fileFormat = kind;
+  } else if (Array.isArray(transactions)) {
+    rows = transactions.map((t: any) => ({
       date: t.date || new Date().toISOString().split('T')[0],
-      description: t.description || 'BANK TRANSACTION',
-      reference: t.reference || `REF-${Math.floor(Math.random() * 900000 + 100000)}`,
+      description: t.description || '',
+      reference: t.reference || '',
       debit: Number(t.debit) || 0,
       credit: Number(t.credit) || 0,
-      balance: Number(t.balance) || 1500000,
-      suggestedMatch,
-      status: suggestedMatch ? 'suggested_match' : 'unmatched',
-      reconciled: false
+      balance: t.balance !== undefined ? Number(t.balance) : undefined
+    }));
+  } else {
+    return res.status(400).json({ error: 'Either fileBase64 (a real statement upload) or a transactions array is required.' });
+  }
+
+  const isConfirmed = confirm === true;
+  const batchSeq = isConfirmed ? await issueNextNumber('BankBatch') : `PREVIEW-${Date.now()}`;
+  const batchId = isConfirmed ? `BATCH-${new Date().toISOString().slice(0, 7)}-${batchSeq.replace(/\D/g, '').slice(-2).padStart(2, '0')}` : batchSeq;
+
+  // Duplicate detection checks against every transaction ever imported
+  // (all prior batches) PLUS the rows already processed earlier in this
+  // same file, so two identical rows within one upload are caught too.
+  const runningNewTxns: BankTransaction[] = [];
+  const parsedTxns: any[] = [];
+  rows.forEach((row, idx) => {
+    const txnId = isConfirmed ? `BTX-${batchId.slice(-4)}-${String(idx + 1).padStart(3, '0')}` : `PREVIEW-${idx + 1}`;
+    const result = classifyBankRow({
+      row, customers: globalStore.customers, invoices: globalStore.invoices, payments: globalStore.payments,
+      priorTransactions: [...globalStore.bankTransactions, ...runningNewTxns]
     });
+
+    const txn = {
+      id: txnId,
+      batchId,
+      date: row.date,
+      description: row.description || 'BANK TRANSACTION',
+      reference: row.reference || '',
+      debit: row.debit,
+      credit: row.credit,
+      balance: row.balance ?? 0,
+      suggestedMatch: result.suggestedMatch,
+      status: (result.classification === 'matched' ? 'suggested_match'
+        : result.classification === 'unrecorded_transfer' ? 'unmatched'
+        : 'needs_review') as BankTransactionStatus,
+      reconciled: false,
+      matchClassification: result.classification,
+      matchReason: result.reasonEn,
+      matchReasonAr: result.reasonAr,
+      ...(result.duplicateOfTransactionId ? { duplicateOfTransactionId: result.duplicateOfTransactionId } : {})
+    };
+    parsedTxns.push(txn);
+    runningNewTxns.push(txn as unknown as BankTransaction);
   });
+
+  const periodDates = rows.map(r => r.date).filter(Boolean).sort();
+  const periodStart = periodDates[0] || new Date().toISOString().slice(0, 10);
+  const periodEnd = periodDates[periodDates.length - 1] || periodStart;
+  const unmatchedCrmPayments = findUnmatchedCrmPayments(rows, globalStore.payments, periodStart, periodEnd);
 
   const batch = {
     id: batchId,
-    fileName: fileName || 'statement_import.csv',
-    bankName: bankName || 'Emirates NBD',
-    accountNumber: accountNumber || 'AE09 0260 0012 3456 7890 01',
-    statementPeriod: req.body.statementPeriod || 'Current Month',
+    fileName: fileName || (fileFormat === 'csv' ? 'statement.csv' : fileFormat === 'excel' ? 'statement.xlsx' : 'statement_import.csv'),
+    fileFormat,
+    bankName: bankName || detectedMeta.bankName || 'Unspecified Bank',
+    accountNumber: accountNumber || detectedMeta.accountNumber || '',
+    statementPeriod: statementPeriod || `${periodStart} - ${periodEnd}`,
     uploadedBy: uploadedBy || 'Finance Team',
     uploadedAt: new Date().toISOString(),
     totalTransactions: parsedTxns.length,
-    matchedCount: parsedTxns.filter(t => t.status === 'suggested_match').length,
-    unmatchedCount: parsedTxns.filter(t => t.status === 'unmatched').length,
-    duplicateCount: 0,
+    matchedCount: parsedTxns.filter(t => t.matchClassification === 'matched').length,
+    unmatchedCount: parsedTxns.filter(t => t.matchClassification === 'unrecorded_transfer').length,
+    duplicateCount: parsedTxns.filter(t => t.matchClassification === 'duplicate_transaction').length,
+    unmatchedCrmPayments,
     status: 'ready_for_review' as const
   };
+
+  if (!isConfirmed) {
+    return res.json({ preview: true, batch, transactions: parsedTxns, warnings: parseWarnings });
+  }
 
   const ops: BatchOp[] = [{ type: 'create', collection: 'bank_batches', id: batch.id, data: batch }];
   for (const t of parsedTxns) ops.push({ type: 'create', collection: 'bank_transactions', id: t.id, data: t });
@@ -2749,59 +3567,124 @@ app.post('/api/bank-batches', requireRole('finance', 'ceo', 'admin'), requireOpe
     entityType: 'BankImportBatch',
     entityId: batch.id,
     action: 'create',
-    newValue: `Imported bank statement ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched).`
+    newValue: `Imported bank statement ${batch.fileName} (${parsedTxns.length} transactions -- ${batch.matchedCount} matched, ${batch.duplicateCount} duplicate, ${unmatchedCrmPayments.length} CRM payment(s) not found in the bank).`
   });
 
   try {
     await dispatchNotificationEvent('bank_statement_imported',
-      `Bank statement imported: ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched).`,
-      `تم استيراد كشف حساب بنكي: ${batch.fileName} (${parsedTxns.length} معاملة، ${batch.matchedCount} مطابقة تلقائياً).`
+      `Bank statement imported: ${batch.fileName} (${parsedTxns.length} transactions, ${batch.matchedCount} auto-matched, ${batch.duplicateCount} flagged as duplicate).`,
+      `تم استيراد كشف حساب بنكي: ${batch.fileName} (${parsedTxns.length} معاملة، ${batch.matchedCount} مطابقة، ${batch.duplicateCount} مكررة).`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (bank_statement_imported):', err);
   }
 
-  res.status(201).json({ batch, transactions: parsedTxns });
+  res.status(201).json({ preview: false, batch, transactions: parsedTxns, warnings: parseWarnings });
 }));
 
 // Guards against double-reconcile (the audit's finding: reconciling twice
 // would double-credit the matched invoice) by checking txn.reconciled
 // inside the same transaction that writes the reconciliation.
+//
+// FIN-002 (Received Amount Classification): every reconciled credit must
+// say what it actually is -- settlement / advance_payment /
+// security_deposit / credit_balance / settlement_adjustment /
+// other_approved / unclassified. This is REQUIRED and never guessed:
+// 'unclassified' is a real, explicit choice a reconciler makes when they
+// genuinely don't know, not a silent default for an omitted field.
+// Classification is metadata about the money and never changes any
+// monetary amount -- the paidAmount/balanceDue math below is unchanged
+// from before FIN-002 existed.
+//
+// Also fixes a latent correctness gap found while wiring this in: the
+// invoice-balance update below used to run whenever targetRecordId was
+// present, regardless of targetRecordType -- so reconciling a credit
+// against a non-invoice record (e.g. a future 'deposit' target) would
+// still probe the invoices collection for that id. Now gated explicitly
+// on targetRecordType === 'invoice'.
+//
+// Actor identity (who reconciled this) is now taken from the verified
+// request token via getRequesterActor(), not from client-supplied
+// actorId/actorName -- the previous version trusted the client's own
+// claim of who it was for the audit trail, which any authorized finance
+// user could spoof to attribute a reconciliation to someone else.
 app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
-  const { targetRecordType, targetRecordId, actorId, actorName } = req.body;
+  const { targetRecordType, targetRecordId, classification, duplicateOverrideReason } = req.body || {};
+  if (!classification || !RECEIVED_AMOUNT_CLASSIFICATIONS.includes(classification)) {
+    return res.status(400).json({ error: `classification is required and must be one of: ${RECEIVED_AMOUNT_CLASSIFICATIONS.join(', ')}.` });
+  }
+  const actor = await getRequesterActor(req);
+  const resolvedType = targetRecordType || 'invoice';
   const now = new Date().toISOString();
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
   const txnRef = admin.firestore().collection('bank_transactions').doc(req.params.id);
 
   let updatedTxn: any;
+  let replayed = false;
   try {
-    updatedTxn = await runDurableTransaction(async (tx, db) => {
+    const outcome = await runIdempotent('bank-reconcile', idempotencyKey, async (tx, db) => {
+      // Real Firestore transactions require ALL reads before ANY writes --
+      // the mocked firebase-admin used by the automated suite doesn't
+      // enforce this ordering at all, so this exact bug (a pre-existing
+      // one, not introduced by FIN-002: the original code wrote the
+      // transaction doc, then conditionally read the invoice afterward)
+      // passed 100% of mocked tests while throwing on every real Firestore
+      // call. Found via real-emulator browser verification while wiring
+      // FIN-002 in. Fixed by doing the conditional invoice read FIRST.
       const snap = await tx.get(txnRef);
       if (!snap.exists) throw new PersistenceError('Bank transaction not found');
       const txn = snap.data() as any;
       if (txn.reconciled) throw new PersistenceError('This transaction has already been reconciled.');
+      // Absolute rule from the mission brief: bank-statement analysis alone
+      // may never create or confirm a payment. A row flagged as a probable
+      // duplicate of an existing transaction is exactly the case where a
+      // one-click confirm would double-count a receipt -- require an
+      // explicit, recorded human override reason before it can proceed.
+      if (txn.matchClassification === 'duplicate_transaction' && !String(duplicateOverrideReason || '').trim()) {
+        throw new PersistenceError('DUPLICATE_NEEDS_OVERRIDE');
+      }
+
+      const invRef = (resolvedType === 'invoice' && targetRecordId && txn.credit > 0)
+        ? db.collection('invoices').doc(targetRecordId)
+        : null;
+      const invSnap = invRef ? await tx.get(invRef) : null;
 
       const matchedRecord = {
-        type: targetRecordType || 'invoice',
+        type: resolvedType,
         id: targetRecordId || (txn.suggestedMatch ? txn.suggestedMatch.invoiceId || '' : ''),
-        matchedBy: actorName || 'Faisal Al-Hashimi',
+        matchedBy: actor?.name || 'Unknown',
         matchedAt: now
       };
-      const updated = { ...txn, status: 'approved', reconciled: true, matchedRecord };
+      const classificationEvent = {
+        classification: classification as ReceivedAmountClassification,
+        setBy: actor?.uid || 'USR-004',
+        setByName: actor?.name || 'Unknown',
+        setAt: now
+      };
+      const updated = {
+        ...txn,
+        status: 'approved',
+        reconciled: true,
+        matchedRecord,
+        receivedAmountClassification: classification,
+        classificationHistory: [classificationEvent]
+      };
       tx.set(txnRef, updated, { merge: true });
 
-      if (targetRecordId && txn.credit > 0) {
-        const invRef = db.collection('invoices').doc(targetRecordId);
-        const invSnap = await tx.get(invRef);
-        if (invSnap.exists) {
-          const inv = invSnap.data() as any;
-          const paidAmount = inv.paidAmount + txn.credit;
-          const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
-          tx.set(invRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
-        }
+      if (invRef && invSnap?.exists) {
+        const inv = invSnap.data() as any;
+        const paidAmount = inv.paidAmount + txn.credit;
+        const balanceDue = Math.max(0, inv.totalAmount - paidAmount);
+        tx.set(invRef, { paidAmount, balanceDue, status: balanceDue === 0 ? 'paid' : 'partially_paid', updatedAt: now }, { merge: true });
       }
       return updated;
     });
+    updatedTxn = outcome.result;
+    replayed = outcome.replayed;
   } catch (err) {
+    if (err instanceof PersistenceError && err.message === 'DUPLICATE_NEEDS_OVERRIDE') {
+      return res.status(409).json({ error: 'This transaction looks like a duplicate of an already-recorded bank transaction. Provide duplicateOverrideReason to confirm it anyway.' });
+    }
     if (err instanceof PersistenceError && (err.message === 'Bank transaction not found' || err.message.startsWith('This transaction'))) {
       return res.status(err.message === 'Bank transaction not found' ? 404 : 409).json({ error: err.message });
     }
@@ -2810,7 +3693,7 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
 
   const index = globalStore.bankTransactions.findIndex(t => t.id === req.params.id);
   if (index !== -1) globalStore.bankTransactions[index] = updatedTxn;
-  if (targetRecordId && updatedTxn.credit > 0) {
+  if (!replayed && updatedTxn.matchedRecord.type === 'invoice' && targetRecordId && updatedTxn.credit > 0) {
     const inv = globalStore.invoices.find(i => i.id === targetRecordId);
     if (inv) {
       inv.paidAmount += updatedTxn.credit;
@@ -2819,17 +3702,96 @@ app.post('/api/bank-transactions/:id/reconcile', requireRole('finance', 'ceo', '
     }
   }
 
-  await recordAudit({
-    userId: actorId || 'USR-004',
-    userName: actorName || 'Faisal Al-Hashimi',
-    userRole: 'finance',
-    entityType: 'BankReconciliation',
-    entityId: updatedTxn.id,
-    action: 'reconcile',
-    previousValue: 'Status: Pending / Suggested',
-    newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}`,
-    reason: 'Approved by authorized financial reconciler'
-  });
+  if (!replayed) {
+    const wasDuplicateOverride = updatedTxn.matchClassification === 'duplicate_transaction';
+    await recordAudit({
+      userId: actor?.uid || 'USR-004',
+      userName: actor?.name || 'Unknown',
+      userRole: actor?.role || 'finance',
+      entityType: 'BankReconciliation',
+      entityId: updatedTxn.id,
+      action: 'reconcile',
+      previousValue: 'Status: Pending / Suggested',
+      newValue: `Reconciled transaction ${updatedTxn.reference} (${updatedTxn.credit > 0 ? '+' : '-'}${updatedTxn.credit || updatedTxn.debit} AED) with ${updatedTxn.matchedRecord.type} ${updatedTxn.matchedRecord.id}. Classification: ${classification}.`
+        + (wasDuplicateOverride ? ` DUPLICATE OVERRIDE: ${String(duplicateOverrideReason).trim()}` : ''),
+      reason: wasDuplicateOverride ? 'Manually confirmed despite a suspected duplicate match' : 'Approved by authorized financial reconciler'
+    });
+  }
+
+  res.json({ success: true, transaction: updatedTxn });
+}));
+
+// FIN-002 reclassification: changes ONLY receivedAmountClassification and
+// appends to classificationHistory -- never touches credit/debit,
+// paidAmount, or balanceDue. Requires a mandatory reason (this is a
+// correction to a prior human judgment call, not a routine action) and is
+// itself idempotent (a retried identical request replays, it doesn't
+// create a second history entry). The transaction must already be
+// reconciled -- there is nothing to reclassify before that.
+app.post('/api/bank-transactions/:id/reclassify', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('bankReconciliation'), asyncHandler(async (req, res) => {
+  const { classification, reason } = req.body || {};
+  if (!classification || !RECEIVED_AMOUNT_CLASSIFICATIONS.includes(classification)) {
+    return res.status(400).json({ error: `classification is required and must be one of: ${RECEIVED_AMOUNT_CLASSIFICATIONS.join(', ')}.` });
+  }
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to reclassify a received amount.' });
+  }
+  const actor = await getRequesterActor(req);
+  const now = new Date().toISOString();
+  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
+  const txnRef = admin.firestore().collection('bank_transactions').doc(req.params.id);
+
+  let updatedTxn: any;
+  let previousClassification: string | undefined;
+  let replayed = false;
+  try {
+    const outcome = await runIdempotent('bank-reclassify', idempotencyKey, async (tx) => {
+      const snap = await tx.get(txnRef);
+      if (!snap.exists) throw new PersistenceError('Bank transaction not found');
+      const txn = snap.data() as any;
+      if (!txn.reconciled) throw new PersistenceError('Only a reconciled transaction can be reclassified.');
+      previousClassification = txn.receivedAmountClassification || 'unclassified';
+
+      const classificationEvent = {
+        classification: classification as ReceivedAmountClassification,
+        setBy: actor?.uid || 'USR-004',
+        setByName: actor?.name || 'Unknown',
+        setAt: now,
+        reason: String(reason).trim()
+      };
+      const updated = {
+        ...txn,
+        receivedAmountClassification: classification,
+        classificationHistory: [...(txn.classificationHistory || []), classificationEvent]
+      };
+      tx.set(txnRef, updated, { merge: true });
+      return updated;
+    });
+    updatedTxn = outcome.result;
+    replayed = outcome.replayed;
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Bank transaction not found' || err.message.startsWith('Only a reconciled'))) {
+      return res.status(err.message === 'Bank transaction not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.bankTransactions.findIndex(t => t.id === req.params.id);
+  if (index !== -1) globalStore.bankTransactions[index] = updatedTxn;
+
+  if (!replayed) {
+    await recordAudit({
+      userId: actor?.uid || 'USR-004',
+      userName: actor?.name || 'Unknown',
+      userRole: actor?.role || 'finance',
+      entityType: 'BankReconciliation',
+      entityId: updatedTxn.id,
+      action: 'reclassify',
+      previousValue: `Classification: ${previousClassification}`,
+      newValue: `Classification: ${classification}`,
+      reason: String(reason).trim()
+    });
+  }
 
   res.json({ success: true, transaction: updatedTxn });
 }));
@@ -3523,6 +4485,30 @@ async function recordWhatsAppInboundEvent(eventId: string, data: Record<string, 
   }
 }
 
+// Defense-in-depth only -- the real trust boundary is the signature check
+// below, not this. A generous per-IP cap so a compromised/leaked webhook
+// URL (still requiring a valid HMAC to do anything) can't be used to burn
+// CPU on signature verification indefinitely; legitimate Meta traffic for
+// one business number never comes close to this rate.
+const webhookRateLimitMap = new Map<string, { count: number; windowStart: number }>();
+function webhookRateLimiter(maxRequestsPerMinute: number) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const windowMs = 60 * 1000;
+    const entry = webhookRateLimitMap.get(ip);
+    if (!entry || now - entry.windowStart > windowMs) {
+      webhookRateLimitMap.set(ip, { count: 1, windowStart: now });
+      return next();
+    }
+    entry.count += 1;
+    if (entry.count > maxRequestsPerMinute) {
+      return res.sendStatus(429);
+    }
+    next();
+  };
+}
+
 // POST: every incoming customer message and every outbound delivery-status
 // update (sent/delivered/read/failed) for our number arrives here. Meta
 // requires a fast HTTP 200 on every delivery -- it retries with backoff,
@@ -3532,10 +4518,26 @@ async function recordWhatsAppInboundEvent(eventId: string, data: Record<string, 
 // itself fails, asyncHandler lets that propagate to the global error
 // middleware (a 500), which is the correct outcome here -- Meta will retry
 // the same event, and recordWhatsAppInboundEvent's idempotency key makes
-// that retry safe once the write actually succeeds. Turning incoming
-// messages into a real in-app inbox/reply flow (a UI thread view, etc.) is
-// a separate, larger feature to build once this durable log is in place.
-app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
+// that retry safe once the write actually succeeds.
+//
+// Module 13: every inbound MESSAGE (not status update) is additionally run
+// through the conversation engine (processInboundWhatsAppMessage), gated by
+// a `processedAt` flag on the SAME raw event document -- deliberately
+// separate from "is the raw event stored" (recordWhatsAppInboundEvent's own
+// 'stored'/'duplicate' result): a delivery that was durably recorded but
+// then crashed mid-processing (a transient Firestore error, say) must still
+// be reprocessed on Meta's automatic retry of that same message id, not
+// silently dropped because the raw record already existed. If
+// processInboundWhatsAppMessage itself throws, it is NOT caught here --
+// asyncHandler propagates it to a 500 exactly like a raw-persistence
+// failure, so Meta retries the whole delivery; processedAt is only ever set
+// AFTER a fully successful run, so a retry safely re-attempts exactly the
+// work that didn't finish, and skips whatever already did (each mutating
+// step inside processInboundWhatsAppMessage -- most importantly
+// SplendorConnectEngine.handleWhatsAppReservation -- is itself idempotent,
+// so even a retry that re-runs a step that actually did complete cannot
+// double-book or double-create).
+app.post('/api/whatsapp/webhook', webhookRateLimiter(300), asyncHandler(async (req, res) => {
   if (!verifyWhatsAppWebhookSignature(req)) {
     console.warn('[whatsapp webhook] rejected a delivery with a missing or invalid X-Hub-Signature-256.');
     return res.sendStatus(403);
@@ -3550,7 +4552,8 @@ app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
   if (Array.isArray(messages)) {
     for (const m of messages) {
       console.log(`[whatsapp webhook] incoming message from ${m.from}: ${m.text?.body ?? `[${m.type}]`}`);
-      await recordWhatsAppInboundEvent(`msg_${m.id}`, {
+      const eventId = `msg_${m.id}`;
+      await recordWhatsAppInboundEvent(eventId, {
         direction: 'inbound',
         messageId: m.id,
         phone: m.from,
@@ -3560,6 +4563,20 @@ app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
         receivedAt: now,
         metadata: m
       });
+
+      const eventSnap = await admin.firestore().collection('whatsapp_inbound_events').doc(eventId).get();
+      const alreadyProcessed = !!(eventSnap.data() as any)?.processedAt;
+      if (!alreadyProcessed) {
+        const interactive = m.interactive;
+        await processInboundWhatsAppMessage({
+          phone: m.from,
+          type: m.type || 'unknown',
+          text: m.text?.body,
+          interactiveReplyId: interactive?.button_reply?.id || interactive?.list_reply?.id,
+          messageId: m.id
+        }, recordAudit);
+        await updateDurable('whatsapp_inbound_events', eventId, { processedAt: new Date().toISOString() });
+      }
     }
   }
   if (Array.isArray(statuses)) {
@@ -3579,6 +4596,76 @@ app.post('/api/whatsapp/webhook', asyncHandler(async (req, res) => {
   }
 
   res.sendStatus(200);
+}));
+
+// ----------------------------------------------------
+// Module 13: WhatsApp Unified Inbox (Human Concierge)
+// ----------------------------------------------------
+// Every route here requires a real signed-in staff session (the global
+// requireAuth gate already covers everything under /api/ except the
+// webhook itself and the handful of paths explicitly exempted above) --
+// this is internal CRM surface, never reachable by a customer or by Meta.
+
+function conversationErrorStatus(message: string): number {
+  return message.includes('No conversation found') ? 404 : 409;
+}
+
+app.get('/api/whatsapp/conversations', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const state = typeof req.query.state === 'string' ? (req.query.state as any) : undefined;
+  const assignedEmployeeId = typeof req.query.assignedEmployeeId === 'string' ? req.query.assignedEmployeeId : undefined;
+  const rows = await listConversations({ state, assignedEmployeeId });
+  res.json(rows);
+}));
+
+app.get('/api/whatsapp/conversations/:phone', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const conversation = await getConversation(req.params.phone);
+  if (!conversation) return res.status(404).json({ error: 'No conversation found for this number.' });
+  const messages = await listConversationMessages(req.params.phone);
+  await markConversationRead(req.params.phone);
+  res.json({ ...conversation, unread: false, messages });
+}));
+
+app.post('/api/whatsapp/conversations/:phone/assign', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  try {
+    const updated = await assignConversation(req.params.phone, {
+      employeeId: req.body?.employeeId,
+      employeeName: req.body?.employeeName,
+      priority: req.body?.priority,
+      tags: req.body?.tags
+    }, actor, recordAudit);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
+}));
+
+app.post('/api/whatsapp/conversations/:phone/handoff', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  try {
+    const updated = await setConversationBotActive(req.params.phone, !!req.body?.botActive, actor, recordAudit);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
+}));
+
+app.post('/api/whatsapp/conversations/:phone/reply', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  const text = (req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Reply text is required.' });
+  try {
+    await sendManualReply(req.params.phone, text, actor, recordAudit);
+    res.status(201).json({ success: true });
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
 }));
 
 app.get('/api/custom-reminders', (req, res) => {
@@ -3660,7 +4747,18 @@ async function handleRunChecks(req: express.Request, res: express.Response) {
 
   try {
     const summary = await runNotificationChecks();
-    res.json(summary);
+    // Same cron trigger, not a second scheduled job -- runLtoCollectionsSweep
+    // only sends reminders for installments that newly read as due/late/
+    // overdue (see its own lastReminderAt guard) and never terminates a
+    // contract or touches a vehicle itself.
+    let ltoSweep: { remindersSent: number; tasksCreated: number } | { error: string };
+    try {
+      ltoSweep = await runLtoCollectionsSweep();
+    } catch (ltoError: any) {
+      console.error('runLtoCollectionsSweep failed:', ltoError);
+      ltoSweep = { error: ltoError?.message || 'Lease-to-Own collections sweep failed.' };
+    }
+    res.json({ ...summary, lto: ltoSweep });
   } catch (error: any) {
     console.error('runNotificationChecks failed:', error);
     res.status(500).json({ error: error?.message || 'Notification check sweep failed.' });
@@ -3841,6 +4939,76 @@ app.post('/api/dead-letter-queue/:id/resolve', requireRole('ceo', 'admin', 'oper
 // src/server/businessRules.ts and src/server/approvals.ts for the engine
 // itself, and src/config/businessRules.ts for the tier permission tables.
 
+// RULE-A01 (Splendor Master Rule Set, Module 12): tamper-evidence check
+// over the entire audit trail's hash chain. Not on any write path -- an
+// on-demand integrity check for CEO/Admin, or a future scheduled job.
+app.get('/api/audit-integrity/verify', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const report = await verifyAuditChainIntegrity();
+  res.json(report);
+}));
+
+// ----------------------------------------------------
+// SECURITY BLOCKLIST / WATCHLIST (Splendor Master Rule Set, Module 03)
+// ----------------------------------------------------
+app.get('/api/blocklist', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'), asyncHandler(async (req, res) => {
+  res.json(await listBlocklistEntries());
+}));
+
+app.post('/api/blocklist/check', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'), asyncHandler(async (req, res) => {
+  const { identifierType, identifierValue, identifierCountry } = req.body || {};
+  if (!identifierType || !identifierValue) {
+    return res.status(400).json({ error: 'identifierType and identifierValue are required.' });
+  }
+  const match = await checkBlocklist(identifierType, identifierValue, identifierCountry);
+  res.json({ blocked: !!match, entry: match || null });
+}));
+
+app.post('/api/blocklist', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  try {
+    const entry = await createBlocklistEntry({
+      identifierType: body.identifierType,
+      identifierValue: body.identifierValue,
+      identifierCountry: body.identifierCountry,
+      customerName: body.customerName,
+      tier: body.tier,
+      reason: body.reason,
+      conditionalNote: body.conditionalNote,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+      createdByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json(entry);
+  } catch (error: any) {
+    if (error instanceof BlocklistError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/blocklist/:id/unblock-requests', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const body = req.body || {};
+  if (!body.reason || !String(body.reason).trim()) {
+    return res.status(400).json({ error: 'A reason is required to request removal of this block.' });
+  }
+  try {
+    const { approvalRequestId } = await requestUnblock({
+      entryId: req.params.id,
+      reason: body.reason,
+      requestedBy: actor.uid,
+      requestedByName: actor.name,
+      requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json({ approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof BlocklistError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
 /** Every rule the caller's role is allowed to see, tier-filtered -- system_configuration entries are hidden from non-CEO/Admin roles even in this read-only list. */
 app.get('/api/business-rules', asyncHandler(async (req, res) => {
   const actor = await getRequesterActor(req);
@@ -3991,6 +5159,75 @@ app.post('/api/approval-requests/:id/decide', requireRole('ceo', 'admin'), async
   }
 }));
 
+// ----------------------------------------------------
+// VEHICLE MASTER PROFILE & VERIFIED VEHICLE CATALOG
+// ----------------------------------------------------
+// Master Manufacturer/Model reference catalog (extend, never duplicate: a
+// centralized source every screen that needs a manufacturer/model list
+// reads from, instead of free-text inputs or per-screen hardcoded lists).
+// Read routes are open to any authenticated staff member browsing the Add/
+// Edit Vehicle screen; proposing and deciding updates reuse the existing
+// Four-Eyes approval engine (src/server/approvals.ts) via
+// src/server/vehicleCatalog.ts -- no parallel approval mechanism.
+app.get('/api/vehicle-catalog/manufacturers', asyncHandler(async (req, res) => {
+  res.json(await listManufacturers());
+}));
+
+app.get('/api/vehicle-catalog/models', asyncHandler(async (req, res) => {
+  const manufacturerId = req.query.manufacturerId as string;
+  if (!manufacturerId) return res.status(400).json({ error: 'manufacturerId is required.' });
+  res.json(await listModelsForManufacturer(manufacturerId));
+}));
+
+app.get('/api/vehicle-catalog/model-requests', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status as string) ? (req.query.status as any) : undefined;
+  res.json(await listCatalogUpdateRequests(status));
+}));
+
+// "الموديل غير موجود؟ طلب إضافة موديل جديد" -- any staff member can propose;
+// this only ever creates a PENDING request, never a live catalog entry.
+app.post('/api/vehicle-catalog/model-requests', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Authentication required.' });
+  const { requestType, manufacturerName, modelName, year, trim, details, sourceNote } = req.body || {};
+  if (!['new_manufacturer', 'new_model', 'model_correction', 'model_discontinued'].includes(requestType)) {
+    return res.status(400).json({ error: 'requestType must be one of new_manufacturer, new_model, model_correction, model_discontinued.' });
+  }
+  try {
+    const request = await proposeCatalogUpdate({
+      requestType, manufacturerName, modelName, year, trim, details, sourceNote,
+      discoverySource: 'staff_request',
+      requestedBy: actor.uid, requestedByName: actor.name, requestedByRole: actor.role as any
+    }, recordAudit);
+    res.status(201).json(request);
+  } catch (error: any) {
+    if (error instanceof VehicleCatalogError || error instanceof ApprovalError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// Approve/reject a pending catalog update. Four-Eyes/SoD (decider cannot be
+// the requester) is enforced inside decideApprovalRequest, reused as-is.
+app.post('/api/vehicle-catalog/model-requests/:id/decide', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
+  const decider = await getRequesterActor(req);
+  if (!decider) return res.status(401).json({ error: 'Authentication required.' });
+  const { decision, note } = req.body || {};
+  if (decision !== 'approved' && decision !== 'rejected') {
+    return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
+  }
+  try {
+    const decided = await decideCatalogUpdate(
+      req.params.id, decision, note, { uid: decider.uid, name: decider.name, role: decider.role as any }, recordAudit
+    );
+    res.json(decided);
+  } catch (error: any) {
+    if (error instanceof VehicleCatalogError || error instanceof ApprovalError) return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
+
 app.get('/api/settings/custom-fields', (req, res) => {
   res.json(globalStore.customFields);
 });
@@ -4013,6 +5250,79 @@ app.post('/api/settings/custom-fields', requireRole('ceo', 'admin'), asyncHandle
   });
 
   res.status(201).json(field);
+}));
+
+// Manageable payment-method catalog (RULE requirement: "طرق دفع قابلة
+// للإدارة" -- manual payment recording must draw from an admin-editable
+// list, not a hardcoded one). Mirrors the Procurement payment-method-defs /
+// custom-fields pattern exactly: a small config-shaped list, seeded with
+// DEFAULT_CUSTOMER_PAYMENT_METHODS, editable (never deletable -- a method
+// already referenced by historical Payments must keep resolving) by ceo/
+// admin only.
+app.get('/api/payment-methods', (req, res) => {
+  res.json(globalStore.paymentMethods);
+});
+
+app.post('/api/payment-methods', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const { key, labelEn, labelAr, requiresReference, requiresProof } = req.body || {};
+  if (!key || !labelEn || !labelAr) {
+    return res.status(400).json({ error: 'key, labelEn, and labelAr are required.' });
+  }
+  if (globalStore.paymentMethods.some(m => m.key === key)) {
+    return res.status(409).json({ error: `Payment method "${key}" already exists.` });
+  }
+  const method = {
+    id: key,
+    key,
+    labelEn: String(labelEn).trim(),
+    labelAr: String(labelAr).trim(),
+    active: true,
+    requiresReference: !!requiresReference,
+    requiresProof: !!requiresProof
+  };
+  await createDurable('payment_methods', method);
+  globalStore.paymentMethods.push(method);
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Admin',
+    userRole: actor?.role || 'admin',
+    entityType: 'PaymentMethod',
+    entityId: method.key,
+    action: 'create',
+    newValue: `Added payment method "${method.labelEn}" / "${method.labelAr}".`
+  });
+
+  res.status(201).json(method);
+}));
+
+app.patch('/api/payment-methods/:key', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const method = globalStore.paymentMethods.find(m => m.key === req.params.key);
+  if (!method) return res.status(404).json({ error: `Payment method "${req.params.key}" not found.` });
+
+  const { labelEn, labelAr, active, requiresReference, requiresProof } = req.body || {};
+  const previous = { ...method };
+  if (labelEn !== undefined) method.labelEn = String(labelEn).trim();
+  if (labelAr !== undefined) method.labelAr = String(labelAr).trim();
+  if (active !== undefined) method.active = !!active;
+  if (requiresReference !== undefined) method.requiresReference = !!requiresReference;
+  if (requiresProof !== undefined) method.requiresProof = !!requiresProof;
+  await updateDurable('payment_methods', method.key, { ...method });
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Admin',
+    userRole: actor?.role || 'admin',
+    entityType: 'PaymentMethod',
+    entityId: method.key,
+    action: 'update',
+    previousValue: `${previous.labelEn} / active:${previous.active}`,
+    newValue: `${method.labelEn} / active:${method.active}`
+  });
+
+  res.json(method);
 }));
 
 app.get('/api/settings/numbering', (req, res) => {
@@ -5264,9 +6574,10 @@ app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operati
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to submit this PO for approval.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { po, approvalRequestId } = await createPurchaseOrder({
+    const { result: { po, approvalRequestId }, replayed } = await runIdempotentCreate('po-create', idempotencyKey, fingerprintRequest(body), async () => createPurchaseOrder({
       kind: body.kind === 'retroactive' ? 'retroactive' : 'regular',
       retroactiveReason: body.retroactiveReason,
       retroactiveReasonOther: body.retroactiveReasonOther,
@@ -5278,17 +6589,28 @@ app.post('/api/purchase-orders', requireRole('ceo', 'admin', 'finance', 'operati
       requestedByName: actor.name,
       requestedByRole: actor.role as any,
       reason: body.reason
-    }, recordAudit);
+    }, recordAudit));
 
-    globalStore.purchaseOrders.unshift(po);
+    if (!replayed) globalStore.purchaseOrders.unshift(po);
     res.status(201).json({ po, approvalRequestId, status: 'pending_approval' });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
     throw error;
   }
 }));
 
 // ---- PO Amendment (rules 10-11): request -> review -> approval -> new version ----
+// GET was missing entirely -- the amendment-request POST route and the
+// approval engine both existed, but nothing ever let the frontend read an
+// amendment request back, so there was no way to show an approver the
+// actual before/after line items they're deciding on, or to list a PO's
+// amendment history. globalStore.purchaseOrderAmendmentRequests was
+// already hydrated at boot; it just had no route reading from it.
+app.get('/api/purchase-orders/:id/amendment-requests', (req, res) => {
+  res.json(globalStore.purchaseOrderAmendmentRequests.filter(ar => ar.purchaseOrderId === req.params.id));
+});
+
 app.post('/api/purchase-orders/:id/amendment-requests', requireRole('ceo', 'admin', 'finance', 'operations', 'fleet'), asyncHandler(async (req, res) => {
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
@@ -5306,6 +6628,20 @@ app.post('/api/purchase-orders/:id/amendment-requests', requireRole('ceo', 'admi
       requestedByRole: actor.role as any,
       reason: body.reason
     }, recordAudit);
+    // requestPurchaseOrderAmendment() only writes to Firestore -- syncing
+    // globalStore here is this route handler's job, same as every other
+    // create route in this file (e.g. POST /api/purchase-orders itself).
+    // Both the new amendment request AND the PO's own amendmentRequestIds
+    // array need this (the PO doc was updated in Firestore too, by the
+    // same call, but globalStore.purchaseOrders was never told).
+    globalStore.purchaseOrderAmendmentRequests.unshift(amendmentRequest);
+    const poIndex = globalStore.purchaseOrders.findIndex(p => p.id === req.params.id);
+    if (poIndex !== -1) {
+      globalStore.purchaseOrders[poIndex] = {
+        ...globalStore.purchaseOrders[poIndex],
+        amendmentRequestIds: [...(globalStore.purchaseOrders[poIndex].amendmentRequestIds || []), amendmentRequest.id]
+      };
+    }
     res.status(201).json({ amendmentRequest, approvalRequestId });
   } catch (error: any) {
     if (error instanceof PurchaseOrderError) return res.status(400).json({ error: error.message });
@@ -5406,9 +6742,10 @@ app.post('/api/supplier-quotes', requireRole('ceo', 'admin', 'finance', 'operati
   if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required -- a quote can only reference a registered supplier, never free text.' });
   const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
   if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const quote = await addSupplierQuote({
+    const { result: quote, replayed } = await runIdempotentCreate('supplier-quote-create', idempotencyKey, fingerprintRequest(body), async () => addSupplierQuote({
       purchaseOrderId: body.purchaseOrderId,
       supplierId: supplier.id,
       supplierName: supplier.legalName,
@@ -5423,10 +6760,11 @@ app.post('/api/supplier-quotes', requireRole('ceo', 'admin', 'finance', 'operati
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.supplierQuotes.unshift(quote);
+    }, recordAudit));
+    if (!replayed) globalStore.supplierQuotes.unshift(quote);
     res.status(201).json(quote);
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof SupplierQuoteError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5477,9 +6815,10 @@ app.post('/api/supplier-payment-requests', requireRole('ceo', 'admin', 'finance'
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to request this payment.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { paymentRequest, approvalRequestId } = await requestSupplierPayment({
+    const { result: { paymentRequest, approvalRequestId }, replayed } = await runIdempotentCreate('supplier-payment-request-create', idempotencyKey, fingerprintRequest(body), async () => requestSupplierPayment({
       purchaseOrderId: body.purchaseOrderId,
       operationId: body.operationId,
       track: body.track,
@@ -5491,10 +6830,11 @@ app.post('/api/supplier-payment-requests', requireRole('ceo', 'admin', 'finance'
       requestedByName: actor.name,
       requestedByRole: actor.role as any,
       reason: body.reason
-    }, recordAudit);
-    globalStore.supplierPaymentRequests.unshift(paymentRequest);
+    }, recordAudit));
+    if (!replayed) globalStore.supplierPaymentRequests.unshift(paymentRequest);
     res.status(201).json({ paymentRequest, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof SupplierPaymentError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5762,9 +7102,10 @@ app.post('/api/customer-refund-requests', requireRole('ceo', 'admin', 'finance')
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to request this refund.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { refundRequest, approvalRequestId } = await requestCustomerRefund({
+    const { result: { refundRequest, approvalRequestId }, replayed } = await runIdempotentCreate('customer-refund-request-create', idempotencyKey, fingerprintRequest(body), async () => requestCustomerRefund({
       customerId: body.customerId,
       creditBalanceId: body.creditBalanceId,
       amount: body.amount,
@@ -5772,10 +7113,11 @@ app.post('/api/customer-refund-requests', requireRole('ceo', 'admin', 'finance')
       requestedBy: actor.uid,
       requestedByName: actor.name,
       requestedByRole: actor.role as any
-    }, recordAudit);
-    globalStore.customerRefundRequests.unshift(refundRequest);
+    }, recordAudit));
+    if (!replayed) globalStore.customerRefundRequests.unshift(refundRequest);
     res.status(201).json({ refundRequest, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof CustomerRefundError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5819,9 +7161,10 @@ app.post('/api/debts', requireRole('ceo', 'admin', 'finance', 'operations'), asy
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const debt = await createDebt({
+    const { result: debt, replayed } = await runIdempotentCreate('debt-create', idempotencyKey, fingerprintRequest(body), async () => createDebt({
       customerId: body.customerId,
       customerName: body.customerName,
       type: body.type,
@@ -5834,10 +7177,11 @@ app.post('/api/debts', requireRole('ceo', 'admin', 'finance', 'operations'), asy
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.debts.unshift(debt);
+    }, recordAudit));
+    if (!replayed) globalStore.debts.unshift(debt);
     res.status(201).json(debt);
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof DebtError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -5959,9 +7303,10 @@ app.post('/api/employee-custodies/issue', requireRole('ceo', 'admin', 'finance',
   if (!body.reason || !String(body.reason).trim()) {
     return res.status(400).json({ error: 'A reason is required to request this issuance.' });
   }
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { approvalRequestId } = await requestIssueCustodyFloat({
+    const { result: { approvalRequestId } } = await runIdempotentCreate('custody-issue-request-create', idempotencyKey, fingerprintRequest(body), async () => requestIssueCustodyFloat({
       employeeId: body.employeeId,
       employeeName: body.employeeName,
       amount: body.amount,
@@ -5969,9 +7314,10 @@ app.post('/api/employee-custodies/issue', requireRole('ceo', 'admin', 'finance',
       requestedBy: actor.uid,
       requestedByName: actor.name,
       requestedByRole: actor.role as any
-    }, recordAudit);
+    }, recordAudit));
     res.status(201).json({ approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6017,9 +7363,10 @@ app.post('/api/employee-expenses', requireRole('ceo', 'admin', 'finance', 'opera
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { expense, approvalRequestId } = await submitEmployeeExpense({
+    const { result: { expense, approvalRequestId }, replayed } = await runIdempotentCreate('employee-expense-create', idempotencyKey, fingerprintRequest(body), async () => submitEmployeeExpense({
       employeeId: body.employeeId,
       employeeName: body.employeeName,
       custodyId: body.custodyId,
@@ -6033,10 +7380,11 @@ app.post('/api/employee-expenses', requireRole('ceo', 'admin', 'finance', 'opera
       submittedBy: actor.uid,
       submittedByName: actor.name,
       submittedByRole: actor.role as any
-    }, recordAudit);
-    globalStore.employeeExpenses.unshift(expense);
+    }, recordAudit));
+    if (!replayed) globalStore.employeeExpenses.unshift(expense);
     res.status(201).json({ expense, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof EmployeeCustodyError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6089,9 +7437,10 @@ app.post('/api/supplier-invoices', requireRole('ceo', 'admin', 'finance', 'opera
   if (!body.supplierId) return res.status(400).json({ error: 'supplierId is required.' });
   const supplier = globalStore.suppliers.find(s => s.id === body.supplierId);
   if (!supplier) return res.status(404).json({ error: 'Unknown supplier. Add the supplier first.' });
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { invoice, approvalRequestId } = await submitSupplierInvoice({
+    const { result: { invoice, approvalRequestId }, replayed } = await runIdempotentCreate('supplier-invoice-create', idempotencyKey, fingerprintRequest(body), async () => submitSupplierInvoice({
       purchaseOrderId: body.purchaseOrderId,
       operationId: body.operationId,
       supplierId: supplier.id,
@@ -6105,17 +7454,20 @@ app.post('/api/supplier-invoices', requireRole('ceo', 'admin', 'finance', 'opera
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.supplierInvoices.unshift(invoice);
-    if (body.correctionOfInvoiceId) {
-      const origSnap = await admin.firestore().collection('supplier_invoices').doc(body.correctionOfInvoiceId).get();
-      if (origSnap.exists) {
-        const origIndex = globalStore.supplierInvoices.findIndex(i => i.id === body.correctionOfInvoiceId);
-        if (origIndex !== -1) globalStore.supplierInvoices[origIndex] = origSnap.data() as any;
+    }, recordAudit));
+    if (!replayed) {
+      globalStore.supplierInvoices.unshift(invoice);
+      if (body.correctionOfInvoiceId) {
+        const origSnap = await admin.firestore().collection('supplier_invoices').doc(body.correctionOfInvoiceId).get();
+        if (origSnap.exists) {
+          const origIndex = globalStore.supplierInvoices.findIndex(i => i.id === body.correctionOfInvoiceId);
+          if (origIndex !== -1) globalStore.supplierInvoices[origIndex] = origSnap.data() as any;
+        }
       }
     }
     res.status(201).json({ invoice, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof SupplierInvoiceError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6163,9 +7515,10 @@ app.post('/api/operational-expenses', requireRole('ceo', 'admin', 'finance', 'op
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { expense, approvalRequestId } = await submitOperationalExpense({
+    const { result: { expense, approvalRequestId }, replayed } = await runIdempotentCreate('operational-expense-create', idempotencyKey, fingerprintRequest(body), async () => submitOperationalExpense({
       operationId: body.operationId,
       documentationLevel: body.documentationLevel,
       category: body.category,
@@ -6182,10 +7535,11 @@ app.post('/api/operational-expenses', requireRole('ceo', 'admin', 'finance', 'op
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    globalStore.operationalExpenses.unshift(expense);
+    }, recordAudit));
+    if (!replayed) globalStore.operationalExpenses.unshift(expense);
     res.status(201).json({ expense, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof OperationalExpenseError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6210,9 +7564,10 @@ app.post('/api/vehicle-receiving-records', requireRole('ceo', 'admin', 'operatio
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
 
   try {
-    const { record, approvalRequestId } = await recordVehicleReceiving({
+    const { result: { record, approvalRequestId }, replayed } = await runIdempotentCreate('vehicle-receiving-create', idempotencyKey, fingerprintRequest(body), async () => recordVehicleReceiving({
       operationId: body.operationId,
       purchaseOrderId: body.purchaseOrderId,
       supplierId: body.supplierId,
@@ -6226,10 +7581,11 @@ app.post('/api/vehicle-receiving-records', requireRole('ceo', 'admin', 'operatio
       receivedBy: actor.uid,
       receivedByName: actor.name,
       receivedByRole: actor.role as any
-    }, recordAudit);
-    globalStore.vehicleReceivingRecords.unshift(record);
+    }, recordAudit));
+    if (!replayed) globalStore.vehicleReceivingRecords.unshift(record);
     res.status(201).json({ record, approvalRequestId });
   } catch (error: any) {
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ error: error.message });
     if (error instanceof VehicleReceivingError) return res.status(400).json({ error: error.message });
     throw error;
   }
@@ -6409,6 +7765,38 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
             globalStore.procurementOperations[opIndex] = d.data() as any;
           }
         });
+      }
+    }
+
+    // PO amendment requests: the approval handler (approve_amendment)
+    // already marks the amendment request 'approved' in Firestore when
+    // decision === 'approved', but nothing marks it 'rejected' when it's
+    // rejected -- decideProcurementApproval only updates the generic
+    // procurement_approvals record on rejection, never the amendment
+    // request's own document, so a rejected amendment would sit at
+    // 'pending_approval' forever. Fixed here, localized to this one entity
+    // type, since GET /api/purchase-orders/:id/amendment-requests (added
+    // alongside this PO Amendment UI work) needs a real, accurate status
+    // to show -- not a wholesale fix of every other entity type with the
+    // same "no sync on reject" gap (see the engineering report).
+    if (decided.entityType === 'PurchaseOrder' && decided.action === 'approve_amendment') {
+      const amendmentId = (decided.payload as any)?.amendmentRequestId as string | undefined;
+      if (amendmentId) {
+        if (decision === 'rejected') {
+          await updateDurable('purchase_order_amendment_requests', amendmentId, {
+            status: 'rejected',
+            decidedBy: actor.uid,
+            decidedByName: actor.name,
+            decidedAt: new Date().toISOString(),
+            decisionNote: note
+          } as unknown as Record<string, unknown>);
+        }
+        const arSnap = await admin.firestore().collection('purchase_order_amendment_requests').doc(amendmentId).get();
+        if (arSnap.exists) {
+          const index = globalStore.purchaseOrderAmendmentRequests.findIndex(a => a.id === amendmentId);
+          if (index !== -1) globalStore.purchaseOrderAmendmentRequests[index] = arSnap.data() as any;
+          else globalStore.purchaseOrderAmendmentRequests.unshift(arSnap.data() as any);
+        }
       }
     }
 
@@ -6733,6 +8121,7 @@ const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   auditLogs: 'audit_logs',
   customFields: 'custom_fields',
   numberingConfigs: 'numbering_configs',
+  paymentMethods: 'payment_methods',
   notifications: 'notifications',
   tollTransactions: 'toll_transactions',
   tollImportBatches: 'toll_import_batches',
@@ -6804,7 +8193,7 @@ async function hydrateStoreFromFirestore() {
         }
 
         // For system configuration collections, preserve system defaults if Firestore collection is empty
-        if ((field === 'customFields' || field === 'numberingConfigs') && snap.empty) {
+        if ((field === 'customFields' || field === 'numberingConfigs' || field === 'paymentMethods') && snap.empty) {
           // Keep default system definitions
         } else {
           // Empty collections result in an empty dataset - never fall back to demo records

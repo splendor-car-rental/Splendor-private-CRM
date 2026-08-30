@@ -2,7 +2,7 @@ import { createDurable, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import { LATE_FEE_GRACE_PERIOD_HOURS, LATE_FEE_EXTRA_DAY_CONVERSION_HOURS } from '../config/procurement';
-import type { RecordAuditFn } from './businessRules';
+import { getRuleValue, type RecordAuditFn } from './businessRules';
 import type { LateFeeWaiver, UserRole } from '../types';
 
 // ----------------------------------------------------
@@ -36,19 +36,33 @@ export interface LateFeeComputation {
  * specific multiplier is a STARTER DEFAULT -- NEEDS BUSINESS REVIEW: only
  * the grace-period/rounding/conversion TIME thresholds were given as real
  * numbers by the business; the rate-per-hour formula itself was not.
+ *
+ * The grace-period and conversion thresholds are read from the Business
+ * Rules Engine (CONFIG-002: these are configurable operational thresholds,
+ * not values that should live as hardcoded literals) -- the imported
+ * constants below are only the fallback used if the engine hasn't
+ * hydrated yet, identical to the values it's seeded with. This function
+ * stays pure and synchronous: it reads the CURRENT rule value fresh on
+ * every call and returns a plain computation, storing nothing itself, so
+ * changing either rule only affects fees computed after the change --
+ * anything already recorded (a LateFeeWaiver's originalLateFeeAmount) is
+ * a frozen snapshot number, never retroactively recalculated.
  */
 export function computeLateFee(dailyRate: number, scheduledReturnAt: string, actualReturnAt: string): LateFeeComputation {
   const scheduled = new Date(scheduledReturnAt).getTime();
   const actual = new Date(actualReturnAt).getTime();
   const rawDelayMinutes = Math.max(0, Math.round((actual - scheduled) / 60000));
 
-  const graceMinutes = LATE_FEE_GRACE_PERIOD_HOURS * 60;
+  const gracePeriodHours = getRuleValue('lateFeeGracePeriodHours', LATE_FEE_GRACE_PERIOD_HOURS);
+  const extraDayConversionHours = getRuleValue('lateFeeExtraDayConversionHours', LATE_FEE_EXTRA_DAY_CONVERSION_HOURS);
+
+  const graceMinutes = gracePeriodHours * 60;
   const pastGraceMinutes = rawDelayMinutes - graceMinutes;
   if (pastGraceMinutes <= 0) {
     return { rawDelayMinutes, withinGrace: true, billableHours: 0, convertedToExtraDay: false, feeAmount: 0 };
   }
 
-  const conversionMinutes = LATE_FEE_EXTRA_DAY_CONVERSION_HOURS * 60;
+  const conversionMinutes = extraDayConversionHours * 60;
   if (pastGraceMinutes > conversionMinutes) {
     return { rawDelayMinutes, withinGrace: false, billableHours: 0, convertedToExtraDay: true, feeAmount: Math.round(dailyRate * 100) / 100 };
   }

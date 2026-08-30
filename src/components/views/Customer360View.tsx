@@ -12,8 +12,6 @@ import { Customer, CRMDocument } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
-import { KycManagerCard } from '../common/KycManagerCard';
-import { InternationalPhoneInput } from '../common/InternationalPhoneInput';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
 import { apiFetch } from '../../lib/apiFetch';
@@ -21,7 +19,7 @@ import { apiFetch } from '../../lib/apiFetch';
 const DOCUMENT_CATEGORIES: CRMDocument['category'][] = ['customer_id', 'driving_license', 'contract', 'invoice', 'receipt', 'other'];
 
 export const Customer360View: React.FC = () => {
-  const { language, t, getStatusLabel, getDocCategoryLabel } = useLanguage();
+  const { language, t } = useLanguage();
   const { currentUser } = useAuth();
   const {
     customers, contracts, invoices, deposits,
@@ -78,7 +76,7 @@ export const Customer360View: React.FC = () => {
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
 
   // 360 Tab selection
-  const [activeTab, setActiveTab] = useState<'overview' | 'kyc' | 'rentals' | 'statement' | 'comms' | 'docs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs'>('overview');
 
   // Filtered customer list
   const filteredCustomers = customers.filter(c => {
@@ -159,6 +157,7 @@ export const Customer360View: React.FC = () => {
 
   // Associated 360 records for active customer
   const customerContracts = activeCustomer ? contracts.filter(c => c.customerId === activeCustomer.id) : [];
+  const customerLtoContracts = activeCustomer ? contracts.filter(c => c.customerId === activeCustomer.id && c.contractType === 'lease_to_own' && c.lto) : [];
   const customerInvoices = activeCustomer ? invoices.filter(i => i.customerId === activeCustomer.id) : [];
   const customerDeposits = activeCustomer ? deposits.filter(d => d.customerId === activeCustomer.id) : [];
   const customerPayments = activeCustomer ? payments.filter(p => p.customerId === activeCustomer.id) : [];
@@ -296,7 +295,7 @@ export const Customer360View: React.FC = () => {
                 filterVIP === null ? 'bg-[#D4AF37]/20 border-[#D4AF37]/40 text-[#f5d97f]' : 'border-zinc-800 text-zinc-400'
               }`}
             >
-              {language === 'ar' ? `كافة العملاء (${customers.length})` : `All (${customers.length})`}
+              All ({customers.length})
             </button>
             <button
               onClick={() => setFilterVIP(true)}
@@ -304,16 +303,14 @@ export const Customer360View: React.FC = () => {
                 filterVIP === true ? 'bg-[#D4AF37]/20 border-[#D4AF37]/40 text-[#f5d97f]' : 'border-zinc-800 text-zinc-400'
               }`}
             >
-              {language === 'ar' ? 'كبار العملاء VIP' : 'VIP Tier 1'}
+              VIP Tier 1
             </button>
           </div>
 
           {/* List */}
           <div className="space-y-2 max-h-[600px] overflow-y-auto custom-scrollbar">
             {filteredCustomers.length === 0 ? (
-              <div className="p-8 text-center text-xs text-zinc-500">
-                {language === 'ar' ? 'لم يتم العثور على عملاء مطابقين.' : 'No customers found.'}
-              </div>
+              <div className="p-8 text-center text-xs text-zinc-500">No customers found.</div>
             ) : (
               filteredCustomers.map(customer => {
                 const isSelected = activeCustomer?.id === customer.id;
@@ -342,8 +339,8 @@ export const Customer360View: React.FC = () => {
                     </div>
 
                     <div className="mt-2.5 pt-2 border-t border-zinc-800/50 flex items-center justify-between text-[11px] text-zinc-400">
-                      <span>{language === 'ar' ? 'الإجمالي:' : 'LTV:'} <strong className="text-zinc-200">{(customer.lifetimeValue || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}</strong></span>
-                      <span>{customer.totalRentals || 0} {language === 'ar' ? 'إيجار' : 'Rentals'}</span>
+                      <span>LTV: <strong className="text-zinc-200">{(customer.lifetimeValue || 0).toLocaleString()} AED</strong></span>
+                      <span>{customer.totalRentals || 0} Rentals</span>
                     </div>
                   </div>
                 );
@@ -366,15 +363,15 @@ export const Customer360View: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2.5">
                     <h3 className="text-lg font-bold text-zinc-100 font-display">{activeCustomer.fullName || 'Unnamed Client'}</h3>
-                    {activeCustomer.isVIP && <Badge variant="gold" size="sm">VIP</Badge>}
+                    {activeCustomer.isVIP && <Badge variant="gold" size="sm">VIP GUEST</Badge>}
                     <Badge variant={activeCustomer.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                      {getStatusLabel(activeCustomer.status || 'active')}
+                      {(activeCustomer.status || 'ACTIVE').toUpperCase()}
                     </Badge>
                   </div>
                   <p className="text-xs text-zinc-400 mt-1 flex items-center gap-3">
                     <span>{activeCustomer.id}</span>
                     <span>•</span>
-                    <span>{activeCustomer.nationality || (language === 'ar' ? 'الإمارات' : 'UAE')}</span>
+                    <span>{activeCustomer.nationality || 'UAE'}</span>
                     {activeCustomer.companyName && (
                       <>
                         <span>•</span>
@@ -412,7 +409,7 @@ export const Customer360View: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-semibold text-[#f5d97f]">
                     <Sparkles className="w-3.5 h-3.5 text-[#D4AF37]" />
-                    <span>{language === 'ar' ? 'الموجز التنفيذي الذكي' : 'Executive VIP Briefing'}</span>
+                    <span>Executive VIP Briefing</span>
                   </div>
                   <AiConfidenceBadge type="ai_suggestion" confidence={98} />
                 </div>
@@ -423,67 +420,56 @@ export const Customer360View: React.FC = () => {
             {/* Financial & Rental Summary Strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
-                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">
-                  {language === 'ar' ? 'إجمالي قيمة العميل' : 'Lifetime Value'}
-                </p>
-                <p className="text-base font-bold text-zinc-100 mt-1">
-                  {(activeCustomer.lifetimeValue || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}
-                </p>
+                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Lifetime Value</p>
+                <p className="text-base font-bold text-zinc-100 mt-1">{(activeCustomer.lifetimeValue || 0).toLocaleString()} AED</p>
               </div>
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
-                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">
-                  {language === 'ar' ? 'إجمالي الإيجارات' : 'Total Rentals'}
-                </p>
+                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Total Rentals</p>
                 <p className="text-base font-bold text-zinc-100 mt-1">{activeCustomer.totalRentals || 0}</p>
               </div>
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
-                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">
-                  {language === 'ar' ? 'الودائع المحتجزة' : 'Deposits Held'}
-                </p>
-                <p className="text-base font-bold text-[#f5d97f] mt-1">
-                  {(activeCustomer.securityDepositsHeld || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}
-                </p>
+                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Deposits Held</p>
+                <p className="text-base font-bold text-[#f5d97f] mt-1">{(activeCustomer.securityDepositsHeld || 0).toLocaleString()} AED</p>
               </div>
               <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
-                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">
-                  {language === 'ar' ? 'الرصيد المستحق' : 'Balance Due'}
-                </p>
+                <p className="text-[10px] uppercase font-medium text-zinc-400 tracking-wider">Balance Due</p>
                 <p className={`text-base font-bold mt-1 ${(activeCustomer.outstandingBalance || 0) > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                  {(activeCustomer.outstandingBalance || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}
+                  {(activeCustomer.outstandingBalance || 0).toLocaleString()} AED
                 </p>
               </div>
             </div>
 
             {/* 360 Tab Navigation */}
-            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto">
+            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'overview' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
-                {language === 'ar' ? 'الملف والبيانات' : 'Profile & Contact'}
-              </button>
-              <button
-                onClick={() => setActiveTab('kyc')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
-                  activeTab === 'kyc' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
-                <span>{language === 'ar' ? 'منظومة التحقق KYC' : 'KYC Engine'}</span>
+                {language === 'ar' ? 'الملف والوثائق' : 'Profile & Identity'}
               </button>
               <button
                 onClick={() => setActiveTab('rentals')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'rentals' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 {language === 'ar' ? 'سجل الإيجارات' : 'Rental History'} ({customerContracts.length})
               </button>
+              {customerLtoContracts.length > 0 && (
+                <button
+                  onClick={() => setActiveTab('lto')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    activeTab === 'lto' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {language === 'ar' ? 'الإيجار المنتهي بالتملك' : 'Lease-to-Own'} ({customerLtoContracts.length})
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('statement')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'statement' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -491,7 +477,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('comms')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'comms' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -499,7 +485,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('docs')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                   activeTab === 'docs' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -512,9 +498,7 @@ export const Customer360View: React.FC = () => {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2.5">
-                    <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">
-                      {language === 'ar' ? 'بيانات الاتصال والعنوان' : 'Contact Coordinates'}
-                    </h4>
+                    <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Contact Coordinates</h4>
                     <div className="text-xs text-zinc-300 space-y-1.5">
                       <p className="flex items-center gap-2"><Phone className="w-3.5 h-3.5 text-[#D4AF37]" /> {activeCustomer.phone}</p>
                       <p className="flex items-center gap-2"><Mail className="w-3.5 h-3.5 text-[#D4AF37]" /> {activeCustomer.email}</p>
@@ -523,52 +507,35 @@ export const Customer360View: React.FC = () => {
                   </div>
 
                   <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2.5">
-                    <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">
-                      {language === 'ar' ? 'وثائق الهوية والرخصة' : 'Identification & Licensing'}
-                    </h4>
+                    <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Identification & Licensing</h4>
                     <div className="text-xs text-zinc-300 space-y-1.5">
-                      <p><strong>{(activeCustomer.idType || 'ID').toUpperCase()}:</strong> {activeCustomer.idNumber || (language === 'ar' ? 'غير مسجل' : 'N/A')} ({language === 'ar' ? 'انتهاء' : 'Exp'}: {activeCustomer.idExpiryDate || 'N/A'})</p>
-                      <p><strong>{language === 'ar' ? 'رخصة القيادة:' : 'Driver License:'}</strong> {activeCustomer.licenseNumber || (language === 'ar' ? 'غير مسجل' : 'N/A')} ({activeCustomer.licenseCountry || 'UAE'}, {language === 'ar' ? 'انتهاء' : 'Exp'}: {activeCustomer.licenseExpiryDate || 'N/A'})</p>
-                      <p><strong>{language === 'ar' ? 'مصدر الاستقطاب:' : 'Acquisition Source:'}</strong> {(activeCustomer.source || 'Direct').toUpperCase()}</p>
+                      <p><strong>{(activeCustomer.idType || 'ID').toUpperCase()}:</strong> {activeCustomer.idNumber || 'N/A'} (Exp: {activeCustomer.idExpiryDate || 'N/A'})</p>
+                      <p><strong>Driver License:</strong> {activeCustomer.licenseNumber || 'N/A'} ({activeCustomer.licenseCountry || 'UAE'}, Exp: {activeCustomer.licenseExpiryDate || 'N/A'})</p>
+                      <p><strong>Acquisition Source:</strong> {(activeCustomer.source || 'Direct').toUpperCase()}</p>
                     </div>
                   </div>
                 </div>
 
                 {/* VIP Preferences & Tags */}
                 <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2">
-                  <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">
-                    {language === 'ar' ? 'ملاحظات وتفضيلات كبار العملاء' : 'VIP Concierge Notes & Tags'}
-                  </h4>
+                  <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">VIP Concierge Notes & Tags</h4>
                   <div className="flex flex-wrap gap-1.5">
                     {(activeCustomer.tags || []).map((tag, idx) => (
                       <Badge key={idx} variant="gold" size="sm">{tag}</Badge>
                     ))}
                   </div>
                   <p className="text-xs text-zinc-300 italic mt-2 leading-relaxed bg-zinc-900/50 p-3 rounded-xl border border-zinc-800">
-                    "{activeCustomer.notes || (language === 'ar' ? 'لا توجد ملاحظات مسجلة.' : 'No custom notes recorded.')}"
+                    "{activeCustomer.notes || 'No custom notes recorded.'}"
                   </p>
                 </div>
               </div>
-            )}
-
-            {/* TAB CONTENT: KYC & Identity Verification Engine */}
-            {activeTab === 'kyc' && (
-              <KycManagerCard
-                customer={activeCustomer}
-                currentUserId={currentUser?.id}
-                currentUserRole={currentUser?.role}
-                currentUserName={currentUser?.name}
-                showToast={showToast}
-              />
             )}
 
             {/* TAB CONTENT: Rentals History */}
             {activeTab === 'rentals' && (
               <div className="space-y-3">
                 {customerContracts.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-zinc-500">
-                    {language === 'ar' ? 'لا يوجد سجل إيجارات سابق لهذا العميل.' : 'No rental history for this client.'}
-                  </div>
+                  <div className="p-8 text-center text-xs text-zinc-500">No rental history for this client.</div>
                 ) : (
                   customerContracts.map(contract => (
                     <div
@@ -587,13 +554,13 @@ export const Customer360View: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-xs text-zinc-400 mt-1">
-                          {contract.contractNumber} • {contract.startDateTime ? formatDate(contract.startDateTime) : 'N/A'} {language === 'ar' ? 'إلى' : 'to'} {contract.endDateTime ? formatDate(contract.endDateTime) : 'N/A'}
+                          {contract.contractNumber} • {contract.startDateTime ? formatDate(contract.startDateTime) : 'N/A'} to {contract.endDateTime ? formatDate(contract.endDateTime) : 'N/A'}
                         </p>
                       </div>
                       <div className="text-end">
-                        <p className="text-sm font-bold text-zinc-100">{(contract.grandTotal || 0).toLocaleString()} {language === 'ar' ? 'د.إ' : 'AED'}</p>
+                        <p className="text-sm font-bold text-zinc-100">{(contract.grandTotal || 0).toLocaleString()} AED</p>
                         <Badge variant={contract.status === 'active' ? 'emerald' : 'zinc'} size="sm">
-                          {getStatusLabel(contract.status)}
+                          {(contract.status || '').toUpperCase()}
                         </Badge>
                       </div>
                     </div>
@@ -602,17 +569,57 @@ export const Customer360View: React.FC = () => {
               </div>
             )}
 
+            {/* TAB CONTENT: Lease-to-Own */}
+            {activeTab === 'lto' && (
+              <div className="space-y-3">
+                {customerLtoContracts.map(contract => {
+                  const lto = contract.lto!;
+                  return (
+                    <div
+                      key={contract.id}
+                      onClick={() => setActiveView('lease-to-own')}
+                      className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 hover:border-[#D4AF37]/40 transition-all cursor-pointer space-y-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-sm font-semibold text-zinc-200">{contract.vehicleName}</h4>
+                          <p className="text-xs text-zinc-400 mt-0.5">{contract.id}</p>
+                        </div>
+                        <Badge variant={lto.ltoStatus === 'active' ? 'emerald' : lto.ltoStatus === 'default' || lto.ltoStatus === 'terminated' ? 'rose' : 'gold'} size="sm">
+                          {lto.ltoStatus.replace(/_/g, ' ').toUpperCase()}
+                        </Badge>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'القسط الشهري' : 'Monthly Payment'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.monthlyInstallment.toLocaleString()} AED</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'المسدد' : 'Paid'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.paidAmount.toLocaleString()} AED</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'المتبقي' : 'Outstanding'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.outstandingAmount.toLocaleString()} AED</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{language === 'ar' ? 'المدة (أشهر)' : 'Term (months)'}</p>
+                          <p className="text-zinc-200 font-semibold">{lto.termMonths}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* TAB CONTENT: Financial Statement */}
             {activeTab === 'statement' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between p-4 rounded-2xl bg-zinc-950 border border-zinc-800">
                   <div>
-                    <h4 className="text-sm font-semibold text-zinc-200">
-                      {language === 'ar' ? 'كشف الحساب المالي للعميل' : 'Customer Account Statement'}
-                    </h4>
-                    <p className="text-xs text-zinc-400">
-                      {language === 'ar' ? 'سجل العمليات والفواتير والمدفوعات حتى اليوم' : 'Statement period: All historical transactions to date'}
-                    </p>
+                    <h4 className="text-sm font-semibold text-zinc-200">Customer Account Statement</h4>
+                    <p className="text-xs text-zinc-400">Statement period: All historical transactions to date</p>
                   </div>
                   <button
                     onClick={() => window.print()}
@@ -627,25 +634,25 @@ export const Customer360View: React.FC = () => {
                   <table className="w-full text-xs text-start">
                     <thead>
                       <tr className="border-b border-zinc-800 text-zinc-400">
-                        <th className="pb-3 text-start font-medium">{language === 'ar' ? 'النوع' : 'Type'}</th>
-                        <th className="pb-3 text-start font-medium">{language === 'ar' ? 'الرقم المرجعي' : 'Ref / Number'}</th>
-                        <th className="pb-3 text-start font-medium">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
-                        <th className="pb-3 text-end font-medium">{language === 'ar' ? 'المبلغ (د.إ)' : 'Invoiced (AED)'}</th>
-                        <th className="pb-3 text-end font-medium">{language === 'ar' ? 'المسدد (د.إ)' : 'Paid (AED)'}</th>
-                        <th className="pb-3 text-end font-medium">{language === 'ar' ? 'الحالة' : 'Status'}</th>
+                        <th className="pb-3 text-start font-medium">Type</th>
+                        <th className="pb-3 text-start font-medium">Ref / Number</th>
+                        <th className="pb-3 text-start font-medium">Date</th>
+                        <th className="pb-3 text-end font-medium">Invoiced (AED)</th>
+                        <th className="pb-3 text-end font-medium">Paid (AED)</th>
+                        <th className="pb-3 text-end font-medium">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60">
                       {customerInvoices.map(inv => (
                         <tr key={inv.id} className="text-zinc-300">
-                          <td className="py-3 font-semibold text-[#f5d97f]">{language === 'ar' ? 'فاتورة' : 'Invoice'}</td>
+                          <td className="py-3 font-semibold text-[#f5d97f]">Invoice</td>
                           <td className="py-3 font-mono">{inv.id}</td>
                           <td className="py-3">{inv.issueDate ? formatDate(inv.issueDate) : 'N/A'}</td>
                           <td className="py-3 text-end font-medium">{(inv.totalAmount || 0).toLocaleString()}</td>
                           <td className="py-3 text-end text-emerald-400 font-medium">{(inv.paidAmount || 0).toLocaleString()}</td>
                           <td className="py-3 text-end">
                             <Badge variant={inv.status === 'paid' ? 'emerald' : 'rose'} size="sm">
-                              {getStatusLabel(inv.status)}
+                              {(inv.status || '').toUpperCase()}
                             </Badge>
                           </td>
                         </tr>
@@ -780,179 +787,166 @@ export const Customer360View: React.FC = () => {
         maxWidth="2xl"
       >
         <form onSubmit={handleCreateCustomerSubmit} className="space-y-4 text-xs">
-            {/* Real-time duplicate alert */}
-            {duplicateWarning && (
-              <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-500/50 space-y-1.5 animate-fade-in">
-                <div className="flex items-center gap-2 text-amber-300 font-semibold">
-                  <AlertTriangle className="w-4 h-4" />
-                  <span>{language === 'ar' ? 'تم اكتشاف سجلات مكررة مطابقة' : 'Duplicate Records Detected'}</span>
+          {/* Real-time duplicate alert */}
+          {duplicateWarning && (
+            <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-500/50 space-y-1.5 animate-fade-in">
+              <div className="flex items-center gap-2 text-amber-300 font-semibold">
+                <AlertTriangle className="w-4 h-4" />
+                <span>Duplicate Records Detected</span>
+              </div>
+              <p className="text-zinc-300">
+                Found {duplicateWarning.length} existing customer(s) matching this phone or email:
+              </p>
+              {duplicateWarning.map(d => (
+                <div key={d.id} className="p-2 rounded-lg bg-zinc-900/80 flex items-center justify-between">
+                  <span>{d.fullName} ({d.id}) - {d.phone}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCustomerId(d.id);
+                      setAddModalOpen(false);
+                    }}
+                    className="text-[#f5d97f] font-semibold hover:underline"
+                  >
+                    View Record →
+                  </button>
                 </div>
-                <p className="text-zinc-300">
-                  {language === 'ar'
-                    ? `تم العثور على ${duplicateWarning.length} عميل مسجل بنفس رقم الهاتف أو البريد الإلكتروني:`
-                    : `Found ${duplicateWarning.length} existing customer(s) matching this phone or email:`}
-                </p>
-                {duplicateWarning.map(d => (
-                  <div key={d.id} className="p-2 rounded-lg bg-zinc-900/80 flex items-center justify-between">
-                    <span>{d.fullName} ({d.id}) - {d.phone}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedCustomerId(d.id);
-                        setAddModalOpen(false);
-                      }}
-                      className="text-[#f5d97f] font-semibold hover:underline"
-                    >
-                      {language === 'ar' ? 'عرض الملف ←' : 'View Record →'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-zinc-400 font-medium mb-1">
-                  {language === 'ar' ? 'الاسم القانوني الكامل *' : 'Full Legal Name *'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newCustForm.fullName}
-                  onChange={(e) => setNewCustForm({ ...newCustForm, fullName: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                  placeholder={language === 'ar' ? 'مثال: الشيخ طارق آل نهيان' : 'e.g. H.E. Sheikh Tariq Al Nahyan'}
-                />
-              </div>
-              <div>
-                <label className="block text-zinc-400 font-medium mb-1">
-                  {language === 'ar' ? 'اسم الشركة / الجهة (اختياري)' : 'Company / Entity (Optional)'}
-                </label>
-                <input
-                  type="text"
-                  value={newCustForm.companyName}
-                  onChange={(e) => setNewCustForm({ ...newCustForm, companyName: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                  placeholder={language === 'ar' ? 'مثال: مجموعة آل نهيان القابضة' : 'e.g. Al Nahyan Holding Group'}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-zinc-400 font-medium mb-1">
-                  {language === 'ar' ? 'البريد الإلكتروني *' : 'Email Address *'}
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={newCustForm.email}
-                  onChange={(e) => {
-                    setNewCustForm({ ...newCustForm, email: e.target.value });
-                    handlePhoneOrEmailChange(e.target.value, newCustForm.phone);
-                  }}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                  placeholder="client@vip.ae"
-                />
-              </div>
-              <div>
-                <InternationalPhoneInput
-                  value={newCustForm.phone}
-                  onChange={(val) => {
-                    setNewCustForm({ ...newCustForm, phone: val });
-                    handlePhoneOrEmailChange(newCustForm.email, val);
-                  }}
-                  label={language === 'ar' ? 'رقم الهاتف (مع الرمز الدولي) *' : 'Phone Number (with Country Code) *'}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-zinc-400 font-medium mb-1">
-                  {language === 'ar' ? 'تصنيف العميل' : 'Customer Category'}
-                </label>
-                <select
-                  value={newCustForm.type}
-                  onChange={(e) => setNewCustForm({ ...newCustForm, type: e.target.value as any })}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                >
-                  <option value="vip">{language === 'ar' ? 'شخصيات VIP' : 'VIP Tier 1'}</option>
-                  <option value="individual">{language === 'ar' ? 'فردي' : 'Individual'}</option>
-                  <option value="corporate">{language === 'ar' ? 'شركات' : 'Corporate'}</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-zinc-400 font-medium mb-1">
-                  {language === 'ar' ? 'الجنسية' : 'Nationality'}
-                </label>
-                <input
-                  type="text"
-                  value={newCustForm.nationality}
-                  onChange={(e) => setNewCustForm({ ...newCustForm, nationality: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                />
-              </div>
-              <div>
-                <label className="block text-zinc-400 font-medium mb-1">
-                  {language === 'ar' ? 'رقم الهوية / جواز السفر' : 'Emirates ID / Passport No.'}
-                </label>
-                <input
-                  type="text"
-                  value={newCustForm.idNumber}
-                  onChange={(e) => setNewCustForm({ ...newCustForm, idNumber: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                  placeholder="784-1985-XXXXXXX-1"
-                />
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setAddModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800"
-              >
-                {t('cancel')}
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md"
-              >
-                {language === 'ar' ? 'تسجيل العميل' : 'Register Customer'}
-              </button>
-            </div>
-          </form>
-        </Modal>
-
-        {/* Merge Modal */}
-        <Modal
-          isOpen={mergeModalOpen}
-          onClose={() => setMergeModalOpen(false)}
-          title={language === 'ar' ? 'دمج السجلات المكررة' : 'Consolidate Duplicate Customer Records'}
-          subtitle={language === 'ar' ? 'نقل كافة العقود والودائع والفواتير إلى هذا الحساب الرئيسي' : 'Safely re-link all contracts, deposits, and financial ledgers into this master profile'}
-          maxWidth="md"
-        >
-          <div className="space-y-4 text-xs">
-            <p className="text-zinc-300 leading-relaxed">
-              {language === 'ar'
-                ? `حدد الحساب المكرر الذي ترغب بدمجه وترحيل كافة سجلاته إلى الحساب المعتمد:`
-                : `Select the duplicate source customer account to merge into`} <strong>{activeCustomer?.fullName} ({activeCustomer?.id})</strong>:
-            </p>
-
-            <select
-              value={targetMergeId}
-              onChange={(e) => setTargetMergeId(e.target.value)}
-              className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-            >
-              <option value="">{language === 'ar' ? 'اختر العميل المراد دمجه...' : 'Select duplicate customer...'}</option>
-              {customers.filter(c => c.id !== activeCustomer?.id).map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.fullName} ({c.id}) - {c.phone}
-                </option>
               ))}
-            </select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Full Legal Name *</label>
+              <input
+                type="text"
+                required
+                value={newCustForm.fullName}
+                onChange={(e) => setNewCustForm({ ...newCustForm, fullName: e.target.value })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+                placeholder="e.g. H.E. Sheikh Tariq Al Nahyan"
+              />
+            </div>
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Company / Entity (Optional)</label>
+              <input
+                type="text"
+                value={newCustForm.companyName}
+                onChange={(e) => setNewCustForm({ ...newCustForm, companyName: e.target.value })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+                placeholder="e.g. Al Nahyan Holding Group"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Email Address *</label>
+              <input
+                type="email"
+                required
+                value={newCustForm.email}
+                onChange={(e) => {
+                  setNewCustForm({ ...newCustForm, email: e.target.value });
+                  handlePhoneOrEmailChange(e.target.value, newCustForm.phone);
+                }}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+                placeholder="client@vip.ae"
+              />
+            </div>
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Phone Number (with Country Code) *</label>
+              <input
+                type="text"
+                required
+                value={newCustForm.phone}
+                onChange={(e) => {
+                  setNewCustForm({ ...newCustForm, phone: e.target.value });
+                  handlePhoneOrEmailChange(newCustForm.email, e.target.value);
+                }}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+                placeholder="+971 50 123 4567"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Customer Category</label>
+              <select
+                value={newCustForm.type}
+                onChange={(e) => setNewCustForm({ ...newCustForm, type: e.target.value as any })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+              >
+                <option value="vip">VIP Tier 1</option>
+                <option value="individual">Individual</option>
+                <option value="corporate">Corporate</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Nationality</label>
+              <input
+                type="text"
+                value={newCustForm.nationality}
+                onChange={(e) => setNewCustForm({ ...newCustForm, nationality: e.target.value })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+              />
+            </div>
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Emirates ID / Passport No.</label>
+              <input
+                type="text"
+                value={newCustForm.idNumber}
+                onChange={(e) => setNewCustForm({ ...newCustForm, idNumber: e.target.value })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+                placeholder="784-1985-XXXXXXX-1"
+              />
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => setAddModalOpen(false)}
+              className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md"
+            >
+              Register Customer
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Merge Modal */}
+      <Modal
+        isOpen={mergeModalOpen}
+        onClose={() => setMergeModalOpen(false)}
+        title={language === 'ar' ? 'دمج السجلات المكررة' : 'Consolidate Duplicate Customer Records'}
+        subtitle={language === 'ar' ? 'نقل كافة العقود والودائع والفواتير إلى هذا الحساب الرئيسي' : 'Safely re-link all contracts, deposits, and financial ledgers into this master profile'}
+        maxWidth="md"
+      >
+        <div className="space-y-4 text-xs">
+          <p className="text-zinc-300 leading-relaxed">
+            Select the duplicate source customer account to merge into <strong>{activeCustomer?.fullName} ({activeCustomer?.id})</strong>:
+          </p>
+
+          <select
+            value={targetMergeId}
+            onChange={(e) => setTargetMergeId(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
+          >
+            <option value="">Select duplicate customer...</option>
+            {customers.filter(c => c.id !== activeCustomer?.id).map(c => (
+              <option key={c.id} value={c.id}>
+                {c.fullName} ({c.id}) - {c.phone}
+              </option>
+            ))}
+          </select>
 
           <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
             <button

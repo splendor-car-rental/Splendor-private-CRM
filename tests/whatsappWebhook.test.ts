@@ -39,7 +39,13 @@ vi.mock('firebase-admin', () => {
     return store.get(name)!;
   };
 
-  const makeDocRef = (collectionName: string, id: string) => ({
+  // A doc's own subcollections are just another top-level collection keyed
+  // by "<collection>/<docId>/<subName>" -- this mock doesn't model real
+  // Firestore path hierarchy, only enough of it (a working .collection()
+  // off a doc ref) for whatsappConversation.ts's messages subcollection to
+  // round-trip through set/get/orderBy/limit the same way the real
+  // Firestore emulator does.
+  const makeDocRef = (collectionName: string, id: string): any => ({
     id,
     __collection: collectionName,
     get: async () => {
@@ -62,7 +68,8 @@ vi.mock('firebase-admin', () => {
     },
     delete: async () => {
       collectionOf(collectionName).delete(id);
-    }
+    },
+    collection: (subName: string) => makeCollectionRef(`${collectionName}/${id}/${subName}`)
   });
 
   const makeCollectionRef = (name: string): any => ({
@@ -72,7 +79,9 @@ vi.mock('firebase-admin', () => {
       const docs = Array.from(col.entries()).map(([id, data]) => ({ id, data: () => data }));
       return { docs, size: docs.length };
     },
-    where: () => makeCollectionRef(name)
+    where: () => makeCollectionRef(name),
+    orderBy: () => makeCollectionRef(name),
+    limit: () => makeCollectionRef(name)
   });
 
   const firestoreObj: any = {
@@ -232,6 +241,27 @@ describe('POST /api/whatsapp/webhook -- duplicate-delivery idempotency', () => {
     const col = adminMock.store.get('whatsapp_inbound_events');
     const matching = Array.from(col?.keys() ?? []).filter(k => k === 'msg_wamid.RETRY1');
     expect(matching.length).toBe(1);
+  });
+});
+
+describe('POST /api/whatsapp/webhook -- conversation processing is itself idempotent per message id', () => {
+  it('marks the raw event processedAt, and a genuine Meta retry of the SAME message id does not reprocess it (no second bot reply)', async () => {
+    const res1 = await signedRequest(inboundMessagePayload('wamid.CONVO1', '971501113333', 'hello'));
+    expect(res1.status).toBe(200);
+
+    const eventDoc = adminMock.store.get('whatsapp_inbound_events')?.get('msg_wamid.CONVO1');
+    expect(eventDoc.processedAt).toBeTruthy();
+
+    const messagesKey = 'whatsapp_conversations/971501113333/messages';
+    const countAfterFirst = adminMock.store.get(messagesKey)?.size ?? 0;
+    expect(countAfterFirst).toBeGreaterThan(0); // the bot logged at least an inbound+outbound pair
+
+    // Meta retries the identical delivery (same message id) -- must be a
+    // true no-op for conversation processing, not just for the raw log.
+    const res2 = await signedRequest(inboundMessagePayload('wamid.CONVO1', '971501113333', 'hello'));
+    expect(res2.status).toBe(200);
+    const countAfterRetry = adminMock.store.get(messagesKey)?.size ?? 0;
+    expect(countAfterRetry).toBe(countAfterFirst);
   });
 });
 

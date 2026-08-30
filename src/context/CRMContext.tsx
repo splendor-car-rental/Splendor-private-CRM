@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { 
   Customer, Lead, Opportunity, Vehicle, Quotation, 
   Reservation, Contract, AdditionalCharge, Deposit, 
-  Payment, Invoice, BankImportBatch, BankTransaction, CompanyBankAccount,
+  Payment, Invoice, BankImportBatch, BankTransaction, ReceivedAmountClassification,
   CRMTask, Communication, CRMDocument, AuditLog,
   CustomFieldDefinition, NumberingConfig, NotificationItem,
   TollTransaction, TollImportBatch, TollPricingConfig,
@@ -27,7 +27,13 @@ import { useAuth } from './AuthContext';
 async function parseApiResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error((body && typeof body === 'object' && body.error) || fallbackMessage);
+    const error = new Error((body && typeof body === 'object' && body.error) || fallbackMessage);
+    // Carry any extra structured fields the server sent alongside `error`
+    // (e.g. the Publish Gate's `missingReasons`/`missingReasonsEn` arrays)
+    // onto the thrown Error so a specific caller can surface them, without
+    // every other caller needing to know or care that they exist.
+    if (body && typeof body === 'object') Object.assign(error, body);
+    throw error;
   }
   return body as T;
 }
@@ -66,7 +72,6 @@ interface CRMContextType {
   invoices: Invoice[];
   bankBatches: BankImportBatch[];
   bankTransactions: BankTransaction[];
-  companyBankAccounts: CompanyBankAccount[];
   tollTransactions: TollTransaction[];
   tollImportBatches: TollImportBatch[];
   tollPricingConfig: TollPricingConfig | null;
@@ -124,6 +129,8 @@ interface CRMContextType {
   assignPlate: (vehicleId: string, plateNumber: string, plateCity: string, reason: string) => Promise<Vehicle>;
   publishToWebsite: (vehicleId: string, publication: Partial<WebsiteVehiclePublication>) => Promise<Vehicle>;
   updateLifecycleStatus: (vehicleId: string, lifecycleStatus: VehicleLifecycleStatus, reason: string, saleRecord?: any) => Promise<Vehicle>;
+  startVehicleMaintenance: (vehicleId: string, reason: string) => Promise<Vehicle>;
+  logVehicleMaintenance: (vehicleId: string, mileageAtService: number, notes: string) => Promise<Vehicle>;
   getReconciliationReport: () => Promise<WebsiteReconciliationItem[]>;
   checkVehicleAvailability: (vehicleId: string, startDate: string, endDate: string, excludeResId?: string) => Promise<{ available: boolean; conflictingRecords: any[] }>;
   
@@ -141,12 +148,11 @@ interface CRMContextType {
   applyDeposit: (depositId: string, amount: number, reason: string, chargeId: string) => Promise<Deposit>;
   refundDeposit: (depositId: string, amount: number) => Promise<Deposit>;
   
-  uploadBankBatch: (batchData: any) => Promise<void>;
-  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string) => Promise<void>;
+  previewBankImport: (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => Promise<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>;
+  confirmBankImport: (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => Promise<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>;
+  reconcileBankTransaction: (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification, duplicateOverrideReason?: string) => Promise<void>;
+  reclassifyBankTransaction: (txnId: string, classification: ReceivedAmountClassification, reason: string) => Promise<void>;
   runAutoReconciliation: () => Promise<void>;
-  addCompanyBankAccount: (data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
-  updateCompanyBankAccount: (id: string, data: Partial<CompanyBankAccount>) => Promise<CompanyBankAccount>;
-  deleteCompanyBankAccount: (id: string) => Promise<void>;
 
   addManualToll: (data: any) => Promise<TollTransaction>;
   updateTollTransaction: (id: string, data: any) => Promise<TollTransaction>;
@@ -192,7 +198,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [bankBatches, setBankBatches] = useState<BankImportBatch[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
-  const [companyBankAccounts, setCompanyBankAccounts] = useState<CompanyBankAccount[]>([]);
   const [tollTransactions, setTollTransactions] = useState<TollTransaction[]>([]);
   const [tollImportBatches, setTollImportBatches] = useState<TollImportBatch[]>([]);
   const [tollPricingConfig, setTollPricingConfig] = useState<TollPricingConfig | null>(null);
@@ -273,7 +278,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const [
         custRes, leadRes, oppRes, vehRes, quoteRes,
         resRes, conRes, chgRes, depRes, payRes,
-        invRes, bBatchRes, bTxnRes, bAccRes, tskRes, commRes,
+        invRes, bBatchRes, bTxnRes, tskRes, commRes,
         docRes, auditRes, cfRes, numRes, notifRes,
         tollRes, tollBatchRes, tollPricingRes,
         notifCfgRes, remindersRes, waLogRes, waStatusRes, custNotifCfgRes
@@ -291,7 +296,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/invoices').then(r => r.json()).catch(() => []),
         fetch('/api/bank-batches').then(r => r.json()).catch(() => []),
         fetch('/api/bank-transactions').then(r => r.json()).catch(() => []),
-        fetch('/api/company-bank-accounts').then(r => r.json()).catch(() => []),
         fetch('/api/tasks').then(r => r.json()).catch(() => []),
         fetch('/api/communications').then(r => r.json()).catch(() => []),
         fetch('/api/documents').then(r => r.json()).catch(() => []),
@@ -322,7 +326,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setInvoices(Array.isArray(invRes) ? invRes : []);
       setBankBatches(Array.isArray(bBatchRes) ? bBatchRes : []);
       setBankTransactions(Array.isArray(bTxnRes) ? bTxnRes : []);
-      setCompanyBankAccounts(Array.isArray(bAccRes) ? bAccRes : []);
       setTasks(Array.isArray(tskRes) ? tskRes : []);
       setCommunications(Array.isArray(commRes) ? commRes : []);
       setDocuments(Array.isArray(docRes) ? docRes : []);
@@ -452,12 +455,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
 
         unsubs.push(
-          FirestoreService.subscribe<CompanyBankAccount>(COLLECTIONS.COMPANY_BANK_ACCOUNTS, (items) => {
-            setCompanyBankAccounts(items || []);
-          })
-        );
-
-        unsubs.push(
           FirestoreService.subscribe<CRMTask>(COLLECTIONS.TASKS, (items) => {
             setTasks(items || []);
           })
@@ -519,7 +516,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Fetch latest server baseline if needed
       const [
         cRes, lRes, oRes, vRes, qRes, rRes, conRes,
-        chgRes, depRes, payRes, invRes, bbRes, btRes, bAccRes,
+        chgRes, depRes, payRes, invRes, bbRes, btRes,
         tRes, commRes, dRes, aRes, cfRes, numRes, notRes,
         tollRes, tollBatchRes
       ] = await Promise.all([
@@ -536,7 +533,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/invoices').then(r => r.json()).catch(() => invoices),
         fetch('/api/bank-batches').then(r => r.json()).catch(() => bankBatches),
         fetch('/api/bank-transactions').then(r => r.json()).catch(() => bankTransactions),
-        fetch('/api/company-bank-accounts').then(r => r.json()).catch(() => companyBankAccounts),
         fetch('/api/tasks').then(r => r.json()).catch(() => tasks),
         fetch('/api/communications').then(r => r.json()).catch(() => communications),
         fetch('/api/documents').then(r => r.json()).catch(() => documents),
@@ -562,7 +558,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         invoices: invRes,
         bankBatches: bbRes,
         bankTransactions: btRes,
-        companyBankAccounts: bAccRes,
         tasks: tRes,
         communications: commRes,
         documents: dRes,
@@ -812,6 +807,45 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return updated;
   };
 
+  // RULE-M03 (Splendor Master Rule Set): starting maintenance takes a
+  // vehicle physically off the road; logging a completed service rolls the
+  // next-due mileage threshold forward again. See src/server/maintenance.ts.
+  const startVehicleMaintenance = async (vehicleId: string, reason: string) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/start-maintenance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    let updated: Vehicle;
+    try {
+      updated = await parseApiResponse<Vehicle>(res, 'Failed to start maintenance.');
+    } catch (err: any) {
+      showToast('Could Not Start Maintenance', err.message, 'error');
+      throw err;
+    }
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    showToast('Maintenance Started', `${updated.make} ${updated.model} is now marked in service.`);
+    return updated;
+  };
+
+  const logVehicleMaintenance = async (vehicleId: string, mileageAtService: number, notes: string) => {
+    const res = await fetch(`/api/fleet/${vehicleId}/log-maintenance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mileageAtService, notes })
+    });
+    let updated: Vehicle;
+    try {
+      updated = await parseApiResponse<Vehicle>(res, 'Failed to log the completed maintenance.');
+    } catch (err: any) {
+      showToast('Could Not Log Maintenance', err.message, 'error');
+      throw err;
+    }
+    setVehicles(prev => prev.map(v => v.id === vehicleId ? updated : v));
+    showToast('Maintenance Logged', `${updated.make} ${updated.model} is back in service. Next due at ${(updated.nextMaintenanceMileage || 0).toLocaleString()} km.`);
+    return updated;
+  };
+
   const getReconciliationReport = async (): Promise<WebsiteReconciliationItem[]> => {
     const res = await fetch('/api/fleet/reconciliation/report');
     const data = await parseApiResponse<{ report: WebsiteReconciliationItem[] }>(res, 'Failed to load reconciliation report.');
@@ -1015,28 +1049,51 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return data.deposit;
   };
 
-  const uploadBankBatch = async (batchData: any) => {
+  // Real CSV/Excel statement parsing (server.ts / bankStatementParsers.ts),
+  // routed through the exact same preview-then-confirm shape as the toll
+  // importer above: `confirm:false` only ever asks the server to parse and
+  // classify the file, never writes anything, so the caller can render the
+  // matched/needs-review/duplicate/etc breakdown before anyone commits to
+  // it. This is also where the mission's absolute rule actually lives on
+  // the frontend: nothing here (or in the routes it calls) ever turns a
+  // parsed row into a Payment or a reconciled BankTransaction by itself.
+  const runBankImport = async (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }, confirm: boolean) => {
     const res = await fetch('/api/bank-batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(batchData)
+      body: JSON.stringify({ ...file, confirm })
     });
-    let data: { batch: BankImportBatch & { totalTransactions: number; bankName: string } };
+    return parseApiResponse<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>(res, 'Bank statement import failed.');
+  };
+
+  const previewBankImport = async (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => {
     try {
-      data = await parseApiResponse(res, 'Failed to import bank statement.');
+      return await runBankImport(file, false);
+    } catch (err: any) {
+      showToast('Preview Failed', err.message, 'error');
+      throw err;
+    }
+  };
+
+  const confirmBankImport = async (file: { fileName: string; fileBase64: string; bankName?: string; accountNumber?: string }) => {
+    let data: { batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] };
+    try {
+      data = await runBankImport(file, true);
     } catch (err: any) {
       showToast('Import Failed', err.message, 'error');
       throw err;
     }
     await fetchData();
-    showToast('Statement Imported', `Imported ${data.batch.totalTransactions} transactions from ${data.batch.bankName}.`);
+    showToast('Statement Imported', `Imported ${data.transactions.length} transaction(s) from ${data.batch.bankName}.`);
+    return data;
   };
 
-  const reconcileBankTransaction = async (txnId: string, targetRecordType: string, targetRecordId: string) => {
+  const reconcileBankTransaction = async (txnId: string, targetRecordType: string, targetRecordId: string, classification: ReceivedAmountClassification, duplicateOverrideReason?: string) => {
+    const idempotencyKey = crypto.randomUUID();
     const res = await fetch(`/api/bank-transactions/${txnId}/reconcile`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetRecordType, targetRecordId })
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ targetRecordType, targetRecordId, classification, duplicateOverrideReason })
     });
     let data: { transaction: BankTransaction };
     try {
@@ -1049,89 +1106,52 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Transaction Reconciled', `Reconciled ${data.transaction.reference} successfully.`);
   };
 
+  const reclassifyBankTransaction = async (txnId: string, classification: ReceivedAmountClassification, reason: string) => {
+    const idempotencyKey = crypto.randomUUID();
+    const res = await fetch(`/api/bank-transactions/${txnId}/reclassify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ classification, reason })
+    });
+    let data: { transaction: BankTransaction };
+    try {
+      data = await parseApiResponse<{ transaction: BankTransaction }>(res, 'Failed to reclassify transaction.');
+    } catch (err: any) {
+      showToast('Reclassification Failed', err.message, 'error');
+      throw err;
+    }
+    await fetchData();
+    showToast('Transaction Reclassified', `${data.transaction.reference} reclassified to ${classification.replace(/_/g, ' ')}.`);
+  };
+
   /**
-   * Bulk version of reconcileBankTransaction: auto-confirms every
-   * unreconciled transaction that already has a high-confidence AI
-   * suggested match (>= 90), instead of requiring one click per row.
-   * Was previously called by BankReconciliationView's "Run Auto
-   * Reconciliation" button but never actually defined -- clicking it threw
-   * "runAutoReconciliation is not a function".
+   * ABSOLUTE RULE (Bank Reconciliation mission brief): a payment/receipt
+   * may NEVER be created or confirmed automatically from bank-statement
+   * analysis alone -- every non-"matched" outcome goes to human review and
+   * approval, and even a "matched" row is only ever confirmed by an
+   * explicit, individual reconcileBankTransaction() call a person makes
+   * (see handleConfirmMatch in BankReconciliationView.tsx).
+   *
+   * This function previously violated that rule outright: it looped over
+   * every high-confidence suggested match and called
+   * reconcileBankTransaction() on each one with zero human review,
+   * silently posting invoice/customer-balance updates a person never saw.
+   * It's kept (same name, same call sites) purely as a non-mutating
+   * "surface what's ready for review" summary -- it never reconciles
+   * anything itself.
    */
   const runAutoReconciliation = async () => {
     const candidates = bankTransactions.filter(
-      t => !t.reconciled && t.suggestedMatch && t.suggestedMatch.confidence >= 90 && t.suggestedMatch.invoiceId
+      t => !t.reconciled && t.matchClassification === 'matched' && t.suggestedMatch
     );
-    let count = 0;
-    for (const txn of candidates) {
-      try {
-        await reconcileBankTransaction(txn.id, 'invoice', txn.suggestedMatch!.invoiceId!);
-        count += 1;
-      } catch (e) {
-        console.warn(`Auto-reconciliation skipped ${txn.id}:`, e);
-      }
-    }
-    if (count > 0) {
-      showToast('Auto-Reconciliation Complete', `Automatically reconciled ${count} high-confidence transaction(s).`);
+    if (candidates.length > 0) {
+      showToast(
+        'Review Needed',
+        `${candidates.length} transaction(s) have a high-confidence suggested match ready for your review. Confirm each one individually -- no payment is ever auto-confirmed from a bank statement alone.`
+      );
     } else {
-      showToast('Auto-Reconciliation Complete', 'No high-confidence unmatched transactions were found.');
+      showToast('No Action Needed', 'No unreconciled transactions currently have a high-confidence suggested match.');
     }
-  };
-
-  const addCompanyBankAccount = async (data: Partial<CompanyBankAccount>): Promise<CompanyBankAccount> => {
-    const res = await fetch('/api/company-bank-accounts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Failed to add company bank account');
-
-    try {
-      await FirestoreService.set(COLLECTIONS.COMPANY_BANK_ACCOUNTS, result.account.id, result.account);
-    } catch (e) {
-      console.warn('Firestore bank account write warning:', e);
-    }
-
-    await fetchData();
-    showToast('Bank Account Added', `Registered ${result.account.bankName} - ${result.account.accountNumber} successfully.`);
-    return result.account;
-  };
-
-  const updateCompanyBankAccount = async (id: string, data: Partial<CompanyBankAccount>): Promise<CompanyBankAccount> => {
-    const res = await fetch(`/api/company-bank-accounts/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Failed to update company bank account');
-
-    try {
-      await FirestoreService.set(COLLECTIONS.COMPANY_BANK_ACCOUNTS, id, result.account);
-    } catch (e) {
-      console.warn('Firestore bank account update warning:', e);
-    }
-
-    await fetchData();
-    showToast('Bank Account Updated', `Updated ${result.account.bankName} details.`);
-    return result.account;
-  };
-
-  const deleteCompanyBankAccount = async (id: string): Promise<void> => {
-    const res = await fetch(`/api/company-bank-accounts/${id}`, {
-      method: 'DELETE'
-    });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Failed to delete company bank account');
-
-    try {
-      await FirestoreService.remove(COLLECTIONS.COMPANY_BANK_ACCOUNTS, id);
-    } catch (e) {
-      console.warn('Firestore bank account delete warning:', e);
-    }
-
-    await fetchData();
-    showToast('Bank Account Deleted', 'The company bank account has been removed.');
   };
 
   /**
@@ -1480,7 +1500,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <CRMContext.Provider value={{
       customers, leads, opportunities, vehicles, quotations,
       reservations, contracts, charges, deposits, payments,
-      invoices, bankBatches, bankTransactions, companyBankAccounts, tollTransactions,
+      invoices, bankBatches, bankTransactions, tollTransactions,
       tollImportBatches, tollPricingConfig,
       notificationEventConfigs, customerNotificationConfigs, customReminders,
       whatsappMessageLog, whatsappStatus, tasks, communications,
@@ -1495,13 +1515,12 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchData, showToast, toasts, dismissToast,
       addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer,
       addLead, updateLead, convertLeadToCustomer,
-      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability,
+      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, getReconciliationReport, checkVehicleAvailability,
       createQuotation, convertQuotationToReservation,
       createReservation, createContractFromReservation, createContract,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
-      uploadBankBatch, reconcileBankTransaction, runAutoReconciliation,
-      addCompanyBankAccount, updateCompanyBankAccount, deleteCompanyBankAccount,
+      previewBankImport, confirmBankImport, reconcileBankTransaction, reclassifyBankTransaction, runAutoReconciliation,
       addManualToll, updateTollTransaction, deleteTollTransaction,
       previewTollImport, confirmTollImport, updateTollPricingConfig,
       updateNotificationConfig, updateCustomerNotificationConfig,

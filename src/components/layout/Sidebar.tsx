@@ -2,8 +2,8 @@ import React, { useState, useRef } from 'react';
 import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
-  Sparkles, ShieldCheck, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing, Truck
+  Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
+  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -21,7 +21,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose }) => {
-  const { language, setLanguage, t, getRoleLabel } = useLanguage();
+  const { language, setLanguage, t } = useLanguage();
   const { currentUser, logout, updateMyProfile } = useAuth();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -63,13 +63,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
   const unreconciledCount = bankTransactions.filter(t => !t.reconciled).length;
   const unmatchedTollsCount = tollTransactions.filter(t => !t.contractId && !t.customerId).length;
   const activeRentalsCount = contracts.filter(c => c.status === 'active').length;
+  const activeLtoCount = contracts.filter(c => c.contractType === 'lease_to_own' && c.lto?.ltoStatus === 'active').length;
   const pendingTasksCount = tasks.filter(t => t.status === 'pending').length;
   const newLeadsCount = leads.filter(l => l.status === 'new' || l.status === 'contacted').length;
   const availableFleetCount = vehicles.filter(v => v.status === 'available').length;
 
   const sections = [
     {
-      title: t('sectionOperations'),
+      title: language === 'ar' ? 'العمليات التنفيذية' : 'OPERATIONS',
       items: [
         {
           id: 'dashboard',
@@ -92,13 +93,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'fleet',
           label: t('fleet'),
           icon: <Car className="w-4 h-4" />,
-          badge: language === 'ar' ? `${availableFleetCount} متاح` : `${availableFleetCount} Avail`,
+          badge: `${availableFleetCount} Avail`,
           badgeVariant: 'emerald' as const
         }
       ]
     },
     {
-      title: t('sectionRentals'),
+      title: language === 'ar' ? 'الحجوزات والعقود' : 'RENTALS & DISPATCH',
       items: [
         {
           id: 'quotations',
@@ -114,13 +115,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'contracts',
           label: t('contracts'),
           icon: <FileSignature className="w-4 h-4" />,
-          badge: activeRentalsCount > 0 ? (language === 'ar' ? `${activeRentalsCount} نشط` : `${activeRentalsCount} Active`) : undefined,
+          badge: activeRentalsCount > 0 ? `${activeRentalsCount} Active` : undefined,
           badgeVariant: 'gold' as const
+        },
+        {
+          id: 'lease-to-own',
+          label: language === 'ar' ? 'الإيجار المنتهي بالتملك' : 'Lease-to-Own',
+          icon: <KeySquare className="w-4 h-4" />,
+          badge: activeLtoCount > 0 ? `${activeLtoCount} Active` : undefined,
+          badgeVariant: 'gold' as const
+        },
+        {
+          id: 'inspections',
+          label: language === 'ar' ? 'فحص المركبة والأدلة المصورة' : 'Vehicle Inspections',
+          icon: <ClipboardCheck className="w-4 h-4" />
+        },
+        {
+          id: 'whatsapp-inbox',
+          label: language === 'ar' ? 'صندوق واتساب الموحد' : 'WhatsApp Inbox',
+          icon: <MessageCircle className="w-4 h-4" />
         }
       ]
     },
     {
-      title: t('sectionFinance'),
+      title: language === 'ar' ? 'الإدارة المالية' : 'FINANCIAL CONTROL',
       items: [
         {
           id: 'finance',
@@ -131,14 +149,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'reconciliation',
           label: t('reconciliation'),
           icon: <Landmark className="w-4 h-4" />,
-          badge: unreconciledCount > 0 ? (language === 'ar' ? `${unreconciledCount} للمراجعة` : `${unreconciledCount} Review`) : undefined,
+          badge: unreconciledCount > 0 ? `${unreconciledCount} Review` : undefined,
           badgeVariant: 'rose' as const
         },
         {
           id: 'tolls',
           label: t('tolls'),
           icon: <TicketCheck className="w-4 h-4" />,
-          badge: unmatchedTollsCount > 0 ? (language === 'ar' ? `${unmatchedTollsCount} غير مطابق` : `${unmatchedTollsCount} Unmatched`) : undefined,
+          badge: unmatchedTollsCount > 0 ? `${unmatchedTollsCount} Unmatched` : undefined,
           badgeVariant: 'rose' as const
         },
         {
@@ -152,29 +170,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'procurement',
           label: language === 'ar' ? 'المشتريات والموردون' : 'Procurement & Suppliers',
           icon: <Truck className="w-4 h-4" />
+        },
+        {
+          id: 'security',
+          label: language === 'ar' ? 'الأمن والقائمة المحظورة' : 'Security & Blocklist',
+          icon: <ShieldAlert className="w-4 h-4" />
         }
       ]
     },
     {
-      title: t('sectionIntelligence'),
+      title: language === 'ar' ? 'الذكاء والتحكم' : 'INTELLIGENCE & SYSTEM',
       items: [
         {
           id: 'notification-center',
-          label: t('notificationCenter'),
+          label: language === 'ar' ? 'مركز الإشعارات وواتساب' : 'Notification & WhatsApp Center',
           icon: <BellRing className="w-4 h-4 text-[#D4AF37]" />
         },
         {
           id: 'ai-studio',
-          label: t('aiStudio'),
+          label: language === 'ar' ? 'استوديو الذكاء الاصطناعي' : 'AI Intelligence',
           icon: <Sparkles className="w-4 h-4 text-[#D4AF37]" />,
           badge: 'Gemini 3.7',
           badgeVariant: 'gold' as const
         },
         {
           id: 'test-suite',
-          label: t('testSuite'),
+          label: language === 'ar' ? 'مختبر الفحص الآلي' : 'Test Suite Runner',
           icon: <ShieldCheck className="w-4 h-4 text-emerald-400" />,
-          badge: language === 'ar' ? '18/18 نجاح' : '18/18 Passed',
+          badge: '12/12 Passed',
           badgeVariant: 'emerald' as const
         },
         {
@@ -297,8 +320,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
               <p className="text-xs font-semibold text-zinc-200 truncate">
                 {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : (currentUser.name || currentUser.email || 'User')}
               </p>
-              <p className="text-[10px] text-zinc-500 font-medium tracking-wider truncate">
-                {getRoleLabel(currentUser.role)} • {(currentUser.branch || '').split(' ')[0] || ''}
+              <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider truncate">
+                {(currentUser.role || '').toUpperCase()} • {(currentUser.branch || '').split(' ')[0] || ''}
               </p>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import type { RecordAuditFn } from './businessRules';
@@ -198,15 +198,33 @@ export interface MarkSupplierPaymentPaidInput {
   actor: ProcurementApprovalActor;
 }
 
-/** Records that an already-approved payment was actually executed (funds sent). This is fact-recording, not a new financial decision -- the authorization already happened at approval. */
+/**
+ * Records that an already-approved payment was actually executed (funds
+ * sent). This is fact-recording, not a new financial decision -- the
+ * authorization already happened at approval.
+ *
+ * The status guard used to be a plain read-then-write: two concurrent
+ * "mark paid" calls could both read status 'approved' and both write
+ * 'paid', producing a duplicate audit-log entry (and any future
+ * downstream side effect, e.g. a paid-notification) for a single real
+ * payment. Guarding the read+write inside one transaction makes the
+ * second concurrent call see the already-'paid' status and reject.
+ */
 export async function markSupplierPaymentPaid(input: MarkSupplierPaymentPaidInput, recordAudit: RecordAuditFn): Promise<SupplierPaymentRequest> {
-  const paymentRequest = await loadSupplierPaymentRequest(input.paymentRequestId);
-  if (paymentRequest.status !== 'approved') {
-    throw new SupplierPaymentError(`Payment request ${input.paymentRequestId} must be approved before it can be marked paid (current status: ${paymentRequest.status}).`);
-  }
-
   const now = new Date().toISOString();
-  await updateDurable('supplier_payment_requests', paymentRequest.id, { status: 'paid', paidAt: now } as unknown as Record<string, unknown>);
+  const admin = (await import('firebase-admin')).default;
+  const ref = admin.firestore().collection('supplier_payment_requests').doc(input.paymentRequestId);
+
+  const paymentRequest = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new SupplierPaymentError(`Payment request ${input.paymentRequestId} not found.`);
+    const current = snap.data() as SupplierPaymentRequest;
+    if (current.status !== 'approved') {
+      throw new SupplierPaymentError(`Payment request ${input.paymentRequestId} must be approved before it can be marked paid (current status: ${current.status}).`);
+    }
+    tx.set(ref, { status: 'paid', paidAt: now }, { merge: true });
+    return { ...current, status: 'paid' as const, paidAt: now };
+  });
 
   await recordAudit({
     userId: input.actor.uid,
@@ -218,7 +236,7 @@ export async function markSupplierPaymentPaid(input: MarkSupplierPaymentPaidInpu
     newValue: `Payment ${paymentRequest.id} marked as paid (${paymentRequest.amount.toLocaleString()} AED to ${paymentRequest.supplierName}).`
   });
 
-  return { ...paymentRequest, status: 'paid', paidAt: now };
+  return paymentRequest;
 }
 
 // ----------------------------------------------------
@@ -337,13 +355,24 @@ export interface MarkAdvanceSettlementCompletedInput {
   actor: ProcurementApprovalActor;
 }
 
+// Same duplicate-completion race as markSupplierPaymentPaid above --
+// guarded with a transaction so a second concurrent "mark completed" call
+// sees the already-'completed' status and rejects instead of writing a
+// duplicate audit entry for the same real refund.
 export async function markAdvanceSettlementCompleted(input: MarkAdvanceSettlementCompletedInput, recordAudit: RecordAuditFn): Promise<AdvanceSettlement> {
-  const settlement = await loadAdvanceSettlement(input.settlementId);
-  if (settlement.refundStatus !== 'in_progress') {
-    throw new SupplierPaymentError(`Advance settlement ${input.settlementId} must be approved (in_progress) before it can be marked completed (current status: ${settlement.refundStatus}).`);
-  }
+  const admin = (await import('firebase-admin')).default;
+  const ref = admin.firestore().collection('advance_settlements').doc(input.settlementId);
 
-  await updateDurable('advance_settlements', settlement.id, { refundStatus: 'completed' } as unknown as Record<string, unknown>);
+  const settlement = await runDurableTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new SupplierPaymentError(`Advance settlement ${input.settlementId} not found.`);
+    const current = snap.data() as AdvanceSettlement;
+    if (current.refundStatus !== 'in_progress') {
+      throw new SupplierPaymentError(`Advance settlement ${input.settlementId} must be approved (in_progress) before it can be marked completed (current status: ${current.refundStatus}).`);
+    }
+    tx.set(ref, { refundStatus: 'completed' }, { merge: true });
+    return { ...current, refundStatus: 'completed' as const };
+  });
 
   await recordAudit({
     userId: input.actor.uid,
@@ -355,5 +384,5 @@ export async function markAdvanceSettlementCompleted(input: MarkAdvanceSettlemen
     newValue: `Advance settlement ${settlement.id} completed: net refund ${settlement.netRefund.toLocaleString()} AED received.`
   });
 
-  return { ...settlement, refundStatus: 'completed' };
+  return settlement;
 }
