@@ -1,0 +1,16 @@
+name: Splendor Production CodeQL
+
+# The production security gate scans executable application code only.
+# Tests, QA harnesses, documentation, and scratch tooling are validated by
+# CI but are not part of the deployed runtime attack surface.
+paths:
+  - src
+  - api
+  - server.ts
+
+paths-ignore:
+  - src/**/*.test.ts
+  - src/**/*.test.tsx
+  - tests/**
+  - scripts/**
+  - docs/**
