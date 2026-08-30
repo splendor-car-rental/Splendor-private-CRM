@@ -48,3 +48,5 @@ src/types/                Shared TypeScript types
 tests/                    Vitest suite
 firestore.rules           Firestore security rules (client-SDK read paths only)
 ```
+
+Production verification checkpoint.
