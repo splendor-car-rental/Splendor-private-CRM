@@ -1,21 +1,14 @@
 name: CI
 
-# Production validation gate (Phase 16 of the production remediation pass).
-# Every push and PR must pass ALL of these before it's considered
-# mergeable/deployable -- typecheck, the full test suite (unit +
-# integration + Firestore rules + security/authorization/idempotency
-# regression tests, all running against a REAL Firestore emulator, not
-# mocks), and the actual production build. A red step here is a real
-# failure, not a flaky/cosmetic one to click past: nothing in this repo's
-# test suite is skipped, quarantined, or soft-failed.
+# Production validation gate. Every push and PR must pass typecheck,
+# the full test suite (including Firestore emulator/rules/security tests),
+# and the production build before it is considered mergeable.
 on:
   push:
     branches: ['**']
   pull_request:
     branches: ['**']
 
-# A new push to the same branch/PR cancels the previous run -- no point
-# finishing a validation of a commit that's already been superseded.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -28,32 +21,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Node version is pinned in .nvmrc / package.json "engines" (Phase 17)
-      # so CI, local dev, and Vercel's build all resolve the exact same
-      # major version rather than drifting independently.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
 
-      # bun.lock is this repo's actual lockfile (see package.json -- Vercel
-      # auto-detects Bun as the package manager from its presence).
-      # --frozen-lockfile fails the build outright if package.json and
-      # bun.lock have drifted out of sync, instead of silently re-resolving
-      # a different dependency tree than what's committed.
+      # The committed lockfile is lockfile v2. Pin the compatible Bun major
+      # instead of tracking latest, which can change the lockfile format.
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: '1.4.0'
 
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      # Firestore emulator (java -jar) is what `npm test` shells out to via
-      # firebase-tools. ubuntu-latest's default JRE (17) is too old --
-      # firebase-tools requires JDK 21+ and fails outright with "firebase-
-      # tools no longer supports Java version before 21" otherwise, which
-      # is exactly what the first version of this workflow hit.
       - name: Set up JDK 21 for the Firestore emulator
         uses: actions/setup-java@v4
         with:
@@ -72,9 +54,6 @@ jobs:
       - name: Production build
         run: npm run build
 
-      # Fails the job if the build produced something other than what the
-      # runtime actually loads -- a cheap, fast sanity check that catches a
-      # build silently producing an empty/broken bundle.
       - name: Verify build output exists
         run: |
           test -s dist/server.cjs
