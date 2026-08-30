@@ -1,37 +1,71 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
 import app from '../server.js';
+import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
+
+async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!token || admin.apps.length === 0) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return null;
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
+    const data = profile.exists ? (profile.data() as any) : null;
+    if (!data || !allowedRoles.includes(data.role)) {
+      res.status(403).json({ error: 'You do not have permission to perform this action.' });
+      return null;
+    }
+    return { uid: decoded.uid, name: data.name || decoded.name || decoded.uid, role: data.role };
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired session.' });
+    return null;
+  }
+}
 
 /**
- * Vercel serverless function entry point.
+ * Vercel serverless boundary.
  *
- * The Express application remains the single business/API implementation,
- * but this boundary adds defense-in-depth for the internal test runner.
- * server.ts historically exempted /api/tests/run-all from its global auth
- * middleware because the old UI called it with plain fetch(). The UI is now
- * authenticated, and this Vercel boundary independently rejects direct
- * unauthenticated access to that diagnostic workload even if the inner
- * Express exemption is accidentally reintroduced later.
+ * The Express app remains the single business/API implementation. This
+ * boundary adds two defense-in-depth controls for historically exempt or
+ * multi-write-sensitive routes:
+ *  1. the internal test runner is CEO/Admin only;
+ *  2. production plate assignment uses the atomic Firestore transaction
+ *     implementation and the verified token identity, not client-supplied
+ *     actor fields.
  */
 async function handler(req: Request, res: Response) {
   if (req.path === '/api/tests/run-all') {
-    const authorization = req.headers.authorization || '';
-    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin']);
+    if (!actor) return;
+    return app(req, res);
+  }
 
-    if (!token || admin.apps.length === 0) {
-      return res.status(401).json({ error: 'Authentication required.' });
+  const plateMatch = req.path.match(/^\/api\/fleet\/([^/]+)\/assign-plate$/);
+  if (plateMatch && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'fleet']);
+    if (!actor) return;
+
+    const body = req.body || {};
+    if (!body.plateNumber || !body.plateCity) {
+      return res.status(400).json({ error: 'Plate number and city are required.' });
     }
 
-    try {
-      const decoded = await admin.auth().verifyIdToken(token);
-      const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
-      const role = profile.exists ? (profile.data() as any)?.role : null;
-      if (role !== 'ceo' && role !== 'admin') {
-        return res.status(403).json({ error: 'Only CEO or Admin may run the internal diagnostic suite.' });
-      }
-    } catch {
-      return res.status(401).json({ error: 'Invalid or expired session.' });
-    }
+    const result = await assignPlateAtomically({
+      vehicleId: decodeURIComponent(plateMatch[1]),
+      newPlateNumber: String(body.plateNumber).trim(),
+      newPlateCity: String(body.plateCity).trim(),
+      reason: String(body.reason || 'Plate updated by fleet operations').trim(),
+      assignedBy: actor.uid,
+      assignedByName: actor.name,
+      effectiveDate: body.effectiveDate
+    });
+
+    if (!result.success) return res.status(400).json({ error: result.error });
+    return res.json({ success: true, vehicle: result.vehicle });
   }
 
   return app(req, res);
