@@ -10,6 +10,9 @@ vi.mock('firebase-admin', () => {
         get: async () => {
           const data = store.get(`${name}/${id}`);
           return { exists: data !== undefined, data: () => data };
+        },
+        set: async (data: any) => {
+          store.set(`${name}/${id}`, data);
         }
       })
     }),
