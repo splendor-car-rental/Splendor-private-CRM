@@ -1,0 +1,1 @@
+Root-cause fix tracked in PR: isolate WhatsApp webhook runtime and resolve the TypeScript module import extension for Vercel bundling.
