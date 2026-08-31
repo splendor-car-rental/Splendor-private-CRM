@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import admin from 'firebase-admin';
-import { processInboundWhatsAppMessage } from '../src/server/whatsappConversation.js';
+import { processInboundWhatsAppMessage } from '../src/server/whatsappConversation.ts';
 
 function initFirebase() {
   if (admin.apps.length > 0) return true;
