@@ -16,7 +16,7 @@ import {
 const CORPORATE_DOCUMENT_KINDS: CorporateDocumentKind[] = [
   'lpo', 'credit_note', 'fines_notice', 'debit_note', 'contract_extension',
   'payment_receipt', 'tax_invoice', 'simplified_tax_invoice', 'official_letter',
-  'vehicle_record_card', 'vehicle_exit_permit'
+  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation'
 ];
 
 const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
@@ -30,7 +30,9 @@ const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
   simplified_tax_invoice: ['ceo', 'admin', 'finance'],
   official_letter: ['ceo', 'admin', 'operations', 'sales', 'finance', 'fleet'],
   vehicle_record_card: ['ceo', 'admin', 'operations', 'fleet'],
-  vehicle_exit_permit: ['ceo', 'admin', 'operations', 'fleet']
+  vehicle_exit_permit: ['ceo', 'admin', 'operations', 'fleet'],
+  account_statement: ['ceo', 'admin', 'finance', 'operations', 'sales'],
+  quotation: ['ceo', 'admin', 'sales', 'operations']
 };
 
 async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
