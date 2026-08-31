@@ -97,6 +97,72 @@
   box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
 }
 
+/* Premium interaction language: sapphire is consistently reserved for
+   active/hover/focus instrumentation across the CRM while black remains
+   the dominant surface and gold/red remain part of the fixed brand system. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 1px solid var(--splendor-sapphire-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
+}
+
+/* Sidebar: active navigation gets a sapphire signal without turning the
+   navigation into a blue panel. The existing gold logo/brand treatment is
+   intentionally preserved. */
+aside button[class*="bg-[#D4AF37]/10"] {
+  background: var(--splendor-sapphire-soft) !important;
+  color: #7dd3fc !important;
+  border-color: var(--splendor-sapphire-border) !important;
+  box-shadow: 0 0 18px -10px var(--splendor-sapphire-glow) !important;
+}
+
+aside button[class*="bg-[#D4AF37]/10"] span[class*="text-[#D4AF37]"] {
+  color: var(--splendor-sapphire) !important;
+}
+
+aside button:not([class*="bg-[#D4AF37]/10"]):hover {
+  color: #e0f2fe;
+  background: rgba(var(--splendor-sapphire-rgb), 0.055);
+  border-color: rgba(var(--splendor-sapphire-rgb), 0.12);
+}
+
+aside button:not([class*="bg-[#D4AF37]/10"]):hover span {
+  color: #7dd3fc;
+}
+
+/* Shared premium surfaces: preserve the black/luxury base while giving
+   interaction states a coherent sapphire signature throughout views. */
+.luxury-card-hover:hover {
+  border-color: var(--splendor-sapphire-border);
+  box-shadow: 0 14px 35px -10px rgba(0, 0, 0, 0.65), 0 0 18px -6px var(--splendor-sapphire-glow);
+}
+
+.table-row-hover:hover {
+  background-color: rgba(var(--splendor-sapphire-rgb), 0.045);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--splendor-sapphire-rgb), 0.55);
+}
+
+/* Reusable sapphire primitives for views that already use the shared
+   interaction classes. */
+.splendor-sapphire-active {
+  color: #7dd3fc;
+  background: var(--splendor-sapphire-soft);
+  border-color: var(--splendor-sapphire-border);
+  box-shadow: 0 0 18px -10px var(--splendor-sapphire-glow);
+}
+
+.splendor-sapphire-hover:hover {
+  color: #e0f2fe;
+  border-color: var(--splendor-sapphire-border);
+  background: rgba(var(--splendor-sapphire-rgb), 0.055);
+}
+
 /* Custom sleek scrollbar for luxury CRM */
 ::-webkit-scrollbar {
   width: 5px;
