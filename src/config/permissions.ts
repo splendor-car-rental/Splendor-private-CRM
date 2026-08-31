@@ -56,15 +56,22 @@ export type ViewKey =
   | 'test-suite'
   | 'settings'
   | 'procurement'
+  | 'purchase-orders'
   | 'security'
   | 'inspections'
   | 'whatsapp-inbox'
-  | 'lease-to-own';
+  | 'lease-to-own'
+  | 'vip-tiers'
+  | 'fleet-acquisition-roi'
+  | 'live-radar'
+  | 'operations-control-room'
+  | 'corporate-branches';
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
   'contracts', 'finance', 'reconciliation', 'tolls', 'notification-center', 'tasks', 'ai-studio', 'test-suite', 'settings',
-  'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own'
+  'procurement', 'purchase-orders', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own',
+  'vip-tiers', 'fleet-acquisition-roi', 'live-radar', 'operations-control-room', 'corporate-branches'
 ];
 
 /**
@@ -86,17 +93,23 @@ const ALL_VIEWS: ViewKey[] = [
 export const ROLE_VIEWS: Record<UserRole, ViewKey[]> = {
   ceo: ALL_VIEWS,
   admin: ALL_VIEWS,
-  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own'],
-  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox', 'lease-to-own'],
-  fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'inspections'],
-  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement', 'lease-to-own']
+  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'purchase-orders', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own', 'vip-tiers', 'live-radar', 'operations-control-room'],
+  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox', 'lease-to-own', 'vip-tiers', 'corporate-branches'],
+  fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'purchase-orders', 'inspections', 'live-radar', 'fleet-acquisition-roi', 'operations-control-room'],
+  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement', 'purchase-orders', 'lease-to-own', 'fleet-acquisition-roi', 'vip-tiers', 'corporate-branches']
 };
 
 /** Historical/alternate ids for the same screen, used in a few nav call sites. */
 const VIEW_ALIASES: Record<string, ViewKey> = {
   'bank-reconciliation': 'reconciliation',
   'ai-intelligence': 'ai-studio',
-  'tests': 'test-suite'
+  'tests': 'test-suite',
+  'telematics-radar': 'live-radar',
+  'roi-simulator': 'fleet-acquisition-roi',
+  'control-room': 'operations-control-room',
+  'corporate-portal': 'corporate-branches',
+  'lpo': 'purchase-orders',
+  'supply-orders': 'purchase-orders'
 };
 
 export function normalizeViewKey(view: string): ViewKey {

@@ -3,7 +3,8 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare
+  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare, Crown, Calculator, Radio,
+  Activity, Building2, ClipboardList
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -78,9 +79,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <LayoutDashboard className="w-4 h-4" />
         },
         {
+          id: 'operations-control-room',
+          label: language === 'ar' ? 'غرفة العمليات المباشرة' : 'Operations Control Room',
+          icon: <Activity className="w-4 h-4 text-blue-400" />,
+          badge: 'Live Ops',
+          badgeVariant: 'sky' as const
+        },
+        {
+          id: 'live-radar',
+          label: language === 'ar' ? 'رادار الأسطول المباشر' : 'Live Fleet Radar',
+          icon: <Radio className="w-4 h-4 text-emerald-400" />,
+          badge: 'GPS Live',
+          badgeVariant: 'emerald' as const
+        },
+        {
           id: 'customers',
           label: t('customers'),
           icon: <Users className="w-4 h-4" />
+        },
+        {
+          id: 'vip-tiers',
+          label: language === 'ar' ? 'تصنيف عملاء الـ VIP' : 'VIP Loyalty Tiers',
+          icon: <Crown className="w-4 h-4 text-[#f5d97f]" />
         },
         {
           id: 'leads',
@@ -146,6 +166,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <Receipt className="w-4 h-4" />
         },
         {
+          id: 'corporate-branches',
+          label: language === 'ar' ? 'الشركات والائتمان والفروع' : 'Corporate & Branches',
+          icon: <Building2 className="w-4 h-4 text-blue-400" />,
+          badge: 'B2B',
+          badgeVariant: 'sky' as const
+        },
+        {
           id: 'reconciliation',
           label: t('reconciliation'),
           icon: <Landmark className="w-4 h-4" />,
@@ -170,6 +197,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'procurement',
           label: language === 'ar' ? 'المشتريات والموردون' : 'Procurement & Suppliers',
           icon: <Truck className="w-4 h-4" />
+        },
+        {
+          id: 'purchase-orders',
+          label: language === 'ar' ? 'أوامر التوريد للشركات (LPO)' : 'Purchase Orders (LPO)',
+          icon: <ClipboardList className="w-4 h-4 text-[#f5d97f]" />,
+          badge: 'B2B LPO',
+          badgeVariant: 'gold' as const
+        },
+        {
+          id: 'fleet-acquisition-roi',
+          label: language === 'ar' ? 'محاكي الاستثمار والعائد (ROI)' : 'Fleet ROI Simulator',
+          icon: <Calculator className="w-4 h-4 text-emerald-400" />
         },
         {
           id: 'security',

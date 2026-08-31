@@ -89,6 +89,9 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   // Vehicle Master Profile & Verified Vehicle Catalog
   vehiclecatalogupdaterequest: { prefix: 'VCU-', digits: 6 },
 
+  // Corporate & B2B Accounts (Splendor OS Master Blueprint)
+  corporateaccount: { prefix: 'CORP-', digits: 6 },
+
   // Payment Gateway (Production-Grade Payment & Settlement Layer)
   paymentintent: { prefix: 'PI-', digits: 6 },
   paymentrefund: { prefix: 'PREF-', digits: 6 }

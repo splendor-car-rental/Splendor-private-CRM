@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import { 
   Receipt, Plus, Search, DollarSign, Landmark, 
   CheckCircle2, ArrowDownLeft, ArrowUpRight, ShieldCheck, 
-  FileText, Clock, RefreshCw, AlertCircle
+  FileText, Clock, RefreshCw, AlertCircle, Printer, Eye
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
+import { TaxInvoicePrintModal } from '../operations/TaxInvoicePrintModal';
+import { Invoice } from '../../types';
 
 export const FinanceLedgerView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -19,6 +21,9 @@ export const FinanceLedgerView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'invoices' | 'deposits' | 'payments'>('invoices');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Invoice Print Modal
+  const [invoiceToPrint, setInvoiceToPrint] = useState<Invoice | null>(null);
 
   // Payment Modal
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -183,6 +188,7 @@ export const FinanceLedgerView: React.FC = () => {
                   <th className="p-4 text-end font-medium">Total Amount</th>
                   <th className="p-4 text-end font-medium">Balance Due</th>
                   <th className="p-4 text-center font-medium">Status</th>
+                  <th className="p-4 text-end font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
@@ -199,6 +205,16 @@ export const FinanceLedgerView: React.FC = () => {
                       <Badge variant={inv.status === 'paid' ? 'emerald' : inv.status === 'partially_paid' ? 'amber' : 'rose'} size="sm">
                         {(inv.status || 'DUE').toUpperCase()}
                       </Badge>
+                    </td>
+                    <td className="p-4 text-end">
+                      <button
+                        onClick={() => setInvoiceToPrint(inv)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-[#D4AF37] hover:text-zinc-950 text-zinc-300 text-xs font-semibold transition-all shadow-sm"
+                        title={language === 'ar' ? 'طباعة وحفظ الفاتورة على الهيد ليتر الرسمي' : 'Print/PDF Invoice on Official Letterhead'}
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span>{language === 'ar' ? 'الهيد ليتر الرسمي' : 'Letterhead PDF'}</span>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -469,6 +485,15 @@ export const FinanceLedgerView: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Official Tax Invoice Print/PDF Modal on Letterhead */}
+      {invoiceToPrint && (
+        <TaxInvoicePrintModal
+          isOpen={!!invoiceToPrint}
+          onClose={() => setInvoiceToPrint(null)}
+          invoice={invoiceToPrint}
+        />
+      )}
     </div>
   );
 };

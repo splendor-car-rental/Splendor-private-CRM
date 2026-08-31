@@ -120,14 +120,34 @@
 }
 
 @media print {
-  body {
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+  html, body {
     background: #ffffff !important;
     color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 210mm !important;
+    height: 297mm !important;
   }
   .no-print {
     display: none !important;
   }
   .print-only {
     display: block !important;
+  }
+  .a4-document {
+    width: 210mm !important;
+    height: 297mm !important;
+    min-height: 297mm !important;
+    max-height: 297mm !important;
+    overflow: hidden !important;
+    page-break-after: avoid !important;
+    page-break-inside: avoid !important;
+    margin: 0 auto !important;
+    box-shadow: none !important;
+    border: none !important;
   }
 }

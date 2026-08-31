@@ -1,5 +1,5 @@
 import {
-  Customer, Lead, Opportunity, Vehicle, Quotation, Reservation,
+  Customer, CorporateAccount, Lead, Opportunity, Vehicle, Quotation, Reservation,
   Contract, AdditionalCharge, Deposit, Payment, Invoice,
   BankImportBatch, BankTransaction, CRMTask, Communication,
   CRMDocument, DocumentTemplate, AuditLog, CustomFieldDefinition,
@@ -83,6 +83,7 @@ export class DataStore {
   ];
 
   public customers: Customer[] = [];
+  public corporateAccounts: CorporateAccount[] = [];
   public leads: Lead[] = [];
   public opportunities: Opportunity[] = [];
   public vehicles: Vehicle[] = [];

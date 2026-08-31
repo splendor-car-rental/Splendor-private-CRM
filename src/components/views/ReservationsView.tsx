@@ -156,7 +156,7 @@ export const ReservationsView: React.FC = () => {
                   </td>
                   <td className="p-4">
                     <p className="font-semibold text-zinc-100">{res.customerName}</p>
-                    <p className="text-[11px] text-zinc-400">{res.customerPhone}</p>
+                    <p className="text-[11px] text-zinc-400 font-mono" dir="ltr">{res.customerPhone}</p>
                   </td>
                   <td className="p-4">
                     <div className="flex items-center gap-2">

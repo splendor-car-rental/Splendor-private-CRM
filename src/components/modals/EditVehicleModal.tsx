@@ -7,6 +7,9 @@ import {
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Vehicle, VehicleCategory, VehicleStatus } from '../../types';
+import {
+  EXTERIOR_COLOR_PRESETS, INTERIOR_COLOR_PRESETS, COUNTRY_OF_ORIGIN_PRESETS
+} from '../../config/vehicleCustomizationPresets';
 import { Modal } from '../common/Modal';
 import { uploadFile } from '../../lib/upload';
 
@@ -349,17 +352,7 @@ export const EditVehicleModal: React.FC<EditVehicleModalProps> = ({ vehicle, isO
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-zinc-300 text-xs font-semibold mb-1">{isAr ? 'اللون الخارجي *' : 'Color *'}</label>
-                <input
-                  type="text"
-                  required
-                  value={form.exteriorColor || ''}
-                  onChange={e => setForm({ ...form, exteriorColor: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none"
-                />
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-zinc-300 text-xs font-semibold mb-1">{isAr ? 'عدد الركاب *' : 'Seating Capacity *'}</label>
                 <input
@@ -373,30 +366,143 @@ export const EditVehicleModal: React.FC<EditVehicleModalProps> = ({ vehicle, isO
                 />
               </div>
               <div>
-                <label className="block text-zinc-300 text-xs font-semibold mb-1">{isAr ? 'بلد الصنع *' : 'Manufacturing Country *'}</label>
-                <select
-                  value={form.manufacturingCountry || 'ألمانيا (Germany)'}
-                  onChange={e => setForm({ ...form, manufacturingCountry: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none"
-                >
-                  {MANUFACTURING_COUNTRIES.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
+                <label className="block text-zinc-300 text-xs font-semibold mb-1">{isAr ? 'بلد الصنع والمنشأ *' : 'Manufacturing Country *'}</label>
+                <div className="space-y-1.5">
+                  <select
+                    value={form.manufacturingCountry || form.countryOfOrigin || 'ألمانيا (Germany)'}
+                    onChange={e => setForm({ ...form, manufacturingCountry: e.target.value, countryOfOrigin: e.target.value })}
+                    className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none cursor-pointer"
+                  >
+                    {COUNTRY_OF_ORIGIN_PRESETS.map(c => (
+                      <option key={c.id} value={`${c.flag} ${isAr ? c.nameAr : c.nameEn}`}>
+                        {c.flag} {isAr ? c.nameAr : c.nameEn} ({c.majorMakes})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div>
                 <label className="block text-zinc-300 text-xs font-semibold mb-1">{isAr ? 'فئة الأسطول' : 'Category'}</label>
                 <select
-                  value={form.category || 'supercar'}
+                  value={form.category || 'economy_sedan'}
                   onChange={e => setForm({ ...form, category: e.target.value as any })}
-                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none"
+                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none cursor-pointer"
                 >
-                  <option value="supercar">Supercar (سوبركار)</option>
-                  <option value="ultra_luxury_sedan">Ultra-Luxury Sedan (سيدان فارهة)</option>
-                  <option value="executive_suv">Executive SUV (دفع رباعي VIP)</option>
-                  <option value="exotic_convertible">Exotic Convertible (كشف فاخر)</option>
-                  <option value="grand_tourer">Grand Tourer (جراند تورير)</option>
+                  <optgroup label={isAr ? 'الفئات الاقتصادية والعائلية' : 'Economic & Family'}>
+                    <option value="economy_sedan">{isAr ? 'سيدان اقتصادية (إلنترا، أكسنت، صني، ياريس، بيجاس)' : 'Economy Sedan (Elantra, Accent, Sunny, Pegas)'}</option>
+                    <option value="economy_hatchback">{isAr ? 'هاتشباك اقتصادية ومدمجة (بيكانتو، i10، سويفت)' : 'Economy Hatchback (Picanto, i10, Swift)'}</option>
+                    <option value="compact_suv">{isAr ? 'كروس أوفر وSUV مدمجة (كريتا، سيلتوس، كول راي، داشينج)' : 'Compact SUV & Crossover (Creta, Seltos, Dashing)'}</option>
+                    <option value="midsize_suv">{isAr ? 'SUV متوسطة وعائلية (جيتور T2، توسان، سبورتاج، X70)' : 'Midsize SUV (Jetour T2, Tucson, Sportage)'}</option>
+                    <option value="business_sedan">{isAr ? 'سيدان أعمال ومتوسطة (سوناتا، K5، كامري، ألتيما)' : 'Business Sedan (Sonata, K5, Camry, Altima)'}</option>
+                    <option value="family_van">{isAr ? 'فان وعائلية سياحية (ستاريا، كارنيفال)' : 'Family Van (Staria, Carnival)'}</option>
+                  </optgroup>
+                  <optgroup label={isAr ? 'فئات الفخامة والسوبركارز' : 'Luxury & Supercar'}>
+                    <option value="supercar">Supercar (سوبركار)</option>
+                    <option value="ultra_luxury_sedan">Ultra-Luxury Sedan (سيدان فارهة VIP)</option>
+                    <option value="executive_suv">Executive SUV (دفع رباعي فاخر VIP)</option>
+                    <option value="exotic_convertible">Exotic Convertible (كشف فاخر)</option>
+                    <option value="grand_tourer">Grand Tourer (جراند تورير)</option>
+                  </optgroup>
                 </select>
+              </div>
+            </div>
+
+            {/* Colors Section with Ready Presets */}
+            <div className="p-3.5 rounded-2xl bg-zinc-950/60 border border-zinc-800 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Exterior Color */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-zinc-300 text-xs font-semibold">{isAr ? 'اللون الخارجي *' : 'Exterior Color *'}</label>
+                    <span className="text-[10px] text-blue-400">{isAr ? 'خيارات جاهزة' : 'Presets'}</span>
+                  </div>
+                  <div className="space-y-2">
+                    <select
+                      value={EXTERIOR_COLOR_PRESETS.some(c => (isAr ? c.nameAr : c.nameEn) === form.exteriorColor) ? form.exteriorColor : ''}
+                      onChange={e => {
+                        if (e.target.value) setForm({ ...form, exteriorColor: e.target.value });
+                      }}
+                      className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white text-xs"
+                    >
+                      <option value="">{isAr ? '— اختر لوناً خارجياً —' : '— Select Exterior Color —'}</option>
+                      {EXTERIOR_COLOR_PRESETS.map(c => (
+                        <option key={c.id} value={isAr ? c.nameAr : c.nameEn}>
+                          {isAr ? c.nameAr : c.nameEn}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      required
+                      value={form.exteriorColor || ''}
+                      onChange={e => setForm({ ...form, exteriorColor: e.target.value })}
+                      className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none"
+                    />
+                    <div className="flex flex-wrap gap-1 pt-0.5">
+                      {EXTERIOR_COLOR_PRESETS.slice(0, 8).map(c => {
+                        const label = isAr ? c.nameAr : c.nameEn;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setForm({ ...form, exteriorColor: label })}
+                            className="px-2 py-0.5 rounded-md text-[10px] bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 flex items-center gap-1"
+                          >
+                            <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: c.hex }} />
+                            <span className="truncate max-w-[90px]">{label.split('/')[0]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Interior Color */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-zinc-300 text-xs font-semibold">{isAr ? 'اللون الداخلي والمقصورة' : 'Interior Color & Trim'}</label>
+                    <span className="text-[10px] text-amber-400">{isAr ? 'خيارات الجلود' : 'Leather Presets'}</span>
+                  </div>
+                  <div className="space-y-2">
+                    <select
+                      value={INTERIOR_COLOR_PRESETS.some(c => (isAr ? c.nameAr : c.nameEn) === form.interiorColor) ? form.interiorColor : ''}
+                      onChange={e => {
+                        if (e.target.value) setForm({ ...form, interiorColor: e.target.value });
+                      }}
+                      className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white text-xs"
+                    >
+                      <option value="">{isAr ? '— اختر لوناً داخلياً —' : '— Select Interior Color —'}</option>
+                      {INTERIOR_COLOR_PRESETS.map(c => (
+                        <option key={c.id} value={isAr ? c.nameAr : c.nameEn}>
+                          {isAr ? c.nameAr : c.nameEn}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={form.interiorColor || ''}
+                      onChange={e => setForm({ ...form, interiorColor: e.target.value })}
+                      placeholder={isAr ? 'جلد بيج / أسود نابا / جملي كونياك' : 'Royal Beige / Black Nappa / Cognac'}
+                      className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:border-[#D4AF37] focus:outline-none"
+                    />
+                    <div className="flex flex-wrap gap-1 pt-0.5">
+                      {INTERIOR_COLOR_PRESETS.slice(0, 6).map(c => {
+                        const label = isAr ? c.nameAr : c.nameEn;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setForm({ ...form, interiorColor: label })}
+                            className="px-2 py-0.5 rounded-md text-[10px] bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 flex items-center gap-1"
+                          >
+                            <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: c.hex }} />
+                            <span className="truncate max-w-[90px]">{label.split('/')[0]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -9,6 +9,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge, type BadgeVariant } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate } from '../../lib/dateFormat';
 import type { Contract, LtoApplication, LtoApplicationStatus, LtoInstallment, LtoSettlementRequest } from '../../types';
 
 /**
@@ -37,7 +38,7 @@ function money(n: number | undefined | null) {
 }
 function fmtDate(iso: string | undefined) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleDateString();
+  return formatDate(iso);
 }
 
 export const LeaseToOwnView: React.FC = () => {

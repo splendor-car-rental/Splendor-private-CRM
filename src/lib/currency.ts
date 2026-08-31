@@ -34,6 +34,10 @@ export function convertCurrencyToAED(amountInForeign: number, currencyCode: stri
   return Number((amountInForeign * curr.rateToAED).toFixed(2));
 }
 
+export function formatAED(amount: number, isAr: boolean = false): string {
+  return `${(amount || 0).toLocaleString()} ${isAr ? 'د.إ' : 'AED'}`;
+}
+
 export function formatPriceWithCurrency(
   amountInAED: number,
   currencyCode: string = 'AED',

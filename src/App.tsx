@@ -31,6 +31,12 @@ import { SecurityBlocklistView } from './components/views/SecurityBlocklistView'
 import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
 import { WhatsAppInboxView } from './components/views/WhatsAppInboxView';
 import { LeaseToOwnView } from './components/views/LeaseToOwnView';
+import { VipTierManagementView } from './components/views/VipTierManagementView';
+import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiView';
+import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
+import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
+import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
+import { PurchaseOrdersManagementView } from './components/views/PurchaseOrdersManagementView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -87,12 +93,30 @@ const MainLayout: React.FC = () => {
         return <TasksFollowupsView />;
       case 'procurement':
         return <ProcurementView />;
+      case 'purchase-orders':
+      case 'lpo':
+      case 'supply-orders':
+        return <PurchaseOrdersManagementView />;
       case 'security':
         return <SecurityBlocklistView />;
       case 'inspections':
         return <VehicleInspectionsView />;
       case 'lease-to-own':
         return <LeaseToOwnView />;
+      case 'vip-tiers':
+        return <VipTierManagementView />;
+      case 'fleet-acquisition-roi':
+      case 'roi-simulator':
+        return <FleetAcquisitionRoiView />;
+      case 'live-radar':
+      case 'telematics-radar':
+        return <LiveFleetTelematicsMapView />;
+      case 'operations-control-room':
+      case 'control-room':
+        return <OperationsControlRoomView />;
+      case 'corporate-branches':
+      case 'corporate-portal':
+        return <CorporateBranchPortalView />;
       case 'whatsapp-inbox':
         return <WhatsAppInboxView />;
       case 'ai-studio':

@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
+import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { vatPortion, applyVat } from './src/config/tax';
@@ -2605,6 +2605,507 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   }
 
   res.json({ success: true, contract: updatedContract });
+}));
+
+// ----------------------------------------------------
+// CONTRACT EXTENSION ADDENDUM & FORMAL RENEWAL ENGINE
+// ----------------------------------------------------
+app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const contractId = req.params.id;
+  const { 
+    newEndDateTime, 
+    dailyRate: customDailyRate,
+    currentOdometerKm,
+    paymentMethod = 'credit_card',
+    paymentMethodLabel,
+    issueDate,
+    notes,
+    actorId,
+    actorName
+  } = req.body;
+
+  if (!newEndDateTime) {
+    return res.status(400).json({ error: 'newEndDateTime is required for extending the contract.' });
+  }
+
+  const now = new Date().toISOString();
+  const contractRef = admin.firestore().collection('contracts').doc(contractId);
+
+  let updatedContract: any;
+  let newAddendum: any;
+  let calculatedExtraDays = 0;
+  let calculatedExtraAmount = 0;
+
+  try {
+    const outcome = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(contractRef);
+      if (!snap.exists) throw new PersistenceError('Contract not found');
+      const contract = snap.data() as any;
+
+      if (contract.status === 'completed' || contract.status === 'cancelled') {
+        throw new PersistenceError(`Cannot extend a contract with status '${contract.status}'.`);
+      }
+
+      const prevEnd = new Date(contract.endDateTime).getTime();
+      const nextEnd = new Date(newEndDateTime).getTime();
+
+      if (isNaN(nextEnd) || nextEnd <= prevEnd) {
+        throw new PersistenceError('New end date/time must be strictly after the current contract end date/time.');
+      }
+
+      const diffMs = nextEnd - prevEnd;
+      const extraDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+      const rate = customDailyRate !== undefined && customDailyRate > 0 ? Number(customDailyRate) : (contract.dailyRate || 0);
+      const periodRentalAmount = rate * extraDays;
+      const vatRatePercent = 5;
+      const vatAmount = Math.round((periodRentalAmount * 0.05) * 100) / 100;
+      const totalExtensionAmount = periodRentalAmount + vatAmount;
+
+      calculatedExtraDays = extraDays;
+      calculatedExtraAmount = totalExtensionAmount;
+
+      const addendumId = await issueNextNumber('Addendum');
+      const addendumSeq = ((contract.extensions?.length || 0) + 1).toString().padStart(4, '0');
+      const addendumNumber = `EXT-${new Date().getFullYear()}-${addendumSeq}`;
+
+      const addendumRecord = {
+        id: addendumId,
+        addendumNumber,
+        contractId: contract.id,
+        contractNumber: contract.contractNumber || contract.id,
+        issueDate: issueDate || new Date().toISOString().split('T')[0],
+        customerName: contract.customerName,
+        customerPhone: contract.customerPhone,
+        plateNumber: contract.vehiclePlate,
+        vehicleName: contract.vehicleName,
+        currentEndDateTime: contract.endDateTime,
+        newEndDateTime,
+        extensionDurationDays: extraDays,
+        currentOdometerKm: Number(currentOdometerKm) || (contract.handover?.startMileage || 0),
+        dailyRate: rate,
+        periodRentalAmount,
+        vatRatePercent,
+        vatAmount,
+        totalExtensionAmount,
+        paymentMethod,
+        paymentMethodLabel: paymentMethodLabel || paymentMethod,
+        bankDetails: {
+          bankName: 'بنك الإمارات دبي الوطني (Emirates NBD)',
+          accountNumber: '1015963340001',
+          iban: 'AE220260001015963340001'
+        },
+        notes: notes || `Contract extension for ${extraDays} day(s).`,
+        createdBy: actorId || 'USR-001',
+        createdByName: actorName || 'Operations Specialist',
+        createdAt: now,
+        updatedAt: now
+      };
+
+      const updatedExtensions = [...(contract.extensions || []), addendumRecord];
+      const updatedTotal = (contract.grandTotal || 0) + totalExtensionAmount;
+      const updatedRentalTotal = (contract.rentalTotal || 0) + periodRentalAmount;
+      const updatedVatAmount = (contract.vatAmount || 0) + vatAmount;
+
+      const updated = {
+        ...contract,
+        endDateTime: newEndDateTime,
+        dailyRate: rate,
+        rentalTotal: updatedRentalTotal,
+        vatAmount: updatedVatAmount,
+        grandTotal: updatedTotal,
+        extensions: updatedExtensions,
+        updatedAt: now
+      };
+
+      tx.set(contractRef, updated, { merge: true });
+
+      if (contract.vehicleId) {
+        const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+        const vSnap = await tx.get(vehicleRef);
+        if (vSnap.exists) {
+          tx.set(vehicleRef, { updatedAt: now }, { merge: true });
+        }
+      }
+
+      return { updated, addendumRecord };
+    });
+
+    updatedContract = outcome.updated;
+    newAddendum = outcome.addendumRecord;
+  } catch (err) {
+    if (err instanceof PersistenceError) {
+      return res.status(400).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const cIndex = globalStore.contracts.findIndex(c => c.id === contractId);
+  if (cIndex !== -1) globalStore.contracts[cIndex] = updatedContract;
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || actorId || 'USR-001',
+    userName: actor?.name || actorName || 'Operations Specialist',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Contract',
+    entityId: updatedContract.id,
+    action: 'update',
+    previousValue: `Contract ${updatedContract.contractNumber} end date: ${newAddendum.currentEndDateTime}`,
+    newValue: `Extended by ${calculatedExtraDays} days until ${newEndDateTime}. Added Addendum #${newAddendum.addendumNumber} (+${calculatedExtraAmount.toLocaleString()} AED).`,
+    reason: notes || 'Formal Contract Extension Addendum Issued'
+  });
+
+  try {
+    await dispatchNotificationEvent('contract_extended',
+      `Contract ${updatedContract.contractNumber} extended by ${calculatedExtraDays} day(s) until ${new Date(newEndDateTime).toLocaleDateString()} (+${calculatedExtraAmount.toLocaleString()} AED).`,
+      `تم تمديد العقد رقم ${updatedContract.contractNumber} لمدة ${calculatedExtraDays} يوم حتى تاريخ ${new Date(newEndDateTime).toLocaleDateString()} (إجمالي الإضافة ${calculatedExtraAmount.toLocaleString()} درهم).`
+    );
+  } catch (err) {
+    console.error('WhatsApp dispatch failed (contract_extended):', err);
+  }
+
+  res.json({
+    success: true,
+    contract: updatedContract,
+    addendum: newAddendum,
+    extraDays: calculatedExtraDays,
+    extraAmount: calculatedExtraAmount
+  });
+}));
+
+// ----------------------------------------------------
+// MANAGEMENT GRANULAR DELETION ENGINE (CEO & Admin Role Protected)
+// ----------------------------------------------------
+// Selective deletion for specific contracts, vehicles, customers, leads,
+// quotations, and reservations -- replacing global wipes with precise
+// management control and immutable audit trails.
+
+app.delete('/api/contracts/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const contractId = req.params.id;
+  const index = globalStore.contracts.findIndex(c => c.id === contractId);
+  if (index === -1) return res.status(404).json({ error: 'Contract not found' });
+  const contract = globalStore.contracts[index];
+
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  // If vehicle is actively marked rented to this contract, safely release it
+  const vehicle = globalStore.vehicles.find(v => v.id === contract.vehicleId);
+  if (vehicle && vehicle.currentContractId === contract.id) {
+    vehicle.status = 'available';
+    vehicle.currentCustomerId = undefined;
+    vehicle.currentContractId = undefined;
+    await updateDurable('vehicles', vehicle.id, {
+      status: 'available',
+      currentCustomerId: null,
+      currentContractId: null,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  await deleteDurable('contracts', contractId);
+  globalStore.contracts.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'Contract',
+    entityId: contractId,
+    action: 'delete',
+    previousValue: JSON.stringify({ customerName: contract.customerName, vehicleId: contract.vehicleId, grandTotal: contract.grandTotal }),
+    newValue: 'Contract permanently deleted from system records.',
+    reason
+  });
+
+  res.json({ success: true, message: `Contract ${contractId} successfully deleted.` });
+}));
+
+app.delete('/api/fleet/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const vehicleId = req.params.id;
+  const index = globalStore.vehicles.findIndex(v => v.id === vehicleId);
+  if (index === -1) return res.status(404).json({ error: 'Vehicle not found' });
+  const vehicle = globalStore.vehicles[index];
+
+  // Check if vehicle has active contracts
+  const activeContracts = globalStore.contracts.filter(c => c.vehicleId === vehicleId && c.status === 'active');
+  if (activeContracts.length > 0) {
+    return res.status(409).json({ error: `Cannot delete vehicle with active contract (${activeContracts[0].id}). Please complete or cancel the contract first.` });
+  }
+
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  await deleteDurable('vehicles', vehicleId);
+  globalStore.vehicles.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'Vehicle',
+    entityId: vehicleId,
+    action: 'delete',
+    previousValue: JSON.stringify({ make: vehicle.make, model: vehicle.model, plate: vehicle.plateNumber }),
+    newValue: 'Vehicle permanently removed from fleet inventory.',
+    reason
+  });
+
+  res.json({ success: true, message: `Vehicle ${vehicleId} successfully deleted.` });
+}));
+
+app.delete('/api/customers/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const customerId = req.params.id;
+  const index = globalStore.customers.findIndex(c => c.id === customerId);
+  if (index === -1) return res.status(404).json({ error: 'Customer not found' });
+  const customer = globalStore.customers[index];
+
+  const activeContracts = globalStore.contracts.filter(c => c.customerId === customerId && c.status === 'active');
+  if (activeContracts.length > 0) {
+    return res.status(409).json({ error: `Cannot delete customer with active contract (${activeContracts[0].id}).` });
+  }
+
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  await deleteDurable('customers', customerId);
+  globalStore.customers.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'Customer',
+    entityId: customerId,
+    action: 'delete',
+    previousValue: JSON.stringify({ fullName: customer.fullName, phone: customer.phone, email: customer.email }),
+    newValue: 'Customer permanently deleted from records.',
+    reason
+  });
+
+  res.json({ success: true, message: `Customer ${customerId} successfully deleted.` });
+}));
+
+app.delete('/api/leads/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const leadId = req.params.id;
+  const index = globalStore.leads.findIndex(l => l.id === leadId);
+  if (index === -1) return res.status(404).json({ error: 'Lead not found' });
+  const lead = globalStore.leads[index];
+
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  await deleteDurable('leads', leadId);
+  globalStore.leads.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'Lead',
+    entityId: leadId,
+    action: 'delete',
+    previousValue: JSON.stringify({ fullName: lead.fullName, status: lead.status }),
+    newValue: 'Lead permanently deleted.',
+    reason
+  });
+
+  res.json({ success: true, message: `Lead ${leadId} successfully deleted.` });
+}));
+
+app.delete('/api/quotations/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const quoteId = req.params.id;
+  const index = globalStore.quotations.findIndex(q => q.id === quoteId);
+  if (index === -1) return res.status(404).json({ error: 'Quotation not found' });
+  const quote = globalStore.quotations[index];
+
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  await deleteDurable('quotations', quoteId);
+  globalStore.quotations.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'Quotation',
+    entityId: quoteId,
+    action: 'delete',
+    previousValue: JSON.stringify({ customerName: quote.customerName, vehicleName: quote.vehicleName, grandTotal: quote.grandTotal }),
+    newValue: 'Quotation permanently deleted.',
+    reason
+  });
+
+  res.json({ success: true, message: `Quotation ${quoteId} successfully deleted.` });
+}));
+
+app.delete('/api/reservations/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const resId = req.params.id;
+  const index = globalStore.reservations.findIndex(r => r.id === resId);
+  if (index === -1) return res.status(404).json({ error: 'Reservation not found' });
+  const reservation = globalStore.reservations[index];
+
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  // Release vehicle reserved state if no other active reservation
+  const vehicle = globalStore.vehicles.find(v => v.id === reservation.vehicleId);
+  if (vehicle && vehicle.status === 'reserved') {
+    const otherRes = globalStore.reservations.filter(r => r.id !== resId && r.vehicleId === vehicle.id && r.status === 'confirmed');
+    if (otherRes.length === 0) {
+      vehicle.status = 'available';
+      await updateDurable('vehicles', vehicle.id, { status: 'available', updatedAt: new Date().toISOString() });
+    }
+  }
+
+  await deleteDurable('reservations', resId);
+  globalStore.reservations.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'Reservation',
+    entityId: resId,
+    action: 'delete',
+    previousValue: JSON.stringify({ customerName: reservation.customerName, vehicleName: reservation.vehicleName, status: reservation.status }),
+    newValue: 'Reservation permanently deleted.',
+    reason
+  });
+
+  res.json({ success: true, message: `Reservation ${resId} successfully deleted.` });
+}));
+
+// ----------------------------------------------------
+// CORPORATE & B2B ACCOUNTS (Splendor OS Master Blueprint)
+// ----------------------------------------------------
+app.get('/api/corporate-accounts', (req, res) => {
+  // Return real accounts with dynamic calculated metrics
+  const accountsWithMetrics = globalStore.corporateAccounts.map(account => {
+    const matchingCustomer = globalStore.customers.find(c => 
+      c.type === 'corporate' && 
+      (c.companyName?.toLowerCase() === account.legalName.toLowerCase() || c.id === account.id)
+    );
+    const activeContracts = globalStore.contracts.filter(c => 
+      (matchingCustomer && c.customerId === matchingCustomer.id) ||
+      c.customerName?.toLowerCase() === account.legalName.toLowerCase()
+    ).filter(c => c.status === 'active');
+
+    const totalActiveValue = activeContracts.reduce((sum, c) => sum + (c.grandTotal || 0), 0);
+    
+    return {
+      ...account,
+      usedExposureAed: totalActiveValue || account.usedExposureAed || 0,
+      activeContractsCount: activeContracts.length
+    };
+  });
+  res.json(accountsWithMetrics);
+});
+
+app.post('/api/corporate-accounts', requireRole('ceo', 'admin', 'sales', 'finance'), asyncHandler(async (req, res) => {
+  const newId = await issueNextNumber('corporateaccount');
+  const now = new Date().toISOString();
+  const actor = await getRequesterActor(req);
+
+  const newAccount: CorporateAccount = {
+    id: newId,
+    legalName: req.body.legalName || 'Unnamed Corporate Account',
+    legalNameAr: req.body.legalNameAr || '',
+    tradeLicenseNumber: req.body.tradeLicenseNumber || '',
+    trnVatNumber: req.body.trnVatNumber || '',
+    licenseExpiry: req.body.licenseExpiry || '',
+    branchId: req.body.branchId || 'BR-DXB-01',
+    primaryContact: {
+      name: req.body.primaryContact?.name || '',
+      email: req.body.primaryContact?.email || '',
+      phone: req.body.primaryContact?.phone || '',
+      designation: req.body.primaryContact?.designation || ''
+    },
+    creditLimitAed: Number(req.body.creditLimitAed) || 0,
+    usedExposureAed: 0,
+    paymentTermsDays: Number(req.body.paymentTermsDays) || 30,
+    activeContractsCount: 0,
+    authorizedDriversCount: Number(req.body.authorizedDriversCount) || 1,
+    status: req.body.status || 'active',
+    notes: req.body.notes || '',
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await createDurable('corporate_accounts', newAccount);
+  globalStore.corporateAccounts.unshift(newAccount);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'sales',
+    entityType: 'CorporateAccount' as any,
+    entityId: newId,
+    action: 'create',
+    newValue: `Registered corporate account ${newAccount.legalName} (${newId}) with credit limit ${newAccount.creditLimitAed.toLocaleString()} AED.`,
+    reason: 'New corporate account onboarding'
+  });
+
+  res.status(201).json(newAccount);
+}));
+
+app.put('/api/corporate-accounts/:id', requireRole('ceo', 'admin', 'sales', 'finance'), asyncHandler(async (req, res) => {
+  const index = globalStore.corporateAccounts.findIndex(c => c.id === req.params.id);
+  if (index === -1) return res.status(404).json({ error: 'Corporate account not found' });
+  const prev = globalStore.corporateAccounts[index];
+  const actor = await getRequesterActor(req);
+  const now = new Date().toISOString();
+
+  const updated: CorporateAccount = {
+    ...prev,
+    ...req.body,
+    id: prev.id,
+    updatedAt: now
+  };
+
+  await updateDurable('corporate_accounts', updated.id, updated as any);
+  globalStore.corporateAccounts[index] = updated;
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'sales',
+    entityType: 'CorporateAccount' as any,
+    entityId: updated.id,
+    action: 'update',
+    previousValue: JSON.stringify({ creditLimitAed: prev.creditLimitAed, status: prev.status }),
+    newValue: JSON.stringify({ creditLimitAed: updated.creditLimitAed, status: updated.status }),
+    reason: req.body.reason || 'Corporate account update'
+  });
+
+  res.json(updated);
+}));
+
+app.delete('/api/corporate-accounts/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
+  const accountId = req.params.id;
+  const index = globalStore.corporateAccounts.findIndex(c => c.id === accountId);
+  if (index === -1) return res.status(404).json({ error: 'Corporate account not found' });
+  const prev = globalStore.corporateAccounts[index];
+  const actor = await getRequesterActor(req);
+  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
+
+  await deleteDurable('corporate_accounts', accountId);
+  globalStore.corporateAccounts.splice(index, 1);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Administrator',
+    userRole: (actor?.role as any) || 'admin',
+    entityType: 'CorporateAccount' as any,
+    entityId: accountId,
+    action: 'delete',
+    previousValue: JSON.stringify({ legalName: prev.legalName, creditLimitAed: prev.creditLimitAed }),
+    newValue: 'Corporate account permanently deleted.',
+    reason
+  });
+
+  res.json({ success: true, message: `Corporate account ${accountId} successfully deleted.` });
 }));
 
 // ----------------------------------------------------

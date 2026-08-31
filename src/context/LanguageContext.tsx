@@ -13,7 +13,7 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguageState] = useState<Language>(() => {
-    return (localStorage.getItem('splendor_lang') as Language) || 'en';
+    return (localStorage.getItem('splendor_lang') as Language) || 'ar';
   });
 
   const direction = language === 'ar' ? 'rtl' : 'ltr';
