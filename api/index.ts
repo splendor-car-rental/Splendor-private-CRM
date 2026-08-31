@@ -6,6 +6,34 @@ import admin from 'firebase-admin';
 // @ts-ignore TS5097 -- intentional Vercel bundling entrypoint.
 import app from '../server.ts';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
+import {
+  issueAndRenderCorporateDocument,
+  getCorporateDocumentMeta,
+  type CorporateDocumentInput,
+  type CorporateDocumentKind
+} from '../src/server/corporateDocumentEngine.js';
+
+const CORPORATE_DOCUMENT_KINDS: CorporateDocumentKind[] = [
+  'lpo', 'credit_note', 'fines_notice', 'debit_note', 'contract_extension',
+  'payment_receipt', 'tax_invoice', 'simplified_tax_invoice', 'official_letter',
+  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation'
+];
+
+const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
+  lpo: ['ceo', 'admin', 'operations', 'fleet', 'finance'],
+  credit_note: ['ceo', 'admin', 'finance'],
+  fines_notice: ['ceo', 'admin', 'operations', 'finance'],
+  debit_note: ['ceo', 'admin', 'finance'],
+  contract_extension: ['ceo', 'admin', 'operations', 'sales'],
+  payment_receipt: ['ceo', 'admin', 'finance'],
+  tax_invoice: ['ceo', 'admin', 'finance'],
+  simplified_tax_invoice: ['ceo', 'admin', 'finance'],
+  official_letter: ['ceo', 'admin', 'operations', 'sales', 'finance', 'fleet'],
+  vehicle_record_card: ['ceo', 'admin', 'operations', 'fleet'],
+  vehicle_exit_permit: ['ceo', 'admin', 'operations', 'fleet'],
+  account_statement: ['ceo', 'admin', 'finance', 'operations', 'sales'],
+  quotation: ['ceo', 'admin', 'sales', 'operations']
+};
 
 async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
   const authorization = req.headers.authorization || '';
@@ -30,18 +58,50 @@ async function getVerifiedStaff(req: Request, res: Response, allowedRoles: strin
   }
 }
 
-/**
- * Vercel serverless boundary.
- *
- * The Express app remains the single business/API implementation. This
- * boundary adds two defense-in-depth controls for historically exempt or
- * multi-write-sensitive routes:
- *  1. the internal test runner is CEO/Admin only;
- *  2. production plate assignment uses the atomic Firestore transaction
- *     implementation and the verified token identity, not client-supplied
- *     actor fields.
- */
+async function handleCorporateDocuments(req: Request, res: Response) {
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      success: true,
+      immutableLetterhead: true,
+      kinds: CORPORATE_DOCUMENT_KINDS.map(kind => ({ kind, ...getCorporateDocumentMeta(kind) }))
+    });
+  }
+
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    return res.status(405).json({ error: 'Method not allowed.' });
+  }
+
+  const body = (req.body || {}) as CorporateDocumentInput;
+  if (!body.kind || !CORPORATE_DOCUMENT_KINDS.includes(body.kind)) {
+    return res.status(400).json({ error: 'Unsupported corporate document type.' });
+  }
+
+  const actor = await getVerifiedStaff(req, res, CORPORATE_DOCUMENT_ROLES[body.kind]);
+  if (!actor) return;
+
+  try {
+    // Never trust a serial supplied by the browser. The engine issues the
+    // next number atomically from Firestore and returns the authoritative ID.
+    const { serial: _ignoredSerial, ...safeInput } = body as any;
+    const issued = await issueAndRenderCorporateDocument(safeInput);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${issued.fileName}"`);
+    res.setHeader('X-Document-Serial', issued.serial);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(issued.pdf);
+  } catch (error) {
+    console.error('[corporate-documents] generation failed:', error);
+    return res.status(500).json({ error: 'Document generation failed. No document was issued.' });
+  }
+}
+
 async function handler(req: Request, res: Response) {
+  if (req.path === '/api/corporate-documents') {
+    return handleCorporateDocuments(req, res);
+  }
+
   if (req.path === '/api/tests/run-all') {
     const actor = await getVerifiedStaff(req, res, ['ceo', 'admin']);
     if (!actor) return;

@@ -59,12 +59,13 @@ export type ViewKey =
   | 'security'
   | 'inspections'
   | 'whatsapp-inbox'
-  | 'lease-to-own';
+  | 'lease-to-own'
+  | 'corporate-documents';
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
   'contracts', 'finance', 'reconciliation', 'tolls', 'notification-center', 'tasks', 'ai-studio', 'test-suite', 'settings',
-  'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own'
+  'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own', 'corporate-documents'
 ];
 
 /**
@@ -82,14 +83,18 @@ const ALL_VIEWS: ViewKey[] = [
  *    TOLL_PRICING_EDIT_ROLES above). Only Admin/Finance/Sales (+CEO) can
  *    actually change rates/discounts there; Operations/Fleet can log entries
  *    but the rate fields stay locked to the current default for them.
+ *
+ *  - Corporate Documents: visibility follows the operational surface above,
+ *    while each individual document type has a second server-side role gate
+ *    in api/index.ts before a PDF can be issued.
  */
 export const ROLE_VIEWS: Record<UserRole, ViewKey[]> = {
   ceo: ALL_VIEWS,
   admin: ALL_VIEWS,
-  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own'],
-  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox', 'lease-to-own'],
-  fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'inspections'],
-  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement', 'lease-to-own']
+  operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own', 'corporate-documents'],
+  sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox', 'lease-to-own', 'corporate-documents'],
+  fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'inspections', 'corporate-documents'],
+  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement', 'lease-to-own', 'corporate-documents']
 };
 
 /** Historical/alternate ids for the same screen, used in a few nav call sites. */

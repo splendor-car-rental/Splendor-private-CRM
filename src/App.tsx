@@ -31,6 +31,7 @@ import { SecurityBlocklistView } from './components/views/SecurityBlocklistView'
 import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
 import { WhatsAppInboxView } from './components/views/WhatsAppInboxView';
 import { LeaseToOwnView } from './components/views/LeaseToOwnView';
+import { CorporateDocumentsView } from './components/views/CorporateDocumentsView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -41,8 +42,8 @@ const MainLayout: React.FC = () => {
   const renderActiveView = () => {
     // Central access gate -- the Sidebar already hides links this role
     // can't use, but a view can also be reached other ways (global search,
-    // a dashboard quick-link, stale state after a role change). This is
-    // the one place every path through the app is re-checked.
+    // a dashboard quick-link, stale state after a role change). This is the
+    // one place every path through the app is re-checked.
     if (!canAccessView(currentUser.role, activeView)) {
       return (
         <div className="flex flex-col items-center justify-center text-center py-24 gap-3">
@@ -95,6 +96,8 @@ const MainLayout: React.FC = () => {
         return <LeaseToOwnView />;
       case 'whatsapp-inbox':
         return <WhatsAppInboxView />;
+      case 'corporate-documents':
+        return <CorporateDocumentsView />;
       case 'ai-studio':
       case 'ai-intelligence':
         return <AIStudioView />;

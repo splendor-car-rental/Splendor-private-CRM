@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
-  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare
+  TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare, FileText
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -175,6 +175,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'security',
           label: language === 'ar' ? 'الأمن والقائمة المحظورة' : 'Security & Blocklist',
           icon: <ShieldAlert className="w-4 h-4" />
+        }
+      ]
+    },
+    {
+      title: language === 'ar' ? 'المستندات والسجلات' : 'DOCUMENTS & RECORDS',
+      items: [
+        {
+          id: 'corporate-documents',
+          label: language === 'ar' ? 'مولّد المكاتبات الرسمية' : 'Corporate Documents',
+          icon: <FileText className="w-4 h-4 text-[#D4AF37]" />,
+          badge: 'PDF',
+          badgeVariant: 'gold' as const
         }
       ]
     },
