@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   FileSpreadsheet, Plus, Search, Printer, CheckCircle2, 
-  Calendar, Car, User, DollarSign, ArrowRight, ShieldCheck, Clock
+  Calendar, Car, User, DollarSign, ArrowRight, ShieldCheck, Clock, Download
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -9,6 +9,8 @@ import { Quotation } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
+import { OfficialQuotationPrintModal } from '../operations/OfficialQuotationPrintModal';
+import { downloadElementAsPdf } from '../../lib/pdfDownloader';
 
 export const QuotationsView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -20,6 +22,7 @@ export const QuotationsView: React.FC = () => {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [quotationToPrint, setQuotationToPrint] = useState<Quotation | null>(null);
 
   const [form, setForm] = useState({
     customerId: '',
@@ -193,7 +196,7 @@ export const QuotationsView: React.FC = () => {
               <div className="space-y-1">
                 <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Client Details</span>
                 <p className="font-bold text-zinc-100">{activeQuote.customerName}</p>
-                <p className="text-zinc-400">{activeQuote.customerPhone}</p>
+                <p className="text-zinc-400 font-mono" dir="ltr">{activeQuote.customerPhone}</p>
                 <p className="text-zinc-400">{activeQuote.customerEmail}</p>
               </div>
 
@@ -203,7 +206,7 @@ export const QuotationsView: React.FC = () => {
                 <p className="text-zinc-400">
                   {formatDate(activeQuote.startDate)} to {formatDate(activeQuote.endDate)} ({activeQuote.durationDays} Days)
                 </p>
-                <p className="text-zinc-400">Valid Until: {activeQuote.validUntil}</p>
+                <p className="text-zinc-400 font-mono">Valid Until: {formatDate(activeQuote.validUntil)}</p>
               </div>
             </div>
 
@@ -283,11 +286,11 @@ export const QuotationsView: React.FC = () => {
 
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => window.print()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-zinc-800 text-zinc-300 text-xs font-semibold hover:bg-zinc-900 transition-all"
+                  onClick={() => setQuotationToPrint(activeQuote)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-[#D4AF37] hover:text-zinc-950 text-zinc-100 border border-zinc-700 text-xs font-bold transition-all shadow-md"
                 >
                   <Printer className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Print PDF</span>
+                  <span>{language === 'ar' ? 'معاينة وطباعة الهيد ليتر الرسمي / PDF' : 'Official Letterhead & PDF'}</span>
                 </button>
 
                 {activeQuote.status !== 'accepted' && (
@@ -409,6 +412,15 @@ export const QuotationsView: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Official Letterhead Quotation Modal */}
+      {quotationToPrint && (
+        <OfficialQuotationPrintModal
+          isOpen={!!quotationToPrint}
+          onClose={() => setQuotationToPrint(null)}
+          quotation={quotationToPrint}
+        />
+      )}
     </div>
   );
 };

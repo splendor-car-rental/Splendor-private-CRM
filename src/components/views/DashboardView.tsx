@@ -14,6 +14,7 @@ import { SplendorLogo } from '../common/SplendorLogo';
 import proudOfUaeBanner from '../../assets/proud-of-uae-banner.jpg';
 import { formatDate } from '../../lib/dateFormat';
 import { apiFetch } from '../../lib/apiFetch';
+import { CeoMorningBriefModal } from '../modals/CeoMorningBriefModal';
 
 export const DashboardView: React.FC = () => {
   const { language } = useLanguage();
@@ -26,6 +27,7 @@ export const DashboardView: React.FC = () => {
 
   const [aiBriefLoading, setAiBriefLoading] = useState(false);
   const [aiBrief, setAiBrief] = useState<string | null>(null);
+  const [ceoBriefModalOpen, setCeoBriefModalOpen] = useState(false);
 
   // Real Computed Metrics directly from live state / Firestore
   const totalFleetCount = vehicles.length;
@@ -191,15 +193,16 @@ export const DashboardView: React.FC = () => {
       </div>
 
       {/* Welcome Banner */}
-      <div className="p-6 rounded-3xl bg-gradient-to-r from-zinc-900 via-zinc-950 to-zinc-900 border border-zinc-800 shadow-2xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-[#D4AF37]/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="p-6 rounded-3xl bg-gradient-to-r from-[#061224] via-zinc-950 to-[#0A1E3F] border border-blue-900/40 shadow-2xl shadow-blue-950/30 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-blue-600/5 rounded-full blur-3xl pointer-events-none" />
         
         <div className="flex items-center gap-4 relative z-10">
           <SplendorLogo size={68} className="shrink-0 drop-shadow-xl" />
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-widest text-[#f5d97f] font-semibold">
-                {language === 'ar' ? 'سبلندر لتأجير السيارات — مركز القيادة التنفيذي' : 'SPLENDOR CAR RENTAL — Executive Command Hub'}
+              <span className="text-xs uppercase tracking-widest text-[#f5d97f] font-semibold flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                {language === 'ar' ? 'سبلندر لتأجير السيارات — مركز القيادة التنفيذي 2.0' : 'SPLENDOR CAR RENTAL — Sovereign Command OS 2.0'}
               </span>
             </div>
             <h2 className="text-2xl lg:text-3xl font-display font-bold text-zinc-100 tracking-tight">
@@ -213,15 +216,31 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
 
-        {/* AI Briefing Button */}
-        <div className="relative z-10 shrink-0">
+        {/* AI Briefing & Control Room Action Buttons */}
+        <div className="relative z-10 shrink-0 flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={() => setActiveView('operations-control-room')}
+            className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-blue-950/80 hover:bg-blue-900/90 border border-blue-600/50 text-blue-200 font-semibold text-xs lg:text-sm shadow-lg shadow-blue-950/40 transition-all active:scale-95"
+          >
+            <Activity className="w-4 h-4 text-blue-400" />
+            <span>{language === 'ar' ? 'غرفة العمليات المباشرة' : 'Operations Control'}</span>
+          </button>
+
+          <button
+            onClick={() => setCeoBriefModalOpen(true)}
+            className="flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-[#D4AF37] hover:bg-[#c49f27] text-zinc-950 font-bold text-xs lg:text-sm shadow-xl shadow-[#D4AF37]/20 transition-all active:scale-95"
+          >
+            <Sparkles className="w-4 h-4 text-zinc-950" />
+            <span>{language === 'ar' ? 'الموجز الصباحي' : 'CEO Morning Brief'}</span>
+          </button>
+          
           <button
             onClick={fetchAiExecutiveBrief}
             disabled={aiBriefLoading}
-            className="flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-gradient-to-r from-[#D4AF37]/20 to-[#997d26]/20 hover:from-[#D4AF37]/30 hover:to-[#997d26]/30 border border-[#D4AF37]/40 text-[#f5d97f] font-semibold text-xs lg:text-sm shadow-lg shadow-[#D4AF37]/10 transition-all active:scale-95"
+            className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-700 hover:border-[#D4AF37]/40 text-[#f5d97f] font-semibold text-xs lg:text-sm transition-all active:scale-95"
           >
             <Sparkles className={`w-4 h-4 text-[#D4AF37] ${aiBriefLoading ? 'animate-spin' : ''}`} />
-            <span>{language === 'ar' ? 'توليد تقرير الذكاء الاصطناعي التنفيذي' : 'Generate Daily AI Executive Brief'}</span>
+            <span>{language === 'ar' ? 'تحليل سريع' : 'Quick AI Flash'}</span>
           </button>
         </div>
       </div>
@@ -485,6 +504,12 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* CEO Executive Morning Brief Modal */}
+      <CeoMorningBriefModal
+        isOpen={ceoBriefModalOpen}
+        onClose={() => setCeoBriefModalOpen(false)}
+      />
     </div>
   );
 };

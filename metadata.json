@@ -1,0 +1,6 @@
+{
+  "name": "SPLENDOR PRIVATE CRM",
+  "description": "Splendor OS 2.0 — Enterprise automotive CRM & luxury rental platform for Splendor Car Rental LLC with real B2B corporate credit management, sovereign branch hierarchy, fleet operations, CEO executive intelligence, and granular RBAC deletion controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

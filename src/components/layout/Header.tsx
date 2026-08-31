@@ -50,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <>
-      <header className="h-16 px-3 sm:px-6 bg-zinc-950/90 border-b border-zinc-800/80 backdrop-blur-md flex items-center justify-between gap-2 sm:gap-4 sticky top-0 z-20">
+      <header className="h-16 px-3 sm:px-6 bg-gradient-to-r from-zinc-950 via-[#071328]/80 to-zinc-950 border-b border-blue-900/30 backdrop-blur-md flex items-center justify-between gap-2 sm:gap-4 sticky top-0 z-20">
         {onMenuClick && (
           <button
             onClick={onMenuClick}
@@ -64,10 +64,10 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex-1 max-w-xl min-w-0">
           <button
             onClick={() => setGlobalSearchOpen(true)}
-            className="w-full flex items-center justify-between px-3.5 py-2 rounded-xl bg-zinc-900/60 border border-zinc-800 hover:border-[#D4AF37]/40 text-zinc-400 hover:text-zinc-200 transition-all text-xs lg:text-sm group"
+            className="w-full flex items-center justify-between px-3.5 py-2 rounded-xl bg-zinc-900/60 border border-zinc-800 hover:border-blue-500/50 hover:bg-blue-950/20 text-zinc-400 hover:text-zinc-200 transition-all text-xs lg:text-sm group"
           >
             <div className="flex items-center gap-2.5 truncate">
-              <Search className="w-3.5 h-3.5 text-zinc-500 group-hover:text-[#D4AF37] transition-colors shrink-0" />
+              <Search className="w-3.5 h-3.5 text-zinc-500 group-hover:text-blue-400 transition-colors shrink-0" />
               <span className="truncate">{t('searchPlaceholder')}</span>
             </div>
             <div className="hidden sm:flex items-center gap-1 shrink-0">
@@ -78,9 +78,9 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-[11px] text-zinc-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span className="text-zinc-300 font-mono text-[10px] uppercase tracking-wider">Cloud Live</span>
+          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-blue-950/40 border border-blue-900/40 text-[11px] text-blue-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+            <span className="font-mono text-[10px] uppercase tracking-wider">Splendor OS 2.0 Live</span>
           </div>
 
           {/* Desktop language switcher */}

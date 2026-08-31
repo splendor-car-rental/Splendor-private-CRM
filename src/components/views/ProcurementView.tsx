@@ -6,6 +6,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { formatDate, formatDateTime } from '../../lib/dateFormat';
 import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver, Debt, DebtSettlementMovement } from '../../types';
 
 /**
@@ -87,7 +88,7 @@ function StatusBadge({ status }: { status: string }) {
 export const ProcurementView: React.FC = () => {
   const { language } = useLanguage();
   const { currentUser } = useAuth();
-  const { showToast, customers } = useCRM();
+  const { showToast, customers, setActiveView } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
   const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts'>('purchase-orders');
@@ -524,7 +525,15 @@ export const ProcurementView: React.FC = () => {
 
       {tab === 'purchase-orders' && (
         <div className="space-y-3">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <button
+              onClick={() => setActiveView('purchase-orders')}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 border border-[#D4AF37]/50 text-[#f5d97f] hover:bg-zinc-800 font-bold text-xs shadow transition-all"
+            >
+              <ClipboardList className="w-4 h-4 text-[#D4AF37]" />
+              <span>{language === 'ar' ? 'أوامر التوريد الصادرة للشركات (B2B LPO) والطباعة على الهيد ليتر' : 'Outgoing B2B LPO Letterhead System'}</span>
+            </button>
+
             <button
               onClick={() => setPoModalOpen(true)}
               disabled={suppliers.length === 0}
@@ -532,7 +541,7 @@ export const ProcurementView: React.FC = () => {
               title={suppliers.length === 0 ? (language === 'ar' ? 'أضف مورداً أولاً' : 'Add a supplier first') : ''}
             >
               <Plus className="w-3.5 h-3.5" />
-              {language === 'ar' ? 'أمر توريد جديد' : 'New Purchase Order'}
+              {language === 'ar' ? 'أمر توريد داخلي جديد' : 'New Purchase Order'}
             </button>
           </div>
           <div className="space-y-2.5">
@@ -666,11 +675,11 @@ export const ProcurementView: React.FC = () => {
                   </div>
 
                   <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2 text-zinc-400">
-                    <p>{language === 'ar' ? 'وقت توقيع العقد:' : 'Contract signed:'} <span className="font-mono text-zinc-300">{new Date(r.contractSignedAt).toLocaleString()}</span></p>
-                    <p>{language === 'ar' ? 'الموعد النهائي (٣ ساعات):' : '3h deadline:'} <span className="font-mono text-zinc-300">{new Date(r.deadlineAt).toLocaleString()}</span></p>
+                    <p>{language === 'ar' ? 'وقت توقيع العقد:' : 'Contract signed:'} <span className="font-mono text-zinc-300">{formatDateTime(r.contractSignedAt)}</span></p>
+                    <p>{language === 'ar' ? 'الموعد النهائي (٣ ساعات):' : '3h deadline:'} <span className="font-mono text-zinc-300">{formatDateTime(r.deadlineAt)}</span></p>
                     {r.executedAt && (
                       <>
-                        <p>{language === 'ar' ? 'وقت التنفيذ الفعلي:' : 'Actual execution:'} <span className="font-mono text-zinc-300">{new Date(r.executedAt).toLocaleString()}</span> ({r.executedByName})</p>
+                        <p>{language === 'ar' ? 'وقت التنفيذ الفعلي:' : 'Actual execution:'} <span className="font-mono text-zinc-300">{formatDateTime(r.executedAt)}</span> ({r.executedByName})</p>
                         <p>
                           {language === 'ar' ? 'التأخير:' : 'Delay:'}{' '}
                           {r.isDelayed
@@ -680,11 +689,11 @@ export const ProcurementView: React.FC = () => {
                       </>
                     )}
                     {r.returnedToSupplierAt && (
-                      <p>{language === 'ar' ? 'أُعيدت للمورد:' : 'Returned to supplier:'} <span className="font-mono text-zinc-300">{new Date(r.returnedToSupplierAt).toLocaleString()}</span></p>
+                      <p>{language === 'ar' ? 'أُعيدت للمورد:' : 'Returned to supplier:'} <span className="font-mono text-zinc-300">{formatDateTime(r.returnedToSupplierAt)}</span></p>
                     )}
                     {r.returnClosedAt && (
                       <p>
-                        {language === 'ar' ? 'إغلاق الإعادة:' : 'Return closed:'} <span className="font-mono text-zinc-300">{new Date(r.returnClosedAt).toLocaleString()}</span>
+                        {language === 'ar' ? 'إغلاق الإعادة:' : 'Return closed:'} <span className="font-mono text-zinc-300">{formatDateTime(r.returnClosedAt)}</span>
                         {r.closingDelayed && <span className="text-rose-400"> — {language === 'ar' ? 'متأخر' : 'delayed'}</span>}
                       </p>
                     )}
@@ -750,7 +759,7 @@ export const ProcurementView: React.FC = () => {
                 <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'وقت الإرجاع المجدول' : 'Scheduled return'}</label>
                 <input
                   disabled
-                  value={lateFeeSelectedContract ? new Date(lateFeeSelectedContract.endDateTime).toLocaleString() : ''}
+                  value={lateFeeSelectedContract ? formatDateTime(lateFeeSelectedContract.endDateTime) : ''}
                   className="w-full px-3 py-2 rounded-xl bg-zinc-950/50 border border-zinc-800 text-zinc-500"
                 />
               </div>
@@ -816,7 +825,7 @@ export const ProcurementView: React.FC = () => {
                       {' → '}{language === 'ar' ? 'أُعفي:' : 'Waived:'} <span className="font-mono text-emerald-400">{w.waivedAmount.toLocaleString()} AED</span>
                       {' · '}{w.reason}
                     </p>
-                    <p className="text-zinc-600 text-[10px]">{w.waivedByName} · {new Date(w.waivedAt).toLocaleString()}</p>
+                    <p className="text-zinc-600 text-[10px]">{w.waivedByName} · {formatDateTime(w.waivedAt)}</p>
                   </div>
                 </div>
               ))}
@@ -869,7 +878,7 @@ export const ProcurementView: React.FC = () => {
                             <p className={`truncate ${m.isReversal ? 'text-rose-400' : 'text-zinc-300'}`}>
                               {m.isReversal ? (language === 'ar' ? 'عكس:' : 'Reversal:') : ''} {m.amount.toLocaleString()} AED via {m.method}{m.methodOther ? ` (${m.methodOther})` : ''}
                             </p>
-                            <p className="text-zinc-600 font-mono text-[10px]">{m.id} · {m.recordedByName} · {new Date(m.recordedAt).toLocaleString()}</p>
+                            <p className="text-zinc-600 font-mono text-[10px]">{m.id} · {m.recordedByName} · {formatDateTime(m.recordedAt)}</p>
                           </div>
                           {canAct && !m.isReversal && !debt.settlements.some(other => other.reversedMovementId === m.id) && (
                             <button
@@ -1537,11 +1546,11 @@ const NewTarsRecordModal: React.FC<{
           <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
             <p className="text-zinc-400">
               {language === 'ar' ? 'وقت التوقيع الفعلي (من سجل العقد):' : 'Actual signed time (from the contract record):'}{' '}
-              <span className="font-mono text-zinc-200">{new Date(selectedContract.createdAt).toLocaleString()}</span>
+              <span className="font-mono text-zinc-200">{formatDateTime(selectedContract.createdAt)}</span>
             </p>
             <p className="text-zinc-500 mt-1">
               {language === 'ar' ? 'الموعد النهائي سيكون:' : 'Deadline will be:'}{' '}
-              <span className="font-mono text-[#f5d97f]">{new Date(new Date(selectedContract.createdAt).getTime() + 3 * 60 * 60 * 1000).toLocaleString()}</span>
+              <span className="font-mono text-[#f5d97f]">{formatDateTime(new Date(new Date(selectedContract.createdAt).getTime() + 3 * 60 * 60 * 1000).toISOString())}</span>
             </p>
           </div>
         )}

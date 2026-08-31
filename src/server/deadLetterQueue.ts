@@ -27,8 +27,16 @@ export function getDeadLetterCache(): FailedJob[] {
   return cache;
 }
 
+function isAlreadyExistsError(error: unknown): boolean {
+  const candidate = error as {
+    code?: unknown;
+    cause?: { code?: unknown; message?: unknown };
+  } | undefined;
+  return candidate?.code === 6 || candidate?.cause?.code === 6 || candidate?.cause?.message === 'ALREADY_EXISTS';
+}
+
 export async function recordFailedJob(jobType: FailedJob['jobType'], payload: Record<string, unknown>, error: string): Promise<FailedJob> {
-  const id = await issueNextNumber('FailedJob');
+  let id = await issueNextNumber('FailedJob');
   const job: FailedJob = {
     id,
     jobType,
@@ -38,11 +46,33 @@ export async function recordFailedJob(jobType: FailedJob['jobType'], payload: Re
     attempts: 0,
     createdAt: new Date().toISOString()
   };
+
   if (admin.apps.length > 0) {
-    await createDurable('dead_letter_queue', job as unknown as { id: string });
+    try {
+      await createDurable('dead_letter_queue', job as unknown as { id: string });
+    } catch (err) {
+      // A durable counter and the target document must be treated as one
+      // uniqueness boundary. If a stale/colliding allocation is ever
+      // observed (for example after a recovered counter or a cold-start
+      // migration), do not turn a real failed job into a 502. Re-key the
+      // document while preserving the FAI- prefix and the original job data.
+      if (!isAlreadyExistsError(err)) throw err;
+      id = `${id}-${cryptoRandomSuffix()}`;
+      job.id = id;
+      await createDurable('dead_letter_queue', job as unknown as { id: string });
+    }
   }
   cache.unshift(job);
   return job;
+}
+
+function cryptoRandomSuffix(): string {
+  // Web/Node crypto.randomUUID is available in the Vercel Node runtime.
+  // Keep the suffix compact because this is an exceptional collision path,
+  // not the normal numbering format.
+  return typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** Marks every still-open (failed/alerted) entry as alerted -- called once per sweep that successfully raises the "dead-letter queue is non-empty" health alert, so the same backlog doesn't get silently re-alerted forever without anyone knowing it was already flagged. */
