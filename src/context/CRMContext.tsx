@@ -7,7 +7,8 @@ import {
   CustomFieldDefinition, NumberingConfig, NotificationItem,
   TollTransaction, TollImportBatch, TollPricingConfig,
   WebsiteVehiclePublication, VehicleLifecycleStatus, WebsiteReconciliationItem,
-  NotificationEventConfig, CustomReminder, WhatsAppMessageLogEntry, CustomerNotificationConfig
+  NotificationEventConfig, CustomReminder, WhatsAppMessageLogEntry, CustomerNotificationConfig,
+  CorporateAccount, ContractExtensionAddendum
 } from '../types';
 import { FirestoreService, COLLECTIONS } from '../firebase/firestoreService';
 import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
@@ -70,6 +71,7 @@ interface CRMContextType {
   tollTransactions: TollTransaction[];
   tollImportBatches: TollImportBatch[];
   tollPricingConfig: TollPricingConfig | null;
+  corporateAccounts: CorporateAccount[];
   notificationEventConfigs: NotificationEventConfig[];
   customerNotificationConfigs: CustomerNotificationConfig[];
   customReminders: CustomReminder[];
@@ -168,7 +170,30 @@ interface CRMContextType {
   sendCustomReminder: (data: { title: string; message: string; broadcastToGroup: boolean; staffRecipientIds: string[] }) => Promise<CustomReminder>;
   runNotificationChecksNow: () => Promise<{ ranAt: string; alertsFired: number; details: string[] }>;
   refreshWhatsappStatus: () => Promise<void>;
-  extendContract: (contractId: string, newEndDateTime: string) => Promise<{ contract: Contract; extraDays: number; extraAmount: number }>;
+  extendContract: (contractId: string, extensionData: {
+    newEndDateTime: string;
+    dailyRate?: number;
+    currentOdometerKm?: number;
+    paymentMethod?: string;
+    paymentMethodLabel?: string;
+    issueDate?: string;
+    notes?: string;
+    actorId?: string;
+    actorName?: string;
+  } | string) => Promise<{ contract: Contract; addendum?: ContractExtensionAddendum; extraDays: number; extraAmount: number }>;
+
+  // Corporate & B2B Accounts
+  addCorporateAccount: (data: Partial<CorporateAccount>) => Promise<CorporateAccount>;
+  updateCorporateAccount: (id: string, data: Partial<CorporateAccount>) => Promise<CorporateAccount>;
+  deleteCorporateAccount: (id: string, reason?: string) => Promise<void>;
+
+  // Management Granular Deletion Engine (CEO & Admin only)
+  deleteContract: (id: string, reason?: string) => Promise<void>;
+  deleteVehicle: (id: string, reason?: string) => Promise<void>;
+  deleteCustomer: (id: string, reason?: string) => Promise<void>;
+  deleteLead: (id: string, reason?: string) => Promise<void>;
+  deleteQuotation: (id: string, reason?: string) => Promise<void>;
+  deleteReservation: (id: string, reason?: string) => Promise<void>;
 
   /** CEO/Admin only -- wipes every transactional/demo record and resets numbering back to 1. Irreversible. */
   resetTransactionalData: (confirmText: string) => Promise<{ success: boolean; deletedDocs: number }>;
@@ -201,6 +226,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tollTransactions, setTollTransactions] = useState<TollTransaction[]>([]);
   const [tollImportBatches, setTollImportBatches] = useState<TollImportBatch[]>([]);
   const [tollPricingConfig, setTollPricingConfig] = useState<TollPricingConfig | null>(null);
+  const [corporateAccounts, setCorporateAccounts] = useState<CorporateAccount[]>([]);
   const [notificationEventConfigs, setNotificationEventConfigs] = useState<NotificationEventConfig[]>([]);
   const [customerNotificationConfigs, setCustomerNotificationConfigs] = useState<CustomerNotificationConfig[]>([]);
   const [customReminders, setCustomReminders] = useState<CustomReminder[]>([]);
@@ -281,7 +307,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         invRes, bBatchRes, bTxnRes, bAccRes, tskRes, commRes,
         docRes, auditRes, cfRes, numRes, notifRes,
         tollRes, tollBatchRes, tollPricingRes,
-        notifCfgRes, remindersRes, waLogRes, waStatusRes, custNotifCfgRes
+        notifCfgRes, remindersRes, waLogRes, waStatusRes, custNotifCfgRes, corpRes
       ] = await Promise.all([
         fetch('/api/customers').then(r => r.json()).catch(() => []),
         fetch('/api/leads').then(r => r.json()).catch(() => []),
@@ -311,7 +337,8 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetch('/api/custom-reminders').then(r => r.json()).catch(() => []),
         fetch('/api/whatsapp/message-log').then(r => r.json()).catch(() => []),
         fetch('/api/whatsapp/status').then(r => r.json()).catch(() => ({ configured: false, groupRecipientCount: 0 })),
-        fetch('/api/customer-notification-configs').then(r => r.json()).catch(() => [])
+        fetch('/api/customer-notification-configs').then(r => r.json()).catch(() => []),
+        fetch('/api/corporate-accounts').then(r => r.json()).catch(() => [])
       ]);
 
       setCustomers(Array.isArray(custRes) ? custRes : []);
@@ -337,6 +364,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setNotifications(Array.isArray(notifRes) ? notifRes : []);
       setTollTransactions(Array.isArray(tollRes) ? tollRes : []);
       setTollImportBatches(Array.isArray(tollBatchRes) ? tollBatchRes : []);
+      setCorporateAccounts(Array.isArray(corpRes) ? corpRes : []);
       if (tollPricingRes) setTollPricingConfig(tollPricingRes);
       if (notifCfgRes && notifCfgRes.length > 0) setNotificationEventConfigs(notifCfgRes);
       if (remindersRes && remindersRes.length > 0) setCustomReminders(remindersRes);
@@ -1324,13 +1352,30 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (res) setWhatsappStatus(res);
   };
 
-  const extendContract = async (contractId: string, newEndDateTime: string) => {
+  const extendContract = async (
+    contractId: string, 
+    extensionData: {
+      newEndDateTime: string;
+      dailyRate?: number;
+      currentOdometerKm?: number;
+      paymentMethod?: string;
+      paymentMethodLabel?: string;
+      issueDate?: string;
+      notes?: string;
+      actorId?: string;
+      actorName?: string;
+    } | string
+  ) => {
+    const payload = typeof extensionData === 'string' 
+      ? { newEndDateTime: extensionData } 
+      : extensionData;
+
     const res = await fetch(`/api/contracts/${contractId}/extend`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newEndDateTime })
+      body: JSON.stringify(payload)
     });
-    let data: { contract: Contract; extraDays: number; extraAmount: number };
+    let data: { contract: Contract; addendum?: ContractExtensionAddendum; extraDays: number; extraAmount: number };
     try {
       data = await parseApiResponse(res, 'Failed to extend contract.');
     } catch (err: any) {
@@ -1338,8 +1383,157 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     setContracts(prev => prev.map(c => c.id === contractId ? data.contract : c));
-    showToast('Contract Extended', `+${data.extraDays} day(s), +${data.extraAmount.toLocaleString()} AED.`);
+    showToast('Contract Extended', `+${data.extraDays} day(s), +${data.extraAmount.toLocaleString()} AED. Addendum #${data.addendum?.addendumNumber || 'Issued'}`);
     return data;
+  };
+
+  const addCorporateAccount = async (data: Partial<CorporateAccount>) => {
+    const res = await fetch('/api/corporate-accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    let newAcc: CorporateAccount;
+    try {
+      newAcc = await parseApiResponse<CorporateAccount>(res, 'Failed to create corporate account.');
+    } catch (err: any) {
+      showToast('Corporate Registration Failed', err.message, 'error');
+      throw err;
+    }
+    setCorporateAccounts(prev => [newAcc, ...prev.filter(c => c.id !== newAcc.id)]);
+    showToast('Corporate Account Created', `${newAcc.legalName} (${newAcc.id}) registered.`);
+    refreshFirebaseStats();
+    return newAcc;
+  };
+
+  const updateCorporateAccount = async (id: string, data: Partial<CorporateAccount>) => {
+    const res = await fetch(`/api/corporate-accounts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    let updated: CorporateAccount;
+    try {
+      updated = await parseApiResponse<CorporateAccount>(res, 'Failed to update corporate account.');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+      throw err;
+    }
+    setCorporateAccounts(prev => prev.map(c => c.id === id ? updated : c));
+    showToast('Corporate Account Updated', `${updated.legalName} profile saved.`);
+    return updated;
+  };
+
+  const deleteCorporateAccount = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/corporate-accounts/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete corporate account.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setCorporateAccounts(prev => prev.filter(c => c.id !== id));
+    showToast('Corporate Account Deleted', `Record ${id} removed.`);
+  };
+
+  const deleteContract = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/contracts/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete contract.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setContracts(prev => prev.filter(c => c.id !== id));
+    showToast('Contract Deleted', `Contract ${id} has been permanently deleted.`);
+  };
+
+  const deleteVehicle = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/fleet/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete vehicle.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setVehicles(prev => prev.filter(v => v.id !== id));
+    showToast('Vehicle Deleted', `Vehicle ${id} removed from fleet.`);
+  };
+
+  const deleteCustomer = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/customers/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete customer.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setCustomers(prev => prev.filter(c => c.id !== id));
+    showToast('Customer Deleted', `Customer ${id} record removed.`);
+  };
+
+  const deleteLead = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/leads/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete lead.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setLeads(prev => prev.filter(l => l.id !== id));
+    showToast('Lead Deleted', `Lead ${id} removed.`);
+  };
+
+  const deleteQuotation = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/quotations/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete quotation.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setQuotations(prev => prev.filter(q => q.id !== id));
+    showToast('Quotation Deleted', `Quotation ${id} removed.`);
+  };
+
+  const deleteReservation = async (id: string, reason?: string) => {
+    const res = await fetch(`/api/reservations/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    try {
+      await parseApiResponse(res, 'Failed to delete reservation.');
+    } catch (err: any) {
+      showToast('Deletion Failed', err.message, 'error');
+      throw err;
+    }
+    setReservations(prev => prev.filter(r => r.id !== id));
+    showToast('Reservation Deleted', `Reservation ${id} removed.`);
   };
 
   const resetTransactionalData = async (confirmText: string) => {
@@ -1495,7 +1689,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customers, leads, opportunities, vehicles, quotations,
       reservations, contracts, charges, deposits, payments,
       invoices, bankBatches, bankTransactions, companyBankAccounts, tollTransactions,
-      tollImportBatches, tollPricingConfig,
+      tollImportBatches, tollPricingConfig, corporateAccounts,
       notificationEventConfigs, customerNotificationConfigs, customReminders,
       whatsappMessageLog, whatsappStatus, tasks, communications,
       documents, auditLogs, customFields, numberingConfigs, notifications,
@@ -1507,11 +1701,12 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       selectedContractId, setSelectedContractId,
       selectedQuotationId, setSelectedQuotationId,
       fetchData, showToast, toasts, dismissToast,
-      addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer,
-      addLead, updateLead, convertLeadToCustomer,
-      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability,
-      createQuotation, convertQuotationToReservation,
-      createReservation, createContractFromReservation, createContract,
+      addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer, deleteCustomer,
+      addLead, updateLead, convertLeadToCustomer, deleteLead,
+      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability, deleteVehicle,
+      createQuotation, convertQuotationToReservation, deleteQuotation,
+      createReservation, createContractFromReservation, createContract, deleteReservation, deleteContract,
+      addCorporateAccount, updateCorporateAccount, deleteCorporateAccount,
       processHandover, processReturn,
       recordPayment, applyDeposit, refundDeposit,
       uploadBankBatch, reconcileBankTransaction, reclassifyBankTransaction, previewBankImport, confirmBankImport, startVehicleMaintenance, logVehicleMaintenance, runAutoReconciliation,

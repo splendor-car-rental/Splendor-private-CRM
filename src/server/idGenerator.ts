@@ -41,8 +41,6 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   deposit: { prefix: 'DEP-', digits: 6 },
   task: { prefix: 'TSK-', digits: 6 },
   tolltransaction: { prefix: 'TOL-', digits: 6 },
-  // Previously non-durable `array.length + 1` / literal-string schemes,
-  // brought under the same atomic mechanism as part of this remediation:
   vehicle: { prefix: 'VEH-', digits: 4 },
   opportunity: { prefix: 'OPP-', digits: 6 },
   charge: { prefix: 'CHG-', digits: 6 },
@@ -54,10 +52,9 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   bankbatch: { prefix: '', digits: 2 },
   customreminder: { prefix: 'REM-', digits: 6 },
   customfield: { prefix: 'CF-', digits: 2 },
+  failedjob: { prefix: 'FAI-', digits: 6 },
 
   // Procurement & Supplier Management (Splendor Procurement, Phase 1).
-  // purchaseorder starts at 100 per the spec ("PO-SCR-100, PO-SCR-101, ...")
-  // -- every other new entity here follows the normal start-at-1 behavior.
   supplier: { prefix: 'SUP-', digits: 6 },
   supplierquote: { prefix: 'QTV-', digits: 6 },
   purchaseorder: { prefix: 'PO-SCR-', digits: 3, startAt: 100 },
@@ -81,7 +78,7 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   latefeewaiver: { prefix: 'LFW-', digits: 6 },
   procurementapproval: { prefix: 'PAPR-', digits: 6 },
 
-  // Lease-to-Own (Splendor Private Mobility Operating System)
+  // Lease-to-Own
   ltoapplication: { prefix: 'LTOA-', digits: 6 },
   ltoinstallment: { prefix: 'LTOI-', digits: 6 },
   ltosettlementrequest: { prefix: 'LTOS-', digits: 6 },
@@ -89,7 +86,10 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   // Vehicle Master Profile & Verified Vehicle Catalog
   vehiclecatalogupdaterequest: { prefix: 'VCU-', digits: 6 },
 
-  // Payment Gateway (Production-Grade Payment & Settlement Layer)
+  // Corporate & B2B Accounts
+  corporateaccount: { prefix: 'CORP-', digits: 6 },
+
+  // Payment Gateway
   paymentintent: { prefix: 'PI-', digits: 6 },
   paymentrefund: { prefix: 'PREF-', digits: 6 }
 };
@@ -101,16 +101,6 @@ export class IdGenerationError extends Error {
   }
 }
 
-/**
- * Atomically issues the next formatted ID for `entityName` (e.g.
- * "Customer" -> "CUS-000042"). Backed by a Firestore transaction against
- * numbering_configs/{entityKey}; safe under concurrent requests on the
- * same or different serverless instances, and safe across cold starts.
- *
- * Throws IdGenerationError if Firebase Admin isn't configured or the
- * transaction fails -- callers must treat this as a hard failure of the
- * whole mutation (do not fall back to a non-durable ID scheme).
- */
 export async function issueNextNumber(entityName: string): Promise<string> {
   const key = entityName.toLowerCase();
   if (admin.apps.length === 0) {
@@ -131,10 +121,6 @@ export async function issueNextNumber(entityName: string): Promise<string> {
       const prefix: string = data?.prefix ?? defaults?.prefix ?? `${entityName.toUpperCase().slice(0, 3)}-`;
       const digits: number = data?.digits ?? defaults?.digits ?? 6;
       const startAt: number = defaults?.startAt ?? 1;
-      // nextNumber here means "the number about to be issued" -- matches
-      // the original DataStore.numberingConfigs seed semantics (starts at 1,
-      // or at `startAt` for an entity whose sequence must begin somewhere
-      // else -- e.g. Purchase Orders start at 100 per the procurement spec).
       const current: number = typeof data?.nextNumber === 'number' && data.nextNumber >= startAt ? data.nextNumber : startAt;
       const next = current + 1;
       const formatted = `${prefix}${String(current).padStart(digits, '0')}`;
@@ -159,11 +145,6 @@ export async function issueNextNumber(entityName: string): Promise<string> {
   }
 }
 
-/**
- * Resets a single entity's counter back to 1 -- used only by the
- * admin data-reset endpoint (POST /api/admin/reset-transactional-data),
- * which already has its own confirm-phrase + role gate.
- */
 export async function resetNumbering(entityName: string): Promise<void> {
   const key = entityName.toLowerCase();
   const defaults = NUMBERING_DEFAULTS[key];

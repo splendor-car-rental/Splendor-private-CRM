@@ -9,6 +9,12 @@ import type { VehicleCategory } from '../types';
  */
 
 export const WHATSAPP_CATEGORY_LABELS: Record<VehicleCategory, { en: string; ar: string }> = {
+  economy_sedan: { en: 'Economy Sedans', ar: 'سيدان اقتصادي' },
+  economy_hatchback: { en: 'Economy Hatchbacks', ar: 'هاتشباك اقتصادي' },
+  compact_suv: { en: 'Compact SUVs & Crossovers', ar: 'كروس أوفر مدمج' },
+  midsize_suv: { en: 'Midsize & Family SUVs', ar: 'SUV عائلي ومتوسط' },
+  business_sedan: { en: 'Business & Midsize Sedans', ar: 'سيدان أعمال' },
+  family_van: { en: 'Family Vans & MPVs', ar: 'فان وعائلية' },
   supercar: { en: 'Supercars', ar: 'سيارات سوبر' },
   ultra_luxury_sedan: { en: 'Ultra-Luxury Sedans', ar: 'سيدان فائقة الفخامة' },
   executive_suv: { en: 'Executive SUVs', ar: 'دفع رباعي تنفيذي' },
@@ -17,6 +23,7 @@ export const WHATSAPP_CATEGORY_LABELS: Record<VehicleCategory, { en: string; ar:
 };
 
 export const ALL_VEHICLE_CATEGORIES: VehicleCategory[] = [
+  'economy_sedan', 'economy_hatchback', 'compact_suv', 'midsize_suv', 'business_sedan', 'family_van',
   'supercar', 'ultra_luxury_sedan', 'executive_suv', 'grand_tourer', 'exotic_convertible'
 ];
 

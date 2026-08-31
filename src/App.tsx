@@ -47,6 +47,10 @@ const MainLayout: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const renderActiveView = () => {
+    // Central access gate -- the Sidebar already hides links this role
+    // can't use, but a view can also be reached other ways (global search,
+    // a dashboard quick-link, stale state after a role change). This is the
+    // one place every path through the app is re-checked.
     if (!canAccessView(currentUser.role, activeView)) {
       return (
         <div className="flex flex-col items-center justify-center text-center py-24 gap-3">

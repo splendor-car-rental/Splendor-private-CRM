@@ -66,8 +66,10 @@ async function recordInboundEvent(eventId: string, data: any) {
 }
 
 export default async function handler(req: any, res: any) {
-  // Keep the Meta verification path dependency-free. Vercel must be able to
-  // execute GET verification without loading Firebase or the CRM conversation engine.
+  // Keep Meta's GET verification dependency-free. This path must not load
+  // Firebase Admin or the CRM conversation engine because Vercel must be
+  // able to answer the Meta handshake even when Firebase credentials are
+  // unavailable or the conversation engine has unrelated dependencies.
   if (req.method === 'GET') {
     const mode = req.query?.['hub.mode'];
     const token = req.query?.['hub.verify_token'];

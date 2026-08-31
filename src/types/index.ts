@@ -39,6 +39,31 @@ export interface BlocklistEntry {
   removedByName?: string;
 }
 
+export interface CorporateAccount {
+  id: string; // CORP-000001
+  legalName: string;
+  legalNameAr?: string;
+  tradeLicenseNumber: string;
+  trnVatNumber?: string;
+  licenseExpiry?: string;
+  branchId: string;
+  primaryContact: {
+    name: string;
+    email: string;
+    phone: string;
+    designation: string;
+  };
+  creditLimitAed: number;
+  usedExposureAed: number;
+  paymentTermsDays: number;
+  activeContractsCount?: number;
+  authorizedDriversCount?: number;
+  status: 'active' | 'under_review' | 'credit_hold';
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Customer {
   id: string; // e.g. CUS-000001
   type: CustomerType;
@@ -180,7 +205,18 @@ export type VehicleStatus = 'available' | 'reserved' | 'rented' | 'maintenance' 
 export type VehicleLifecycleStatus = 'ACTIVE' | 'INACTIVE' | 'SOLD' | 'ARCHIVED' | 'DISPOSED' | 'TRANSFERRED';
 export type VehicleOwnershipSource = 'OWNED' | 'LEASED' | 'PARTNER' | 'EXTERNAL' | 'CONSIGNMENT' | 'OTHER';
 export type WebsiteVisibility = 'INTERNAL_ONLY' | 'WEBSITE' | 'FEATURED' | 'PRIVATE';
-export type VehicleCategory = 'supercar' | 'ultra_luxury_sedan' | 'executive_suv' | 'grand_tourer' | 'exotic_convertible';
+export type VehicleCategory = 
+  | 'supercar' 
+  | 'ultra_luxury_sedan' 
+  | 'executive_suv' 
+  | 'grand_tourer' 
+  | 'exotic_convertible'
+  | 'economy_sedan'
+  | 'economy_hatchback'
+  | 'compact_suv'
+  | 'midsize_suv'
+  | 'business_sedan'
+  | 'family_van';
 
 export interface PlateAssignmentHistory {
   id: string; // PLT-0001
@@ -961,6 +997,50 @@ export interface Contract {
   /** Absent/undefined = an ordinary rental contract (every contract created before this field existed, and every one created by the rental flow going forward). Only 'lease_to_own' contracts carry an `lto` block -- this is a pure addition, never a change to how rental contracts are read or written. */
   contractType?: 'rental' | 'lease_to_own';
   lto?: LtoContractDetails;
+
+  /** Historical list of formal contract extension addendums */
+  extensions?: ContractExtensionAddendum[];
+}
+
+export interface ContractExtensionAddendum {
+  id: string; // EXT-0001
+  addendumNumber: string; // EXT-2026-0001
+  contractId: string;
+  contractNumber: string;
+  issueDate: string; // YYYY-MM-DD
+  
+  // Parties & Asset Information
+  customerName: string;
+  customerPhone?: string;
+  plateNumber: string;
+  vehicleName: string;
+  
+  // Extension Details
+  currentEndDateTime: string; // ISO date/time
+  newEndDateTime: string; // ISO date/time
+  extensionDurationDays: number;
+  currentOdometerKm: number;
+  dailyRate: number;
+  periodRentalAmount: number; // Subtotal before tax
+  vatRatePercent: number; // default 5%
+  vatAmount: number; // 5% VAT
+  totalExtensionAmount: number; // Subtotal + VAT
+  paymentMethod: 'credit_card' | 'bank_transfer' | 'cash' | 'crypto' | 'cheque' | 'pos_terminal' | 'other';
+  paymentMethodLabel?: string;
+  
+  // Legal & Banking Disclaimers
+  bankDetails: {
+    bankName: string;
+    accountNumber: string;
+    iban: string;
+  };
+  
+  // Metadata & Audit
+  notes?: string;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ----------------------------------------------------
@@ -2593,3 +2673,4 @@ export interface LateFeeWaiver {
   waivedByName: string;
   waivedAt: string;
 }
+
