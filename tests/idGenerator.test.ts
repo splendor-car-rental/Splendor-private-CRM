@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('firebase-admin', () => {
   const store = new Map<string, any>();
@@ -6,6 +6,7 @@ vi.mock('firebase-admin', () => {
   const db: any = {
     collection: (name: string) => ({
       doc: (id: string) => ({
+        id,
         get: async () => {
           const data = store.get(`${name}/${id}`);
           return { exists: data !== undefined, data: () => data };
@@ -26,6 +27,12 @@ vi.mock('firebase-admin', () => {
 });
 
 describe('durable ID generation', () => {
+  beforeEach(async () => {
+    const { resetNumbering } = await import('../src/server/idGenerator');
+    await resetNumbering('FailedJob');
+    await resetNumbering('Customer');
+  });
+
   it('uses a distinct FailedJob numbering namespace', async () => {
     const { issueNextNumber } = await import('../src/server/idGenerator');
     expect(await issueNextNumber('FailedJob')).toBe('FAI-000001');
