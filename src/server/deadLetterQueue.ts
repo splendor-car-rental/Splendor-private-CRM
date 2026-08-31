@@ -28,7 +28,10 @@ export function getDeadLetterCache(): FailedJob[] {
 }
 
 function isAlreadyExistsError(error: unknown): boolean {
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
+  const candidate = error as {
+    code?: unknown;
+    cause?: { code?: unknown; message?: unknown };
+  } | undefined;
   return candidate?.code === 6 || candidate?.cause?.code === 6 || candidate?.cause?.message === 'ALREADY_EXISTS';
 }
 
