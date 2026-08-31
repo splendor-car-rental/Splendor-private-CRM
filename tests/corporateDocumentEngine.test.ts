@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { applyCorporateStamp } from '../src/server/corporateDocumentStamp';
 import { buildCorporateDocumentHtml, getCorporateDocumentMeta } from '../src/server/corporateDocumentEngine';
 
 describe('corporate document engine', () => {
@@ -20,5 +21,17 @@ describe('corporate document engine', () => {
     expect(html).toContain('Body content only.');
     expect(html).not.toContain('SPLENDOR CAR RENTAL');
     expect(html).not.toContain('Prestige Beyond Limits');
+  });
+
+  it('places the approved red stamp at the existing company signature anchor', () => {
+    const stamped = applyCorporateStamp('<div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div>');
+    expect(stamped).toContain('corporate-stamp-anchor');
+    expect(stamped).toContain('data:image/svg+xml;base64,');
+    expect(stamped).not.toContain('____________________');
+  });
+
+  it('adds one controlled approval stamp for documents without a signature anchor', () => {
+    const stamped = applyCorporateStamp('<h1>كشف حساب</h1>');
+    expect(stamped.match(/corporate-stamp-anchor/g)?.length).toBe(1);
   });
 });
