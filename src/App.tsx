@@ -7,6 +7,7 @@ import { canAccessView } from './config/permissions';
 
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
+import { PWAInstallBanner } from './components/pwa/PWAInstallBanner';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
@@ -31,6 +32,7 @@ import { SecurityBlocklistView } from './components/views/SecurityBlocklistView'
 import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
 import { WhatsAppInboxView } from './components/views/WhatsAppInboxView';
 import { LeaseToOwnView } from './components/views/LeaseToOwnView';
+import { CorporateDocumentsView } from './components/views/CorporateDocumentsView';
 import { VipTierManagementView } from './components/views/VipTierManagementView';
 import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiView';
 import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
@@ -47,8 +49,8 @@ const MainLayout: React.FC = () => {
   const renderActiveView = () => {
     // Central access gate -- the Sidebar already hides links this role
     // can't use, but a view can also be reached other ways (global search,
-    // a dashboard quick-link, stale state after a role change). This is
-    // the one place every path through the app is re-checked.
+    // a dashboard quick-link, stale state after a role change). This is the
+    // one place every path through the app is re-checked.
     if (!canAccessView(currentUser.role, activeView)) {
       return (
         <div className="flex flex-col items-center justify-center text-center py-24 gap-3">
@@ -66,89 +68,55 @@ const MainLayout: React.FC = () => {
     }
 
     switch (activeView) {
-      case 'dashboard':
-        return <DashboardView />;
-      case 'customers':
-        return <Customer360View />;
-      case 'leads':
-        return <LeadsPipelineView />;
-      case 'fleet':
-        return <FleetCRMView />;
-      case 'quotations':
-        return <QuotationsView />;
-      case 'reservations':
-        return <ReservationsView />;
-      case 'contracts':
-        return <ContractsOpsView />;
-      case 'finance':
-        return <FinanceLedgerView />;
+      case 'dashboard': return <DashboardView />;
+      case 'customers': return <Customer360View />;
+      case 'leads': return <LeadsPipelineView />;
+      case 'fleet': return <FleetCRMView />;
+      case 'quotations': return <QuotationsView />;
+      case 'reservations': return <ReservationsView />;
+      case 'contracts': return <ContractsOpsView />;
+      case 'finance': return <FinanceLedgerView />;
       case 'reconciliation':
-      case 'bank-reconciliation':
-        return <BankReconciliationView />;
-      case 'tolls':
-        return <TollsParkingView />;
-      case 'notification-center':
-        return <NotificationWhatsAppCenterView />;
-      case 'tasks':
-        return <TasksFollowupsView />;
-      case 'procurement':
-        return <ProcurementView />;
+      case 'bank-reconciliation': return <BankReconciliationView />;
+      case 'tolls': return <TollsParkingView />;
+      case 'notification-center': return <NotificationWhatsAppCenterView />;
+      case 'tasks': return <TasksFollowupsView />;
+      case 'procurement': return <ProcurementView />;
       case 'purchase-orders':
       case 'lpo':
-      case 'supply-orders':
-        return <PurchaseOrdersManagementView />;
-      case 'security':
-        return <SecurityBlocklistView />;
-      case 'inspections':
-        return <VehicleInspectionsView />;
-      case 'lease-to-own':
-        return <LeaseToOwnView />;
-      case 'vip-tiers':
-        return <VipTierManagementView />;
+      case 'supply-orders': return <PurchaseOrdersManagementView />;
+      case 'security': return <SecurityBlocklistView />;
+      case 'inspections': return <VehicleInspectionsView />;
+      case 'lease-to-own': return <LeaseToOwnView />;
+      case 'vip-tiers': return <VipTierManagementView />;
       case 'fleet-acquisition-roi':
-      case 'roi-simulator':
-        return <FleetAcquisitionRoiView />;
+      case 'roi-simulator': return <FleetAcquisitionRoiView />;
       case 'live-radar':
-      case 'telematics-radar':
-        return <LiveFleetTelematicsMapView />;
+      case 'telematics-radar': return <LiveFleetTelematicsMapView />;
       case 'operations-control-room':
-      case 'control-room':
-        return <OperationsControlRoomView />;
+      case 'control-room': return <OperationsControlRoomView />;
       case 'corporate-branches':
-      case 'corporate-portal':
-        return <CorporateBranchPortalView />;
-      case 'whatsapp-inbox':
-        return <WhatsAppInboxView />;
+      case 'corporate-portal': return <CorporateBranchPortalView />;
+      case 'whatsapp-inbox': return <WhatsAppInboxView />;
+      case 'corporate-documents': return <CorporateDocumentsView />;
       case 'ai-studio':
-      case 'ai-intelligence':
-        return <AIStudioView />;
+      case 'ai-intelligence': return <AIStudioView />;
       case 'test-suite':
-      case 'tests':
-        return <TestSuiteRunnerView />;
-      case 'settings':
-        return <SettingsAuditView />;
-      default:
-        return <DashboardView />;
+      case 'tests': return <TestSuiteRunnerView />;
+      case 'settings': return <SettingsAuditView />;
+      default: return <DashboardView />;
     }
   };
 
   return (
     <div className={`min-h-screen bg-zinc-950 text-zinc-100 flex font-sans ${language === 'ar' ? 'font-arabic' : ''}`}>
-      {/* Toast Notifications */}
       <ToastContainer />
-
-      {/* Main Sidebar */}
       <Sidebar isMobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
 
-      {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
-        {/* Top Header with Language Switcher and Action Modals */}
+        <PWAInstallBanner />
         <Header onMenuClick={() => setMobileSidebarOpen(true)} />
 
-        {/* View Container -- fills the full remaining width next to the
-            sidebar. Previously capped at max-w-7xl (1280px) and centered,
-            which left large empty margins on wide desktop monitors and
-            made the app look "cut off" instead of using the whole screen. */}
         <main className="flex-1 w-full p-4 sm:p-6 lg:p-8">
           <ErrorBoundary key={activeView}>
             {renderActiveView()}
