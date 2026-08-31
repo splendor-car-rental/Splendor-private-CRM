@@ -77,14 +77,14 @@ export default async function handler(req: any, res: any) {
     if (mode === 'subscribe' && expected && token === expected) {
       return res.status(200).send(String(challenge ?? ''));
     }
-    return res.sendStatus(403);
+    return res.status(403).end();
   }
 
-  if (req.method !== 'POST') return res.sendStatus(405);
+  if (req.method !== 'POST') return res.status(405).end();
 
   const rawBody = await readRawBody(req);
   if (!verifySignature(rawBody, req.headers['x-hub-signature-256'])) {
-    return res.sendStatus(403);
+    return res.status(403).end();
   }
 
   let payload: any;
@@ -94,7 +94,7 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Invalid JSON payload.' });
   }
 
-  if (payload?.object !== 'whatsapp_business_account') return res.sendStatus(404);
+  if (payload?.object !== 'whatsapp_business_account') return res.status(404).end();
   if (!(await initFirebase())) return res.status(503).json({ error: 'Webhook storage is not configured.' });
 
   const { processInboundWhatsAppMessage } = await import('../src/server/whatsappConversation.ts');
@@ -131,5 +131,5 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  return res.sendStatus(200);
+  return res.status(200).end();
 }
