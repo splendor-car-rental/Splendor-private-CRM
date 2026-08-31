@@ -1,12 +1,15 @@
 import crypto from 'crypto';
-import admin from 'firebase-admin';
-import { processInboundWhatsAppMessage } from '../src/server/whatsappConversation.ts';
 
-function initFirebase() {
-  if (admin.apps.length > 0) return true;
+let admin: any = null;
+
+async function initFirebase(): Promise<boolean> {
+  if (admin?.apps?.length > 0) return true;
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (!raw) return false;
   try {
+    const mod = await import('firebase-admin');
+    admin = mod.default;
+    if (admin.apps.length > 0) return true;
     const serviceAccount = JSON.parse(raw);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
@@ -42,7 +45,7 @@ function verifySignature(rawBody: Buffer, header: unknown): boolean {
 }
 
 async function recordAudit(entry: any) {
-  if (!initFirebase()) return;
+  if (!(await initFirebase())) return;
   const id = `WA-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   await admin.firestore().collection('audit_logs').doc(id).set({
     ...entry,
@@ -52,7 +55,7 @@ async function recordAudit(entry: any) {
 }
 
 async function recordInboundEvent(eventId: string, data: any) {
-  if (!initFirebase()) throw new Error('Firebase is not configured.');
+  if (!(await initFirebase())) throw new Error('Firebase is not configured.');
   const ref = admin.firestore().collection('whatsapp_inbound_events').doc(eventId);
   const snap = await ref.get();
   if (!snap.exists) {
@@ -63,6 +66,8 @@ async function recordInboundEvent(eventId: string, data: any) {
 }
 
 export default async function handler(req: any, res: any) {
+  // Keep the Meta verification path dependency-free. Vercel must be able to
+  // execute GET verification without loading Firebase or the CRM conversation engine.
   if (req.method === 'GET') {
     const mode = req.query?.['hub.mode'];
     const token = req.query?.['hub.verify_token'];
@@ -90,8 +95,9 @@ export default async function handler(req: any, res: any) {
   }
 
   if (payload?.object !== 'whatsapp_business_account') return res.sendStatus(404);
-  if (!initFirebase()) return res.status(503).json({ error: 'Webhook storage is not configured.' });
+  if (!(await initFirebase())) return res.status(503).json({ error: 'Webhook storage is not configured.' });
 
+  const { processInboundWhatsAppMessage } = await import('../src/server/whatsappConversation.ts');
   const now = new Date().toISOString();
   const messages = (payload.entry || []).flatMap((entry: any) =>
     (entry.changes || []).flatMap((change: any) => change.value?.messages || [])
