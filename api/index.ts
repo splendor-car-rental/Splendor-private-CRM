@@ -1,6 +1,10 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
-import app from '../server.js';
+// Vercel must bundle the TypeScript source so the Express app is available
+// inside the serverless function instead of relying on a runtime /server.js
+// file that is not deployed next to this entrypoint.
+// @ts-ignore TS5097 -- intentional Vercel bundling entrypoint.
+import app from '../server.ts';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
 
 async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
