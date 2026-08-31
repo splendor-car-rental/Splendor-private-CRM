@@ -1,0 +1,81 @@
+/* Splendor OS 3.0 — Premium Sapphire interaction layer.
+   Black remains the dominant surface; sapphire is a controlled executive accent. */
+
+:root {
+  --splendor-sapphire: #00AEEF;
+  --splendor-sapphire-rgb: 0, 174, 239;
+  --splendor-sapphire-soft: rgba(var(--splendor-sapphire-rgb), 0.12);
+  --splendor-sapphire-hover: rgba(var(--splendor-sapphire-rgb), 0.055);
+  --splendor-sapphire-border: rgba(var(--splendor-sapphire-rgb), 0.28);
+  --splendor-sapphire-focus: rgba(var(--splendor-sapphire-rgb), 0.34);
+  --splendor-sapphire-glow: rgba(var(--splendor-sapphire-rgb), 0.16);
+}
+
+/* Global interaction language */
+button:hover:not(:disabled),
+a:hover,
+[role="button"]:hover {
+  --sapphire-interaction: var(--splendor-sapphire);
+}
+
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 1px solid var(--splendor-sapphire-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
+}
+
+/* Sidebar — blue signal on active state, blue-tinted hover, black luxury base. */
+aside button[class*="bg-[#D4AF37]/10"] {
+  background: var(--splendor-sapphire-soft) !important;
+  color: #7dd3fc !important;
+  border-color: var(--splendor-sapphire-border) !important;
+  box-shadow: 0 0 20px -11px var(--splendor-sapphire-glow) !important;
+}
+
+aside button[class*="bg-[#D4AF37]/10"] span[class*="text-[#D4AF37]"] {
+  color: var(--splendor-sapphire) !important;
+}
+
+aside button:not([class*="bg-[#D4AF37]/10"]):hover:not(:disabled) {
+  background: var(--splendor-sapphire-hover) !important;
+  border-color: rgba(var(--splendor-sapphire-rgb), 0.12) !important;
+  color: #e0f2fe !important;
+}
+
+aside button:not([class*="bg-[#D4AF37]/10"]):hover:not(:disabled) span {
+  color: #7dd3fc;
+}
+
+/* Shared CRM cards/tables */
+.luxury-card-hover:hover {
+  border-color: var(--splendor-sapphire-border) !important;
+  box-shadow: 0 14px 35px -10px rgba(0, 0, 0, 0.65), 0 0 18px -6px var(--splendor-sapphire-glow) !important;
+}
+
+.table-row-hover:hover {
+  background-color: rgba(var(--splendor-sapphire-rgb), 0.045) !important;
+}
+
+/* Explicit reusable classes for future UI additions. */
+.splendor-sapphire-active {
+  color: #7dd3fc !important;
+  background: var(--splendor-sapphire-soft) !important;
+  border-color: var(--splendor-sapphire-border) !important;
+  box-shadow: 0 0 18px -10px var(--splendor-sapphire-glow);
+}
+
+.splendor-sapphire-hover:hover {
+  color: #e0f2fe !important;
+  background: var(--splendor-sapphire-hover) !important;
+  border-color: var(--splendor-sapphire-border) !important;
+}
+
+.splendor-sapphire-accent { color: var(--splendor-sapphire) !important; }
+.splendor-sapphire-border { border-color: var(--splendor-sapphire-border) !important; }
+.splendor-sapphire-surface { background: var(--splendor-sapphire-soft) !important; }
+.splendor-sapphire-glow { box-shadow: 0 0 18px -8px var(--splendor-sapphire-glow) !important; }
