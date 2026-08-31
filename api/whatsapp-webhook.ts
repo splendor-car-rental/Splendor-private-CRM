@@ -1,12 +1,15 @@
 import crypto from 'crypto';
-import admin from 'firebase-admin';
-import { processInboundWhatsAppMessage } from '../src/server/whatsappConversation.js';
 
-function initFirebase() {
-  if (admin.apps.length > 0) return true;
+let admin: any = null;
+
+async function initFirebase(): Promise<boolean> {
+  if (admin?.apps?.length > 0) return true;
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (!raw) return false;
   try {
+    const mod = await import('firebase-admin');
+    admin = mod.default;
+    if (admin.apps.length > 0) return true;
     const serviceAccount = JSON.parse(raw);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
@@ -42,7 +45,7 @@ function verifySignature(rawBody: Buffer, header: unknown): boolean {
 }
 
 async function recordAudit(entry: any) {
-  if (!initFirebase()) return;
+  if (!(await initFirebase())) return;
   const id = `WA-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   await admin.firestore().collection('audit_logs').doc(id).set({
     ...entry,
@@ -52,7 +55,7 @@ async function recordAudit(entry: any) {
 }
 
 async function recordInboundEvent(eventId: string, data: any) {
-  if (!initFirebase()) throw new Error('Firebase is not configured.');
+  if (!(await initFirebase())) throw new Error('Firebase is not configured.');
   const ref = admin.firestore().collection('whatsapp_inbound_events').doc(eventId);
   const snap = await ref.get();
   if (!snap.exists) {
@@ -63,6 +66,10 @@ async function recordInboundEvent(eventId: string, data: any) {
 }
 
 export default async function handler(req: any, res: any) {
+  // Keep Meta's GET verification dependency-free. This path must not load
+  // Firebase Admin or the CRM conversation engine because Vercel must be
+  // able to answer the Meta handshake even when Firebase credentials are
+  // unavailable or the conversation engine has unrelated dependencies.
   if (req.method === 'GET') {
     const mode = req.query?.['hub.mode'];
     const token = req.query?.['hub.verify_token'];
@@ -72,14 +79,14 @@ export default async function handler(req: any, res: any) {
     if (mode === 'subscribe' && expected && token === expected) {
       return res.status(200).send(String(challenge ?? ''));
     }
-    return res.sendStatus(403);
+    return res.status(403).end();
   }
 
-  if (req.method !== 'POST') return res.sendStatus(405);
+  if (req.method !== 'POST') return res.status(405).end();
 
   const rawBody = await readRawBody(req);
   if (!verifySignature(rawBody, req.headers['x-hub-signature-256'])) {
-    return res.sendStatus(403);
+    return res.status(403).end();
   }
 
   let payload: any;
@@ -89,9 +96,10 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Invalid JSON payload.' });
   }
 
-  if (payload?.object !== 'whatsapp_business_account') return res.sendStatus(404);
-  if (!initFirebase()) return res.status(503).json({ error: 'Webhook storage is not configured.' });
+  if (payload?.object !== 'whatsapp_business_account') return res.status(404).end();
+  if (!(await initFirebase())) return res.status(503).json({ error: 'Webhook storage is not configured.' });
 
+  const { processInboundWhatsAppMessage } = await import('../src/server/whatsappConversation.ts');
   const now = new Date().toISOString();
   const messages = (payload.entry || []).flatMap((entry: any) =>
     (entry.changes || []).flatMap((change: any) => change.value?.messages || [])
@@ -125,5 +133,5 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  return res.sendStatus(200);
+  return res.status(200).end();
 }
