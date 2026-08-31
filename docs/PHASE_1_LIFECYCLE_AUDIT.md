@@ -33,6 +33,20 @@ Direct contract creation increments `totalRentals`, while handover increments it
 
 Return currently moves a contract to `completed` while additional charges are recorded. The master lifecycle continues conceptually through final invoicing, deposit settlement, and closure. Existing financial entities should be reconciled into one authoritative closure state/flow without inventing accounting rules. This is tracked in Issue #36.
 
+## Design System — Electric Sapphire
+
+The approved luxury accent is **Electric Sapphire `#00AEEF`**. It is deliberately restrained: thin borders, active/selected states, focus indicators, small status/progress cues, and subtle local glow only. Black and neutral tones remain dominant. It must not become a broad page, navigation, or card background.
+
+Central reusable tokens live in `src/index.css`:
+
+- `--splendor-sapphire`
+- `--splendor-sapphire-soft`
+- `--splendor-sapphire-border`
+- `--splendor-sapphire-glow`
+- `--splendor-sapphire-focus`
+
+This prevents arbitrary blues from appearing across future screens and keeps the premium visual language calibrated.
+
 ## Safety Constraints
 
 - No production `main` changes.
