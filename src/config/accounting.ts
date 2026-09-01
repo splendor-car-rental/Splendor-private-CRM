@@ -19,7 +19,8 @@ export const DEFAULT_CHART_OF_ACCOUNTS: AccountingAccount[] = [
   { code: '2100', name: 'Customer Security Deposits Held', nameAr: 'تأمينات العملاء المحتجزة', accountClass: 'liability', normalSide: 'credit', active: true, system: true, allowDirectPosting: false },
   { code: '2200', name: 'VAT Output / Payable', nameAr: 'ضريبة مخرجات مستحقة', accountClass: 'liability', normalSide: 'credit', active: true, system: true, allowDirectPosting: false },
   { code: '2300', name: 'Vehicle Finance / Loans', nameAr: 'تمويل المركبات والقروض', accountClass: 'liability', normalSide: 'credit', active: true, system: true, allowDirectPosting: true },
-  { code: '2400', name: 'Accrued Expenses', nameAr: 'مصروفات مستحقة', accountClass: 'liability', normalSide: 'credit', active: true, system: true, allowDirectPosting: true },
+  { code: '2400', name: 'Customer Credits / Unallocated Receipts', nameAr: 'أرصدة العملاء والدفعات غير المخصصة', accountClass: 'liability', normalSide: 'credit', active: true, system: true, allowDirectPosting: false },
+  { code: '2410', name: 'Accrued Expenses', nameAr: 'مصروفات مستحقة', accountClass: 'liability', normalSide: 'credit', active: true, system: true, allowDirectPosting: true },
 
   { code: '3000', name: 'Owner Equity', nameAr: 'حقوق الملكية', accountClass: 'equity', normalSide: 'credit', active: true, system: true, allowDirectPosting: true },
   { code: '3100', name: 'Retained Earnings', nameAr: 'الأرباح المحتجزة', accountClass: 'equity', normalSide: 'credit', active: true, system: true, allowDirectPosting: false },
@@ -76,6 +77,8 @@ export const ACCOUNTING_CONTROL_ACCOUNTS = {
   accountsPayable: '2000',
   customerDepositsHeld: '2100',
   vatOutput: '2200',
+  customerCredits: '2400',
+  accruedExpenses: '2410',
   rentalRevenue: '4000'
 } as const;
 
