@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { translations } from '../i18n/translations';
+import { translateArabicUiText } from '../i18n/arabicInterface';
 import { Language } from '../types';
 
 interface LanguageContextType {
@@ -30,7 +31,8 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const t = (key: keyof typeof translations.en): string => {
     const dict = translations[language] || translations.en;
-    return (dict as any)[key] || translations.en[key] || String(key);
+    const value = (dict as any)[key] || translations.en[key] || String(key);
+    return language === 'ar' ? translateArabicUiText(String(value), 'aggressive') : String(value);
   };
 
   return (
