@@ -28,11 +28,11 @@ import {
   postDepositToAccounting,
   postInvoiceToAccounting,
   postPaymentToAccounting,
-  recordSafeCustomerPayment,
   requestManualJournal,
   reverseJournal,
   type AccountingActor
 } from './accounting';
+import { recordAtomicAccountingPayment } from './safeAccountingPayment';
 import { recordAccountingAudit } from './accountingAudit';
 import { dispatchCustomerNotification, dispatchNotificationEvent } from './notificationEngine';
 import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
@@ -47,7 +47,7 @@ function badRequest(res: Response, error: unknown) {
   const lower = message.toLowerCase();
   const status = lower.includes('not found') ? 404
     : lower.includes('permission') || lower.includes('segregation of duties') ? 403
-      : lower.includes('closed') || lower.includes('duplicate') || lower.includes('already') ? 409
+      : lower.includes('closed') || lower.includes('duplicate') || lower.includes('already') || lower.includes('idempotency-key') ? 409
         : 400;
   return res.status(status).json({ error: message });
 }
@@ -110,7 +110,6 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
         }, actor, recordAccountingAudit));
       }
       if (req.method === 'POST' && id === 'manual' && action) {
-        // /journals/manual/:requestId/decision -- requestId is segment[2].
         const requestId = action;
         if (segments[3] !== 'decision') return res.status(404).json({ error: 'Accounting route not found.' });
         const decision = req.body?.decision;
@@ -289,32 +288,37 @@ export async function handleSafeCustomerPaymentRequest(req: Request, res: Respon
       settlementAccountCode,
       proofDocumentId: body.proofDocumentId
     };
-    const result = await recordSafeCustomerPayment(input, actor, recordAccountingAudit);
+    const headerValue = req.headers['idempotency-key'];
+    const idempotencyKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    const outcome = await recordAtomicAccountingPayment(input, actor, idempotencyKey, recordAccountingAudit);
+    const result = outcome.result;
 
-    // Preserve the existing receipt/notification behavior even though the
-    // write path is now the safer accounting-aware payment boundary.
-    try {
-      const customerSnap = await admin.firestore().collection('customers').doc(input.customerId).get();
-      const customer = customerSnap.exists ? customerSnap.data() as any : null;
-      const customerName = input.customerName || customer?.fullName || input.customerId;
-      await dispatchNotificationEvent(
-        'payment_received',
-        `Payment of ${result.amount.toLocaleString()} AED received from ${customerName} (${method}). Receipt ${result.receiptNumber}.`,
-        `تم استلام دفعة بقيمة ${result.amount.toLocaleString()} درهم من ${customerName}. إيصال ${result.receiptNumber}.`
-      );
-      await dispatchCustomerNotification(
-        'customer_payment_receipt',
-        input.customerId,
-        customerName,
-        customer?.phone,
-        `Payment received — ${result.amount.toLocaleString()} AED. Receipt No. ${result.receiptNumber}. Thank you.`,
-        `تم استلام دفعتكم بقيمة ${result.amount.toLocaleString()} درهم. رقم الإيصال ${result.receiptNumber}. شكراً لكم.`
-      );
-    } catch (notificationError) {
-      console.error('[accounting] payment notification dispatch failed after durable receipt:', notificationError);
+    // Notifications are side effects, not part of the financial commit. An
+    // idempotent replay must not send a second receipt/WhatsApp message.
+    if (!outcome.replayed) {
+      try {
+        const customerSnap = await admin.firestore().collection('customers').doc(input.customerId).get();
+        const customer = customerSnap.exists ? customerSnap.data() as any : null;
+        const customerName = input.customerName || customer?.fullName || input.customerId;
+        await dispatchNotificationEvent(
+          'payment_received',
+          `Payment of ${result.amount.toLocaleString()} AED received from ${customerName} (${method}). Receipt ${result.receiptNumber}.`,
+          `تم استلام دفعة بقيمة ${result.amount.toLocaleString()} درهم من ${customerName}. إيصال ${result.receiptNumber}.`
+        );
+        await dispatchCustomerNotification(
+          'customer_payment_receipt',
+          input.customerId,
+          customerName,
+          customer?.phone,
+          `Payment received — ${result.amount.toLocaleString()} AED. Receipt No. ${result.receiptNumber}. Thank you.`,
+          `تم استلام دفعتكم بقيمة ${result.amount.toLocaleString()} درهم. رقم الإيصال ${result.receiptNumber}. شكراً لكم.`
+        );
+      } catch (notificationError) {
+        console.error('[accounting] payment notification dispatch failed after durable receipt:', notificationError);
+      }
     }
 
-    return res.status(201).json(result);
+    return res.status(outcome.replayed ? 200 : 201).json(result);
   } catch (error) {
     return badRequest(res, error);
   }
