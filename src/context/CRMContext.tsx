@@ -13,6 +13,7 @@ import {
 import { FirestoreService, COLLECTIONS } from '../firebase/firestoreService';
 import { testFirebaseConnection, firebaseConfig } from '../firebase/config';
 import { apiFetch as fetch } from '../lib/apiFetch';
+import { fetchInitialDataset } from '../lib/fetchInitialDataset';
 import { useAuth } from './AuthContext';
 
 // Every mutation below sends its own request and reads the response itself
@@ -309,68 +310,68 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tollRes, tollBatchRes, tollPricingRes,
         notifCfgRes, remindersRes, waLogRes, waStatusRes, custNotifCfgRes, corpRes
       ] = await Promise.all([
-        fetch('/api/customers').then(r => r.json()).catch(() => []),
-        fetch('/api/leads').then(r => r.json()).catch(() => []),
-        fetch('/api/opportunities').then(r => r.json()).catch(() => []),
-        fetch('/api/fleet').then(r => r.json()).catch(() => []),
-        fetch('/api/quotations').then(r => r.json()).catch(() => []),
-        fetch('/api/reservations').then(r => r.json()).catch(() => []),
-        fetch('/api/contracts').then(r => r.json()).catch(() => []),
-        fetch('/api/charges').then(r => r.json()).catch(() => []),
-        fetch('/api/deposits').then(r => r.json()).catch(() => []),
-        fetch('/api/payments').then(r => r.json()).catch(() => []),
-        fetch('/api/invoices').then(r => r.json()).catch(() => []),
-        fetch('/api/bank-batches').then(r => r.json()).catch(() => []),
-        fetch('/api/bank-transactions').then(r => r.json()).catch(() => []),
-        fetch('/api/company-bank-accounts').then(r => r.json()).catch(() => []),
-        fetch('/api/tasks').then(r => r.json()).catch(() => []),
-        fetch('/api/communications').then(r => r.json()).catch(() => []),
-        fetch('/api/documents').then(r => r.json()).catch(() => []),
-        fetch('/api/audit-logs').then(r => r.json()).catch(() => []),
-        fetch('/api/settings/custom-fields').then(r => r.json()).catch(() => []),
-        fetch('/api/settings/numbering').then(r => r.json()).catch(() => []),
-        fetch('/api/notifications').then(r => r.json()).catch(() => []),
-        fetch('/api/tolls').then(r => r.json()).catch(() => []),
-        fetch('/api/toll-batches').then(r => r.json()).catch(() => []),
-        fetch('/api/toll-pricing-config').then(r => r.json()).catch(() => null),
-        fetch('/api/notification-configs').then(r => r.json()).catch(() => []),
-        fetch('/api/custom-reminders').then(r => r.json()).catch(() => []),
-        fetch('/api/whatsapp/message-log').then(r => r.json()).catch(() => []),
-        fetch('/api/whatsapp/status').then(r => r.json()).catch(() => ({ configured: false, groupRecipientCount: 0 })),
-        fetch('/api/customer-notification-configs').then(r => r.json()).catch(() => []),
-        fetch('/api/corporate-accounts').then(r => r.json()).catch(() => [])
+        fetchInitialDataset<Customer[]>('/api/customers'),
+        fetchInitialDataset<Lead[]>('/api/leads'),
+        fetchInitialDataset<Opportunity[]>('/api/opportunities'),
+        fetchInitialDataset<Vehicle[]>('/api/fleet'),
+        fetchInitialDataset<Quotation[]>('/api/quotations'),
+        fetchInitialDataset<Reservation[]>('/api/reservations'),
+        fetchInitialDataset<Contract[]>('/api/contracts'),
+        fetchInitialDataset<AdditionalCharge[]>('/api/charges'),
+        fetchInitialDataset<Deposit[]>('/api/deposits'),
+        fetchInitialDataset<Payment[]>('/api/payments'),
+        fetchInitialDataset<Invoice[]>('/api/invoices'),
+        fetchInitialDataset<BankImportBatch[]>('/api/bank-batches'),
+        fetchInitialDataset<BankTransaction[]>('/api/bank-transactions'),
+        fetchInitialDataset<CompanyBankAccount[]>('/api/company-bank-accounts'),
+        fetchInitialDataset<CRMTask[]>('/api/tasks'),
+        fetchInitialDataset<Communication[]>('/api/communications'),
+        fetchInitialDataset<CRMDocument[]>('/api/documents'),
+        fetchInitialDataset<AuditLog[]>('/api/audit-logs'),
+        fetchInitialDataset<CustomFieldDefinition[]>('/api/settings/custom-fields'),
+        fetchInitialDataset<NumberingConfig[]>('/api/settings/numbering'),
+        fetchInitialDataset<NotificationItem[]>('/api/notifications'),
+        fetchInitialDataset<TollTransaction[]>('/api/tolls'),
+        fetchInitialDataset<TollImportBatch[]>('/api/toll-batches'),
+        fetchInitialDataset<TollPricingConfig>('/api/toll-pricing-config'),
+        fetchInitialDataset<NotificationEventConfig[]>('/api/notification-configs'),
+        fetchInitialDataset<CustomReminder[]>('/api/custom-reminders'),
+        fetchInitialDataset<WhatsAppMessageLogEntry[]>('/api/whatsapp/message-log'),
+        fetchInitialDataset<{ configured: boolean; groupRecipientCount: number }>('/api/whatsapp/status'),
+        fetchInitialDataset<CustomerNotificationConfig[]>('/api/customer-notification-configs'),
+        fetchInitialDataset<CorporateAccount[]>('/api/corporate-accounts')
       ]);
 
-      setCustomers(Array.isArray(custRes) ? custRes : []);
-      setLeads(Array.isArray(leadRes) ? leadRes : []);
-      setOpportunities(Array.isArray(oppRes) ? oppRes : []);
-      setVehicles(Array.isArray(vehRes) ? vehRes : []);
-      setQuotations(Array.isArray(quoteRes) ? quoteRes : []);
-      setReservations(Array.isArray(resRes) ? resRes : []);
-      setContracts(Array.isArray(conRes) ? conRes : []);
-      setCharges(Array.isArray(chgRes) ? chgRes : []);
-      setDeposits(Array.isArray(depRes) ? depRes : []);
-      setPayments(Array.isArray(payRes) ? payRes : []);
-      setInvoices(Array.isArray(invRes) ? invRes : []);
-      setBankBatches(Array.isArray(bBatchRes) ? bBatchRes : []);
-      setBankTransactions(Array.isArray(bTxnRes) ? bTxnRes : []);
-      setCompanyBankAccounts(Array.isArray(bAccRes) ? bAccRes : []);
-      setTasks(Array.isArray(tskRes) ? tskRes : []);
-      setCommunications(Array.isArray(commRes) ? commRes : []);
-      setDocuments(Array.isArray(docRes) ? docRes : []);
-      setAuditLogs(Array.isArray(auditRes) ? auditRes : []);
-      setCustomFields(Array.isArray(cfRes) ? cfRes : []);
-      setNumberingConfigs(Array.isArray(numRes) ? numRes : []);
-      setNotifications(Array.isArray(notifRes) ? notifRes : []);
-      setTollTransactions(Array.isArray(tollRes) ? tollRes : []);
-      setTollImportBatches(Array.isArray(tollBatchRes) ? tollBatchRes : []);
-      setCorporateAccounts(Array.isArray(corpRes) ? corpRes : []);
-      if (tollPricingRes) setTollPricingConfig(tollPricingRes);
-      if (notifCfgRes && notifCfgRes.length > 0) setNotificationEventConfigs(notifCfgRes);
-      if (remindersRes && remindersRes.length > 0) setCustomReminders(remindersRes);
-      if (waLogRes && waLogRes.length > 0) setWhatsappMessageLog(waLogRes);
+      if (Array.isArray(custRes)) setCustomers(custRes);
+      if (Array.isArray(leadRes)) setLeads(leadRes);
+      if (Array.isArray(oppRes)) setOpportunities(oppRes);
+      if (Array.isArray(vehRes)) setVehicles(vehRes);
+      if (Array.isArray(quoteRes)) setQuotations(quoteRes);
+      if (Array.isArray(resRes)) setReservations(resRes);
+      if (Array.isArray(conRes)) setContracts(conRes);
+      if (Array.isArray(chgRes)) setCharges(chgRes);
+      if (Array.isArray(depRes)) setDeposits(depRes);
+      if (Array.isArray(payRes)) setPayments(payRes);
+      if (Array.isArray(invRes)) setInvoices(invRes);
+      if (Array.isArray(bBatchRes)) setBankBatches(bBatchRes);
+      if (Array.isArray(bTxnRes)) setBankTransactions(bTxnRes);
+      if (Array.isArray(bAccRes)) setCompanyBankAccounts(bAccRes);
+      if (Array.isArray(tskRes)) setTasks(tskRes);
+      if (Array.isArray(commRes)) setCommunications(commRes);
+      if (Array.isArray(docRes)) setDocuments(docRes);
+      if (Array.isArray(auditRes)) setAuditLogs(auditRes);
+      if (Array.isArray(cfRes)) setCustomFields(cfRes);
+      if (Array.isArray(numRes)) setNumberingConfigs(numRes);
+      if (Array.isArray(notifRes)) setNotifications(notifRes);
+      if (Array.isArray(tollRes)) setTollTransactions(tollRes);
+      if (Array.isArray(tollBatchRes)) setTollImportBatches(tollBatchRes);
+      if (Array.isArray(corpRes)) setCorporateAccounts(corpRes);
+      if (tollPricingRes !== undefined) setTollPricingConfig(tollPricingRes);
+      if (Array.isArray(notifCfgRes)) setNotificationEventConfigs(notifCfgRes);
+      if (Array.isArray(remindersRes)) setCustomReminders(remindersRes);
+      if (Array.isArray(waLogRes)) setWhatsappMessageLog(waLogRes);
       if (waStatusRes) setWhatsappStatus(waStatusRes);
-      if (custNotifCfgRes && custNotifCfgRes.length > 0) setCustomerNotificationConfigs(custNotifCfgRes);
+      if (Array.isArray(custNotifCfgRes)) setCustomerNotificationConfigs(custNotifCfgRes);
 
       await refreshFirebaseStats();
     } catch (error) {
