@@ -15,6 +15,7 @@ import {
   buildVehicleProfitability,
   validateJournalLines
 } from '../src/lib/accounting';
+import { buildCashFlowReport } from '../src/lib/cashFlow';
 import type { AccountsPayableEntry, JournalEntry } from '../src/accounting/types';
 import type { Invoice } from '../src/types';
 
@@ -130,6 +131,73 @@ describe('financial reporting', () => {
     expect(row?.netProfit).toBe(300);
     expect(row?.roiPercent).toBe(3);
     expect(row?.revenuePerDay).toBe(100);
+  });
+});
+
+describe('cash flow reporting', () => {
+  const cashJournals: JournalEntry[] = [
+    journal({
+      id: 'JRN-OPEN', date: '2026-08-31', periodKey: '2026-08', sourceId: 'OPEN',
+      lines: [
+        { accountCode: '1100', debit: 1000, credit: 0 },
+        { accountCode: '3000', debit: 0, credit: 1000 }
+      ], totalDebit: 1000, totalCredit: 1000
+    }),
+    journal({
+      id: 'JRN-RECEIPT', date: '2026-09-03', sourceId: 'RECEIPT',
+      lines: [
+        { accountCode: '1100', debit: 500, credit: 0 },
+        { accountCode: '4000', debit: 0, credit: 500 }
+      ], totalDebit: 500, totalCredit: 500
+    }),
+    journal({
+      id: 'JRN-FLEET-BUY', date: '2026-09-05', sourceId: 'FLEET-BUY',
+      lines: [
+        { accountCode: '1500', debit: 200, credit: 0 },
+        { accountCode: '1100', debit: 0, credit: 200 }
+      ], totalDebit: 200, totalCredit: 200
+    }),
+    journal({
+      id: 'JRN-LOAN', date: '2026-09-06', sourceId: 'LOAN',
+      lines: [
+        { accountCode: '1100', debit: 300, credit: 0 },
+        { accountCode: '2300', debit: 0, credit: 300 }
+      ], totalDebit: 300, totalCredit: 300
+    }),
+    journal({
+      id: 'JRN-CASH-TRANSFER', date: '2026-09-07', sourceId: 'TRANSFER',
+      lines: [
+        { accountCode: '1000', debit: 100, credit: 0 },
+        { accountCode: '1100', debit: 0, credit: 100 }
+      ], totalDebit: 100, totalCredit: 100
+    })
+  ];
+
+  it('classifies operating, investing and financing cash movement without double-counting transfers', () => {
+    const result = buildCashFlowReport(cashJournals, DEFAULT_CHART_OF_ACCOUNTS, '2026-09-01', '2026-09-30');
+    expect(result.openingCash).toBe(1000);
+    expect(result.operating.net).toBe(500);
+    expect(result.investing.net).toBe(-200);
+    expect(result.financing.net).toBe(300);
+    expect(result.unclassified.net).toBe(0);
+    expect(result.netCashMovement).toBe(600);
+    expect(result.closingCash).toBe(1600);
+  });
+
+  it('puts mixed-class cash journals into unclassified rather than guessing', () => {
+    const result = buildCashFlowReport([
+      journal({
+        id: 'JRN-MIXED', date: '2026-09-09', sourceId: 'MIXED',
+        lines: [
+          { accountCode: '1100', debit: 150, credit: 0 },
+          { accountCode: '4000', debit: 0, credit: 100 },
+          { accountCode: '2300', debit: 0, credit: 50 }
+        ], totalDebit: 150, totalCredit: 150
+      })
+    ], DEFAULT_CHART_OF_ACCOUNTS, '2026-09-01', '2026-09-30');
+    expect(result.unclassified.inflows).toBe(150);
+    expect(result.operating.net).toBe(0);
+    expect(result.financing.net).toBe(0);
   });
 });
 
