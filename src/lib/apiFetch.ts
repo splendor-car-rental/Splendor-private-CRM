@@ -33,11 +33,11 @@ function makeIdempotencyKey(): string {
   return `req-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function attachStableIdempotencyKey(input: RequestInfo | URL, init: RequestInit, headers: Headers): void {
-  if (headers.has('Idempotency-Key')) return;
+function attachStableIdempotencyKey(input: RequestInfo | URL, init: RequestInit, headers: Headers): string | undefined {
+  if (headers.has('Idempotency-Key')) return undefined;
   const method = String(init.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET')).toUpperCase();
   const url = requestUrl(input);
-  if (!isCriticalFinancialWrite(url, method)) return;
+  if (!isCriticalFinancialWrite(url, method)) return undefined;
 
   const now = Date.now();
   for (const [cacheKey, entry] of idempotencyCache) {
@@ -52,6 +52,7 @@ function attachStableIdempotencyKey(input: RequestInfo | URL, init: RequestInit,
     idempotencyCache.set(cacheKey, entry);
   }
   headers.set('Idempotency-Key', entry.key);
+  return cacheKey;
 }
 
 /**
@@ -59,9 +60,11 @@ function attachStableIdempotencyKey(input: RequestInfo | URL, init: RequestInit,
  * `/api/*` backend. Attaches the current Firebase user's ID token as a
  * Bearer Authorization header so the server can verify who is calling it.
  *
- * Critical finance POSTs also receive a short-lived stable Idempotency-Key.
- * Repeating the exact same request after a lost response or double-click
- * reuses the same key, while a changed body naturally gets a new key.
+ * Critical finance POSTs share a short-lived Idempotency-Key only while the
+ * outcome is ambiguous. Concurrent double-clicks and retries after network
+ * errors/5xx reuse the key; once a definitive <500 response is received the
+ * key is released, so a later intentional identical transaction is not
+ * silently mistaken for a retry.
  */
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers || {});
@@ -76,6 +79,14 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     }
   }
 
-  attachStableIdempotencyKey(input, init, headers);
-  return fetch(input, { ...init, headers });
+  const idempotencyCacheKey = attachStableIdempotencyKey(input, init, headers);
+  try {
+    const response = await fetch(input, { ...init, headers });
+    if (idempotencyCacheKey && response.status < 500) idempotencyCache.delete(idempotencyCacheKey);
+    return response;
+  } catch (error) {
+    // Keep the key until its short expiry because the caller cannot know
+    // whether the server committed before the network failed.
+    throw error;
+  }
 }
