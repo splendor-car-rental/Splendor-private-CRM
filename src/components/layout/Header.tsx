@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
-  Search, Bell, Plus, Sparkles, Shield, UserPlus,
-  Car, FileSignature, Landmark, RefreshCw, Globe, ChevronDown,
-  FileText, CalendarCheck, CheckCircle2, Menu
+  Search, Bell, Plus, Sparkles, UserPlus,
+  Car, FileSignature, RefreshCw, Globe, ChevronDown,
+  CheckCircle2, Menu
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
@@ -55,7 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onMenuClick}
             className="md:hidden p-2 -ms-1 rounded-xl text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-colors shrink-0"
-            aria-label="Open menu"
+            aria-label={language === 'ar' ? 'فتح القائمة' : 'Open menu'}
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -80,10 +80,11 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-blue-950/40 border border-blue-900/40 text-[11px] text-blue-300">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            <span className="font-mono text-[10px] uppercase tracking-wider">Splendor OS 2.0 Live</span>
+            <span className="font-mono text-[10px] uppercase tracking-wider">
+              {language === 'ar' ? 'نظام سبلندر 2.0 مباشر' : 'Splendor OS 2.0 Live'}
+            </span>
           </div>
 
-          {/* Desktop language switcher */}
           <div className="hidden sm:flex items-center bg-zinc-900/70 p-0.5 rounded-xl border border-zinc-800">
             <button
               onClick={() => chooseLanguage('ar')}
@@ -96,14 +97,13 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={() => chooseLanguage('en')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${language === 'en' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/35 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
-              title="Switch to English"
-              aria-label="English"
+              title={language === 'ar' ? 'التحويل إلى اللغة الإنجليزية' : 'Switch to English'}
+              aria-label={language === 'ar' ? 'اللغة الإنجليزية' : 'English'}
             >
-              <span>EN</span>
+              <span>{language === 'ar' ? 'الإنجليزية' : 'EN'}</span>
             </button>
           </div>
 
-          {/* Compact mobile language control */}
           <div className="relative sm:hidden">
             <button
               onClick={() => setLanguageMenuOpen(value => !value)}
@@ -126,7 +126,7 @@ export const Header: React.FC<HeaderProps> = ({
                   onClick={() => chooseLanguage('en')}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-colors ${language === 'en' ? 'bg-[#D4AF37]/15 text-[#f5d97f]' : 'text-zinc-300 hover:bg-zinc-900'}`}
                 >
-                  <span>English</span>
+                  <span>{language === 'ar' ? 'الإنجليزية' : 'English'}</span>
                   {language === 'en' && <CheckCircle2 className="w-3.5 h-3.5" />}
                 </button>
               </div>
@@ -163,15 +163,15 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
                 <button onClick={() => setAddVehicleOpen(true)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white hover:bg-zinc-900 text-start transition-all group">
                   <Car className="w-4 h-4 text-emerald-400 group-hover:scale-105 transition-transform" />
-                  <div><div className="font-medium">{language === 'ar' ? 'إضافة سيارة للأسطول' : 'Add Vehicle to Fleet'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'سوبركارز وفحص التوفر' : 'Fleet inventory'}</div></div>
+                  <div><div className="font-medium">{language === 'ar' ? 'إضافة سيارة للأسطول' : 'Add Vehicle to Fleet'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'سجل الأسطول وفحص التوفر' : 'Fleet inventory'}</div></div>
                 </button>
                 <button onClick={() => setAddCustomerOpen(true)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white hover:bg-zinc-900 text-start transition-all group">
                   <UserPlus className="w-4 h-4 text-[#D4AF37] group-hover:scale-105 transition-transform" />
-                  <div><div className="font-medium">{language === 'ar' ? 'تسجيل عميل VIP جديد' : 'Register VIP Customer'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'ملف 360 ومنع التكرار' : 'Customer KYC profile'}</div></div>
+                  <div><div className="font-medium">{language === 'ar' ? 'تسجيل عميل مميز جديد' : 'Register VIP Customer'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'ملف العميل والتحقق من الهوية' : 'Customer KYC profile'}</div></div>
                 </button>
                 <button onClick={() => setAddContractOpen(true)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white hover:bg-zinc-900 text-start transition-all group">
                   <FileSignature className="w-4 h-4 text-sky-400 group-hover:scale-105 transition-transform" />
-                  <div><div className="font-medium">{language === 'ar' ? 'إصدار عقد إيجار لحظي' : 'Issue Instant Contract'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'تحديث فوري للإيرادات' : 'Live rental contract'}</div></div>
+                  <div><div className="font-medium">{language === 'ar' ? 'إصدار عقد إيجار فوري' : 'Issue Instant Contract'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'عقد إيجار مباشر' : 'Live rental contract'}</div></div>
                 </button>
               </div>
             )}
@@ -180,8 +180,8 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={() => setNotifDrawerOpen(true)}
             className="relative p-2 rounded-xl border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60 hover:border-zinc-700 transition-all"
-            title="Notifications"
-            aria-label="Notifications"
+            title={language === 'ar' ? 'الإشعارات' : 'Notifications'}
+            aria-label={language === 'ar' ? 'الإشعارات' : 'Notifications'}
           >
             <Bell className="w-3.5 h-3.5" />
             {unreadNotifCount > 0 && (
