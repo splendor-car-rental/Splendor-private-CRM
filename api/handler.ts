@@ -1,0 +1,193 @@
+import type { Request, Response } from 'express';
+import admin from 'firebase-admin';
+import app from '../server.js';
+import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
+import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
+import { createManualDepositAtomic } from '../src/server/safeManualDepositCreate.js';
+import { recordAccountingAudit } from '../src/server/accountingAudit.js';
+import {
+  issueAndRenderCorporateDocument,
+  getCorporateDocumentMeta,
+  type CorporateDocumentInput,
+  type CorporateDocumentKind
+} from '../src/server/corporateDocumentEngine.js';
+
+const CORPORATE_DOCUMENT_KINDS: CorporateDocumentKind[] = [
+  'lpo', 'credit_note', 'fines_notice', 'debit_note', 'contract_extension',
+  'payment_receipt', 'tax_invoice', 'simplified_tax_invoice', 'official_letter',
+  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation'
+];
+
+const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
+  lpo: ['ceo', 'admin', 'operations', 'fleet', 'finance'],
+  credit_note: ['ceo', 'admin', 'finance'],
+  fines_notice: ['ceo', 'admin', 'operations', 'finance'],
+  debit_note: ['ceo', 'admin', 'finance'],
+  contract_extension: ['ceo', 'admin', 'operations', 'sales'],
+  payment_receipt: ['ceo', 'admin', 'finance'],
+  tax_invoice: ['ceo', 'admin', 'finance'],
+  simplified_tax_invoice: ['ceo', 'admin', 'finance'],
+  official_letter: ['ceo', 'admin', 'operations', 'sales', 'finance', 'fleet'],
+  vehicle_record_card: ['ceo', 'admin', 'operations', 'fleet'],
+  vehicle_exit_permit: ['ceo', 'admin', 'operations', 'fleet'],
+  account_statement: ['ceo', 'admin', 'finance', 'operations', 'sales'],
+  quotation: ['ceo', 'admin', 'sales', 'operations']
+};
+
+async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!token || admin.apps.length === 0) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return null;
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
+    const data = profile.exists ? (profile.data() as any) : null;
+    if (!data || !allowedRoles.includes(data.role)) {
+      res.status(403).json({ error: 'You do not have permission to perform this action.' });
+      return null;
+    }
+    return { uid: decoded.uid, name: data.name || decoded.name || decoded.uid, role: data.role };
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired session.' });
+    return null;
+  }
+}
+
+function idempotencyKeyFromRequest(req: Request): string | undefined {
+  const value = req.headers['idempotency-key'];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+async function handleCorporateDocuments(req: Request, res: Response) {
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      success: true,
+      immutableLetterhead: true,
+      kinds: CORPORATE_DOCUMENT_KINDS.map(kind => ({ kind, ...getCorporateDocumentMeta(kind) }))
+    });
+  }
+
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    return res.status(405).json({ error: 'Method not allowed.' });
+  }
+
+  const body = (req.body || {}) as CorporateDocumentInput;
+  if (!body.kind || !CORPORATE_DOCUMENT_KINDS.includes(body.kind)) {
+    return res.status(400).json({ error: 'Unsupported corporate document type.' });
+  }
+
+  const actor = await getVerifiedStaff(req, res, CORPORATE_DOCUMENT_ROLES[body.kind]);
+  if (!actor) return;
+
+  try {
+    const { serial: _ignoredSerial, ...safeInput } = body as any;
+    const issued = await issueAndRenderCorporateDocument(safeInput);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${issued.fileName}"`);
+    res.setHeader('X-Document-Serial', issued.serial);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(issued.pdf);
+  } catch (error) {
+    console.error('[corporate-documents] generation failed:', error);
+    return res.status(500).json({ error: 'Document generation failed. No document was issued.' });
+  }
+}
+
+async function handler(req: Request, res: Response) {
+  if (req.path === '/api/corporate-documents') {
+    return handleCorporateDocuments(req, res);
+  }
+
+  if (req.path === '/api/accounting' || req.path.startsWith('/api/accounting/')) {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    if (!actor) return;
+    return handleAccountingRequest(req, res, actor);
+  }
+
+  if (req.path === '/api/deposits' && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance', 'operations', 'sales']);
+    if (!actor) return;
+    try {
+      const body = req.body || {};
+      if (body.holdType === 'gateway_authorization') {
+        return res.status(400).json({ error: 'Gateway authorization holds must be created by the signed payment-gateway lifecycle.' });
+      }
+      const result = await createManualDepositAtomic({
+        customerId: String(body.customerId || ''),
+        customerName: body.customerName,
+        contractId: body.contractId,
+        reservationId: body.reservationId,
+        amount: Number(body.amount),
+        paymentMethod: body.paymentMethod,
+        settlementAccountCode: body.settlementAccountCode,
+        holdReleaseDueDate: body.holdReleaseDueDate,
+        notes: body.notes,
+        transactionRef: body.transactionRef
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json(result.deposit);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Security deposit request failed.';
+      const status = message.toLowerCase().includes('idempotency-key') || message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('closed') ? 409 : 400;
+      return res.status(status).json({ error: message });
+    }
+  }
+
+  const depositMutationMatch = req.path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);
+  if (depositMutationMatch && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    if (!actor) return;
+    return handleSafeLegacyDepositMutation(
+      req,
+      res,
+      actor,
+      decodeURIComponent(depositMutationMatch[1]),
+      depositMutationMatch[2] as 'apply' | 'refund'
+    );
+  }
+
+  if (req.path === '/api/payments' && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    if (!actor) return;
+    return handleSafeCustomerPaymentRequest(req, res, actor);
+  }
+
+  if (req.path === '/api/tests/run-all') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin']);
+    if (!actor) return;
+    return app(req, res);
+  }
+
+  const plateMatch = req.path.match(/^\/api\/fleet\/([^/]+)\/assign-plate$/);
+  if (plateMatch && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'fleet']);
+    if (!actor) return;
+
+    const body = req.body || {};
+    if (!body.plateNumber || !body.plateCity) {
+      return res.status(400).json({ error: 'Plate number and city are required.' });
+    }
+
+    const result = await assignPlateAtomically({
+      vehicleId: decodeURIComponent(plateMatch[1]),
+      newPlateNumber: String(body.plateNumber).trim(),
+      newPlateCity: String(body.plateCity).trim(),
+      reason: String(body.reason || 'Plate updated by fleet operations').trim(),
+      assignedBy: actor.uid,
+      assignedByName: actor.name,
+      effectiveDate: body.effectiveDate
+    });
+
+    if (!result.success) return res.status(400).json({ error: result.error });
+    return res.json({ success: true, vehicle: result.vehicle });
+  }
+
+  return app(req, res);
+}
+
+export default handler;
