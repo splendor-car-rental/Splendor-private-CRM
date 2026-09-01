@@ -241,7 +241,7 @@ export function buildARAging(
     rows.set(invoice.customerId, existing);
   }
 
-  return [...rows.values()].map(row => ({
+  return [...rows.values()].map((row): ARAgingRow => ({
     ...row,
     collectionPriority: row['90_plus'] > 0 ? 'critical' : row['61_90'] > 0 ? 'high' : row['31_60'] > 0 ? 'attention' : 'normal'
   })).sort((a, b) => b.totalOutstanding - a.totalOutstanding);
