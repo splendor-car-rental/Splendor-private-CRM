@@ -33,6 +33,7 @@ import { createAtomicFinancialNote } from './safeFinancialNote';
 import { allocateCustomerCreditAtomic } from './safeAccountingAllocation';
 import { payAccountsPayableAtomic } from './safePayablePayment';
 import { postSupplierInvoiceToAPAtomic } from './safeSupplierInvoicePosting';
+import { applyDepositToApprovedChargeAtomic, postApprovedChargeAtomic, refundManualDepositAtomic } from './safeDepositAccounting';
 import { getCashFlowReport } from './cashFlow';
 import { recordAccountingAudit } from './accountingAudit';
 import { dispatchCustomerNotification, dispatchNotificationEvent } from './notificationEngine';
@@ -199,6 +200,11 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       return res.status(result.replayed ? 200 : 201).json({ payable: result.payable, journal: result.journal });
     }
 
+    if (resource === 'charges' && req.method === 'POST' && id && action === 'post') {
+      const result = await postApprovedChargeAtomic(id, actor, recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json({ charge: result.charge, journal: result.journal });
+    }
+
     if (resource === 'ar-aging' && req.method === 'GET') {
       return res.json(await getARAging(String(req.query.asOf || new Date().toISOString().slice(0, 10))));
     }
@@ -238,6 +244,23 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     }
     if (resource === 'deposits' && req.method === 'POST' && id && action === 'post') {
       return res.json(await postDepositToAccounting(id, String(req.body?.settlementAccountCode || ''), actor, recordAccountingAudit));
+    }
+    if (resource === 'deposits' && req.method === 'POST' && id && action === 'apply') {
+      const result = await applyDepositToApprovedChargeAtomic(id, {
+        amount: Number(req.body?.amount ?? req.body?.applyAmount),
+        chargeId: String(req.body?.chargeId || ''),
+        reason: req.body?.reason
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, charge: result.charge, journal: result.journal });
+    }
+    if (resource === 'deposits' && req.method === 'POST' && id && action === 'refund') {
+      const result = await refundManualDepositAtomic(id, {
+        amount: Number(req.body?.amount ?? req.body?.refundAmount),
+        settlementAccountCode: req.body?.settlementAccountCode,
+        reason: req.body?.reason,
+        refundDate: req.body?.refundDate
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, journal: result.journal });
     }
 
     if (resource === 'credit-notes' && req.method === 'POST') {
