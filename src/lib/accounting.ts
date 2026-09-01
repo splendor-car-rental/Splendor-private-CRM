@@ -132,7 +132,6 @@ export function buildProfitLoss(
   const rows = buildTrialBalance(journals, accounts, periodStart, periodEnd);
   const revenueAccounts = rows.filter(row => row.accountClass === 'revenue');
   const expenseAccounts = rows.filter(row => row.accountClass === 'expense');
-  // Revenue accounts normally carry credit balances; expense accounts carry debit balances.
   const revenue = money(revenueAccounts.reduce((sum, row) => sum + (row.credit - row.debit), 0));
   const expenses = money(expenseAccounts.reduce((sum, row) => sum + (row.debit - row.credit), 0));
   const netProfit = money(revenue - expenses);
@@ -376,11 +375,17 @@ export function buildVehicleProfitability(
   }).sort((a, b) => b.netProfit - a.netProfit);
 }
 
+/**
+ * Accounting-adjusted receivable for an immutable invoice. We intentionally
+ * derive from the invoice's original total and cumulative paid amount rather
+ * than from the legacy balanceDue field, because debit/credit notes are
+ * separate posted documents and must not rewrite the original invoice.
+ */
 export function adjustedInvoiceBalance(
   invoice: Invoice,
   noteTotals: Array<{ type: 'credit_note' | 'debit_note'; totalAmount: number; status: string }>
 ): number {
-  let balance = money(invoice.balanceDue || 0);
+  let balance = money((invoice.totalAmount || 0) - (invoice.paidAmount || 0));
   for (const note of noteTotals) {
     if (note.status !== 'posted') continue;
     balance = money(balance + (note.type === 'debit_note' ? note.totalAmount : -note.totalAmount));
