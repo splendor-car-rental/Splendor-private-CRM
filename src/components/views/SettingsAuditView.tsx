@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Settings, Shield, Users, History,
-  Check, Sparkles, Building, UserPlus2, Pencil, Globe, RefreshCw, AlertTriangle, Trash2
+  Check, Sparkles, Building, UserPlus2, Pencil, Globe, RefreshCw, AlertTriangle
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
@@ -26,33 +26,14 @@ const ROLE_BADGE_VARIANT: Record<string, 'gold' | 'purple' | 'emerald' | 'sky' |
 export const SettingsAuditView: React.FC = () => {
   const { language, t } = useLanguage();
   const { currentUser, staffDirectory } = useAuth();
-  const { auditLogs, showToast, getReconciliationReport, resetTransactionalData } = useCRM();
+  const { auditLogs, showToast, getReconciliationReport } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit' | 'connect' | 'governance'>('general');
   const [addStaffOpen, setAddStaffOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<User | null>(null);
   const [reconciliationReport, setReconciliationReport] = useState<any[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState('');
-  const [resetting, setResetting] = useState(false);
   const isAdmin = currentUser.role === 'ceo' || currentUser.role === 'admin';
-  const RESET_PHRASE = 'DELETE ALL DATA';
-
-  const handleResetData = async () => {
-    if (resetConfirmText !== RESET_PHRASE) return;
-    setResetting(true);
-    try {
-      await resetTransactionalData(resetConfirmText);
-      setResetConfirmText('');
-    } catch (e: any) {
-      showToast(
-        language === 'ar' ? 'فشل حذف البيانات' : 'Reset Failed',
-        e?.message || (language === 'ar' ? 'حدث خطأ أثناء حذف البيانات.' : 'Something went wrong clearing the data.')
-      );
-    } finally {
-      setResetting(false);
-    }
-  };
 
   const loadReconciliation = async () => {
     setLoadingReport(true);
@@ -275,39 +256,6 @@ export const SettingsAuditView: React.FC = () => {
             </div>
           </div>
 
-          {isAdmin && (
-            <div className="p-6 rounded-3xl bg-rose-500/5 border border-rose-500/25 space-y-4 lg:col-span-2">
-              <div className="flex items-center gap-2 text-rose-300 font-bold text-sm">
-                <Trash2 className="w-4 h-4" />
-                <span>{language === 'ar' ? 'منطقة الخطر — حذف بيانات النظام' : 'Danger Zone — Reset System Data'}</span>
-              </div>
-              <p className="text-[11px] text-zinc-400 leading-relaxed">
-                {language === 'ar'
-                  ? 'يحذف هذا الإجراء جميع بيانات العملاء والسيارات والعقود والحجوزات وعروض الأسعار والمعاملات المالية والبنكية ورسوم سالك/درب والمهام والمستندات وسجل التدقيق نهائياً من النظام و Firestore، ويعيد ضبط أرقام التسلسل لتبدأ من جديد. لا يتأثر حسابات الموظفين وإعدادات النظام. هذا الإجراء لا يمكن التراجع عنه.'
-                  : 'This permanently deletes every customer, vehicle, contract, reservation, quotation, financial/bank record, Salik/Darb toll, task, document, and audit log from the system and Firestore, and resets all numbering sequences back to the start. Staff accounts and system configuration are not affected. This cannot be undone.'}
-              </p>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
-                <input
-                  type="text"
-                  value={resetConfirmText}
-                  onChange={(e) => setResetConfirmText(e.target.value)}
-                  placeholder={language === 'ar' ? `اكتب "${RESET_PHRASE}" للتأكيد` : `Type "${RESET_PHRASE}" to confirm`}
-                  className="flex-1 px-3 py-2.5 rounded-xl bg-zinc-950 border border-rose-500/30 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-rose-400"
-                />
-                <button
-                  type="button"
-                  disabled={resetConfirmText !== RESET_PHRASE || resetting}
-                  onClick={handleResetData}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold whitespace-nowrap transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  {resetting
-                    ? (language === 'ar' ? 'جاري الحذف...' : 'Clearing...')
-                    : (language === 'ar' ? 'حذف كل البيانات' : 'Delete All Data')}
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
