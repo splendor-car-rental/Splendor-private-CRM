@@ -12,7 +12,6 @@ import {
   getEffectiveChartOfAccounts,
   getFinanceDashboard,
   getFinancialReports,
-  getPostingGaps,
   getSupplierStatement,
   getVehicleProfitability,
   linkBankReconciliationToAccounting,
@@ -21,7 +20,6 @@ import {
   listJournals,
   listPayables,
   listPeriods,
-  postDepositToAccounting,
   postInvoiceToAccounting,
   postPaymentToAccounting,
   requestManualJournal,
@@ -34,6 +32,8 @@ import { allocateCustomerCreditAtomic } from './safeAccountingAllocation';
 import { payAccountsPayableAtomic } from './safePayablePayment';
 import { postSupplierInvoiceToAPAtomic } from './safeSupplierInvoicePosting';
 import { applyDepositToApprovedChargeAtomic, postApprovedChargeAtomic, refundManualDepositAtomic } from './safeDepositAccounting';
+import { postManualDepositReceiptAtomic } from './safeDepositReceipt';
+import { getExtendedPostingGaps } from './extendedPostingGaps';
 import { getCashFlowReport } from './cashFlow';
 import { recordAccountingAudit } from './accountingAudit';
 import { dispatchCustomerNotification, dispatchNotificationEvent } from './notificationEngine';
@@ -80,6 +80,39 @@ function resolveReceiptSettlementAccount(method: string, requestedAccount?: stri
   throw new Error('This payment method requires an explicit cash/bank/clearing settlement account.');
 }
 
+async function executeDepositLifecycle(
+  req: Request,
+  res: Response,
+  actor: AccountingActor,
+  depositId: string,
+  action: 'post' | 'apply' | 'refund'
+) {
+  if (action === 'post') {
+    const result = await postManualDepositReceiptAtomic(
+      depositId,
+      String(req.body?.settlementAccountCode || ''),
+      actor,
+      recordAccountingAudit
+    );
+    return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, journal: result.journal });
+  }
+  if (action === 'apply') {
+    const result = await applyDepositToApprovedChargeAtomic(depositId, {
+      amount: Number(req.body?.amount ?? req.body?.applyAmount),
+      chargeId: String(req.body?.chargeId || ''),
+      reason: req.body?.reason
+    }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+    return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, charge: result.charge, journal: result.journal });
+  }
+  const result = await refundManualDepositAtomic(depositId, {
+    amount: Number(req.body?.amount ?? req.body?.refundAmount),
+    settlementAccountCode: req.body?.settlementAccountCode,
+    reason: req.body?.reason,
+    refundDate: req.body?.refundDate
+  }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+  return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, journal: result.journal });
+}
+
 /**
  * Accounting API dispatcher used from api/index.ts. Every request reaches
  * this function only after Firebase authentication and a Firestore-backed
@@ -92,7 +125,8 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     const [resource, id, action] = segments;
 
     if ((resource === undefined || resource === 'dashboard') && req.method === 'GET') {
-      return res.json(await getFinanceDashboard());
+      const [dashboard, gaps] = await Promise.all([getFinanceDashboard(), getExtendedPostingGaps()]);
+      return res.json({ ...dashboard, unpostedSourceCount: gaps.length });
     }
 
     if (resource === 'chart-of-accounts') {
@@ -134,7 +168,7 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       if (req.method === 'POST' && id && action === 'close') {
         assertExecutiveActor(actor);
         const bounds = accountingPeriodBounds(id);
-        const blockingGaps = (await getPostingGaps()).filter(gap => {
+        const blockingGaps = (await getExtendedPostingGaps()).filter(gap => {
           const date = gap.date?.slice(0, 10);
           return Boolean(date && date >= bounds.startDate && date <= bounds.endDate);
         });
@@ -224,7 +258,7 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       return res.json({ ...reports, cashFlow });
     }
     if (resource === 'vehicle-profitability' && req.method === 'GET') return res.json(await getVehicleProfitability());
-    if (resource === 'posting-gaps' && req.method === 'GET') return res.json(await getPostingGaps());
+    if (resource === 'posting-gaps' && req.method === 'GET') return res.json(await getExtendedPostingGaps());
 
     if (resource === 'invoices' && req.method === 'POST' && id && action === 'post') {
       return res.json(await postInvoiceToAccounting(id, String(req.body?.revenueAccountCode || '4000'), actor, recordAccountingAudit));
@@ -242,25 +276,8 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       );
       return res.status(result.replayed ? 200 : 201).json({ payment: result.payment, journal: result.journal });
     }
-    if (resource === 'deposits' && req.method === 'POST' && id && action === 'post') {
-      return res.json(await postDepositToAccounting(id, String(req.body?.settlementAccountCode || ''), actor, recordAccountingAudit));
-    }
-    if (resource === 'deposits' && req.method === 'POST' && id && action === 'apply') {
-      const result = await applyDepositToApprovedChargeAtomic(id, {
-        amount: Number(req.body?.amount ?? req.body?.applyAmount),
-        chargeId: String(req.body?.chargeId || ''),
-        reason: req.body?.reason
-      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
-      return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, charge: result.charge, journal: result.journal });
-    }
-    if (resource === 'deposits' && req.method === 'POST' && id && action === 'refund') {
-      const result = await refundManualDepositAtomic(id, {
-        amount: Number(req.body?.amount ?? req.body?.refundAmount),
-        settlementAccountCode: req.body?.settlementAccountCode,
-        reason: req.body?.reason,
-        refundDate: req.body?.refundDate
-      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
-      return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, journal: result.journal });
+    if (resource === 'deposits' && req.method === 'POST' && id && (action === 'post' || action === 'apply' || action === 'refund')) {
+      return executeDepositLifecycle(req, res, actor, id, action);
     }
 
     if (resource === 'credit-notes' && req.method === 'POST') {
@@ -298,6 +315,27 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     if (resource === 'customers' && id && action === 'statement' && req.method === 'GET') return res.json(await getCustomerAccountingStatement(id));
 
     return res.status(404).json({ error: 'Accounting route not found.' });
+  } catch (error) {
+    return badRequest(res, error);
+  }
+}
+
+/**
+ * Compatibility boundary for the legacy CRM context. Existing UI callers
+ * still POST /api/deposits/:id/apply|refund; api/index.ts intercepts those
+ * paths and routes them here, so they receive the same atomic journal +
+ * idempotency semantics without requiring a risky wholesale CRMContext edit.
+ */
+export async function handleSafeLegacyDepositMutation(
+  req: Request,
+  res: Response,
+  actor: AccountingActor,
+  depositId: string,
+  action: 'apply' | 'refund'
+) {
+  try {
+    assertFinanceActor(actor);
+    return await executeDepositLifecycle(req, res, actor, depositId, action);
   } catch (error) {
     return badRequest(res, error);
   }
