@@ -25,7 +25,9 @@ function isCriticalFinancialWrite(url: string, method: string): boolean {
     || path === '/api/accounting/debit-notes'
     || /^\/api\/accounting\/payables\/[^/]+\/pay$/.test(path)
     || /^\/api\/accounting\/payments\/[^/]+\/allocate$/.test(path)
-    || /^\/api\/accounting\/supplier-invoices\/[^/]+\/post$/.test(path);
+    || /^\/api\/accounting\/supplier-invoices\/[^/]+\/post$/.test(path)
+    || /^\/api\/accounting\/charges\/[^/]+\/post$/.test(path)
+    || /^\/api\/accounting\/deposits\/[^/]+\/(apply|refund)$/.test(path);
 }
 
 function makeIdempotencyKey(): string {
