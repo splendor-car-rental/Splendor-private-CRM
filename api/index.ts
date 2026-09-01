@@ -7,6 +7,8 @@ import admin from 'firebase-admin';
 import app from '../server.ts';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
 import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
+import { createManualDepositAtomic } from '../src/server/safeManualDepositCreate.js';
+import { recordAccountingAudit } from '../src/server/accountingAudit.js';
 import {
   issueAndRenderCorporateDocument,
   getCorporateDocumentMeta,
@@ -57,6 +59,11 @@ async function getVerifiedStaff(req: Request, res: Response, allowedRoles: strin
     res.status(401).json({ error: 'Invalid or expired session.' });
     return null;
   }
+}
+
+function idempotencyKeyFromRequest(req: Request): string | undefined {
+  const value = req.headers['idempotency-key'];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 async function handleCorporateDocuments(req: Request, res: Response) {
@@ -111,6 +118,39 @@ async function handler(req: Request, res: Response) {
     const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleAccountingRequest(req, res, actor);
+  }
+
+  // Manual security-deposit collection is money movement. Replace the
+  // legacy create route at the production boundary so deposit + customer
+  // held balance + double-entry journal + idempotency record commit together.
+  // Gateway authorization holds do not come through this HTTP route; their
+  // signed gateway lifecycle remains separate and is never treated as cash.
+  if (req.path === '/api/deposits' && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance', 'operations', 'sales']);
+    if (!actor) return;
+    try {
+      const body = req.body || {};
+      if (body.holdType === 'gateway_authorization') {
+        return res.status(400).json({ error: 'Gateway authorization holds must be created by the signed payment-gateway lifecycle.' });
+      }
+      const result = await createManualDepositAtomic({
+        customerId: String(body.customerId || ''),
+        customerName: body.customerName,
+        contractId: body.contractId,
+        reservationId: body.reservationId,
+        amount: Number(body.amount),
+        paymentMethod: body.paymentMethod,
+        settlementAccountCode: body.settlementAccountCode,
+        holdReleaseDueDate: body.holdReleaseDueDate,
+        notes: body.notes,
+        transactionRef: body.transactionRef
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json(result.deposit);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Security deposit request failed.';
+      const status = message.toLowerCase().includes('idempotency-key') || message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('closed') ? 409 : 400;
+      return res.status(status).json({ error: message });
+    }
   }
 
   // Existing CRM screens historically call /api/deposits/:id/apply|refund.
