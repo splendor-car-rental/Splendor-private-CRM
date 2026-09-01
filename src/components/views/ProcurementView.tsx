@@ -88,7 +88,7 @@ function StatusBadge({ status }: { status: string }) {
 export const ProcurementView: React.FC = () => {
   const { language } = useLanguage();
   const { currentUser } = useAuth();
-  const { showToast, customers, setActiveView } = useCRM();
+  const { showToast, customers } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
   const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts'>('purchase-orders');
@@ -526,13 +526,10 @@ export const ProcurementView: React.FC = () => {
       {tab === 'purchase-orders' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <button
-              onClick={() => setActiveView('purchase-orders')}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 border border-[#D4AF37]/50 text-[#f5d97f] hover:bg-zinc-800 font-bold text-xs shadow transition-all"
-            >
+            <div className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 border border-[#D4AF37]/30 text-[#f5d97f] font-bold text-xs shadow">
               <ClipboardList className="w-4 h-4 text-[#D4AF37]" />
-              <span>{language === 'ar' ? 'أوامر التوريد الصادرة للشركات (B2B LPO) والطباعة على الهيد ليتر' : 'Outgoing B2B LPO Letterhead System'}</span>
-            </button>
+              <span>{language === 'ar' ? 'سجل أوامر التوريد المعتمد والمرتبط بالموافقات' : 'Authoritative purchase-order register with approvals'}</span>
+            </div>
 
             <button
               onClick={() => setPoModalOpen(true)}

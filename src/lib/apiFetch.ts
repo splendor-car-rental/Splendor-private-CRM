@@ -22,6 +22,7 @@ function isCriticalFinancialWrite(url: string, method: string): boolean {
   })();
   return path === '/api/payments'
     || path === '/api/deposits'
+    || path === '/api/purchase-orders'
     || path === '/api/accounting/credit-notes'
     || path === '/api/accounting/debit-notes'
     || /^\/api\/accounting\/payables\/[^/]+\/pay$/.test(path)
