@@ -4,16 +4,18 @@ import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { CRMProvider, useCRM } from './context/CRMContext';
 import { canAccessView } from './config/permissions';
+import './customer-sapphire.css';
 
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { PWAInstallBanner } from './components/pwa/PWAInstallBanner';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
-import { ApprovedFormsLibrary } from './components/common/ApprovedFormsLibrary';
 import { ArabicInterfaceGuard } from './components/common/ArabicInterfaceGuard';
+import { DashboardPersonalizationGuard } from './components/dashboard/DashboardPersonalizationGuard';
+import { CustomerIntakePortal } from './components/customers/CustomerIntakePortal';
+import { ContextualDocumentActions } from './components/documents/ContextualDocumentActions';
 
-// Views
 import { DashboardView } from './components/views/DashboardView';
 import { Customer360View } from './components/views/Customer360View';
 import { LeadsPipelineView } from './components/views/LeadsPipelineView';
@@ -48,10 +50,6 @@ const MainLayout: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const renderActiveView = () => {
-    // Central access gate -- the Sidebar already hides links this role
-    // can't use, but a view can also be reached other ways (global search,
-    // a dashboard quick-link, stale state after a role change). This is the
-    // one place every path through the app is re-checked.
     if (!canAccessView(currentUser.role, activeView)) {
       return (
         <div className="flex flex-col items-center justify-center text-center py-24 gap-3">
@@ -112,6 +110,8 @@ const MainLayout: React.FC = () => {
   return (
     <div className={`min-h-screen bg-zinc-950 text-zinc-100 flex font-sans ${language === 'ar' ? 'font-arabic' : ''}`}>
       <ArabicInterfaceGuard />
+      <DashboardPersonalizationGuard />
+      <CustomerIntakePortal />
       <ToastContainer />
       <Sidebar isMobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
 
@@ -119,14 +119,13 @@ const MainLayout: React.FC = () => {
         <PWAInstallBanner />
         <Header onMenuClick={() => setMobileSidebarOpen(true)} />
 
-        <main className="flex-1 w-full p-4 sm:p-6 lg:p-8">
+        <main data-active-view={activeView} className="flex-1 w-full p-4 sm:p-6 lg:p-8">
           <ErrorBoundary key={activeView}>
+            <ContextualDocumentActions />
             {renderActiveView()}
           </ErrorBoundary>
         </main>
       </div>
-
-      <ApprovedFormsLibrary />
     </div>
   );
 };

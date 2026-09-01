@@ -1,0 +1,426 @@
+============================================================
+FILE: docs/approved-forms/BILL BOOK A4 rental.pdf
+c86118a092c04184f90edf2ce92ec2e2a807c0ec50a6fa7884823e137a22c0cc  docs/approved-forms/BILL BOOK A4 rental.pdf
+Producer:        iLovePDF
+ModDate:         Sat Aug 15 11:14:49 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           2
+Encrypted:       no
+Page size:       595.296 x 841.824 pts (A4)
+Page rot:        0
+File size:       570966 bytes
+Optimized:       no
+PDF version:     1.7
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/SPLENDOR_Letter-head.pdf
+963478c9a11da6e4fe99655b6066b7908266797608ac49dd700eee187f1ffe05  docs/approved-forms/SPLENDOR_Letter-head.pdf
+Title:           SPLENDOR Car Rental — Letterhead (600 dpi)
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 06:21:09 2026 UTC
+ModDate:         Tue Aug 25 06:21:09 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.44 x 842.16 pts (A4)
+Page rot:        0
+File size:       10761961 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/إشعار مخالفات ورسوم.pdf
+fa125b7c18dc12642f6ddaf49b85560b193362be144ce100e0f896d3d00ac16d  docs/approved-forms/إشعار مخالفات ورسوم.pdf
+Title:           SPLENDOR — إشعار مخالفات ورسوم
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:16:45 2026 UTC
+ModDate:         Tue Aug 25 12:16:45 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12243664 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/إشعار مدين.pdf
+8458e5c11162f72ceb6a0c4c7199d4805f10903e0bb8d4e54c760e4d753d1e37  docs/approved-forms/إشعار مدين.pdf
+Title:           SPLENDOR — إشعار مدين
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:10:38 2026 UTC
+ModDate:         Tue Aug 25 12:10:38 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12383522 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/إنذار بالسداد.pdf
+df5f21218a3f8e9b589e0654782a279146ed81017c65839ff7c67e698335be90  docs/approved-forms/إنذار بالسداد.pdf
+Title:           SPLENDOR — إنذار بالسداد
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:17:12 2026 UTC
+ModDate:         Tue Aug 25 12:17:12 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12793088 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/بطاقة مركبة.pdf
+8551afe3ef12871bf82766149ad954e41ef5a2a4329da8f05ffa1497b220779d  docs/approved-forms/بطاقة مركبة.pdf
+Title:           SPLENDOR — بطاقة مركبة
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 16:27:01 2026 UTC
+ModDate:         Tue Aug 25 16:27:01 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       11802351 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/تصريح خروج مركبة.pdf
+4d73e3efc5c0b6d5b63aa3ddb2078ff090ea284cf180cd1c8f9aa7fab948f7d7  docs/approved-forms/تصريح خروج مركبة.pdf
+Title:           SPLENDOR — تصريح خروج مركبة
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 16:26:17 2026 UTC
+ModDate:         Tue Aug 25 16:26:17 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12866949 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/جدول تجديد وثائق الأسطول.pdf
+06c43e66b73e754b66c76f0a2dad2b1478ba6823e3d580bee084f903bc95ca58  docs/approved-forms/جدول تجديد وثائق الأسطول.pdf
+Title:           SPLENDOR — جدول تجديد وثائق الأسطول
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 16:27:14 2026 UTC
+ModDate:         Tue Aug 25 16:27:14 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       11644547 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/خطاب رسمي.pdf
+8144ed0d7f9d17d89b43947014b663bdcc6c30e3af4f9c1f267f14fa411d16f8  docs/approved-forms/خطاب رسمي.pdf
+Title:           SPLENDOR — خطاب رسمي
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:17:25 2026 UTC
+ModDate:         Tue Aug 25 12:17:25 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       11022166 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/سند قبض.pdf
+fc45ee5dcce1bcd25e26a20d0523398719dbe6609486f05e1f0fcd9b00137f89  docs/approved-forms/سند قبض.pdf
+Title:           SPLENDOR — سند قبض
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:10:06 2026 UTC
+ModDate:         Tue Aug 25 12:10:06 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12278864 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/فاتورة ضريبية مبسطة.pdf
+d483161f78c9b472f807c2478656b95c764a118c6e78239fd649007e4fd904d4  docs/approved-forms/فاتورة ضريبية مبسطة.pdf
+Title:           SPLENDOR — فاتورة ضريبية مبسطة
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 16:26:47 2026 UTC
+ModDate:         Tue Aug 25 16:26:47 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12189455 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/فاتورة ضريبية.pdf
+4bc39665960174f474012d8d3e90f684963618b8baaddea6fdfc87d6a8767ed8  docs/approved-forms/فاتورة ضريبية.pdf
+Title:           SPLENDOR — فاتورة ضريبية
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:10:55 2026 UTC
+ModDate:         Tue Aug 25 12:10:55 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12587924 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/كشف حساب ..pdf
+01f3e6a844566074033e49912b830db0abfe88b223196bde9f6606e38c34e79b  docs/approved-forms/كشف حساب ..pdf
+Title:           SPLENDOR Car Rental — نموذج كشف حساب (فارغ)
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 11:06:48 2026 UTC
+ModDate:         Tue Aug 25 11:06:48 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12011243 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/كشف حساب ٢٠٢٦٢٠.pdf
+f388e95d68342ee9b2f3783f2105a469a79c85e1bde90b632470d27a5b36db98  docs/approved-forms/كشف حساب ٢٠٢٦٢٠.pdf
+Title:           SPLENDOR Car Rental — كشف حساب ٢٠٢٦٢٠
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 10:56:41 2026 UTC
+ModDate:         Tue Aug 25 10:56:41 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       13150138 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/مطالبة أضرار.pdf
+4c151a56f19f3e0fe9dabdfe9dff2f4d956b9edd20cd3a26aa27d0e32edd5433  docs/approved-forms/مطالبة أضرار.pdf
+Title:           SPLENDOR — مطالبة أضرار
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 12:16:58 2026 UTC
+ModDate:         Tue Aug 25 12:16:58 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12388509 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+
+============================================================
+FILE: docs/approved-forms/ملحق تمديد عقد.pdf
+7b4b730d4dfbbdec357d5ac1587c4f118052f5e4f6bc711a7e3348538b35a93d  docs/approved-forms/ملحق تمديد عقد.pdf
+Title:           SPLENDOR — ملحق تمديد عقد
+Subject:         unspecified
+Keywords:        
+Author:          SPLENDOR Car Rental
+Creator:         anonymous
+Producer:        ReportLab PDF Library - (opensource)
+CreationDate:    Tue Aug 25 16:26:32 2026 UTC
+ModDate:         Tue Aug 25 16:26:32 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       595.276 x 841.89 pts (A4)
+Page rot:        0
+File size:       12609556 bytes
+Optimized:       no
+PDF version:     1.3
+--- TEXT LAYOUT (first 180 lines) ---
+

@@ -1,0 +1,10 @@
+main[data-active-view="customers"] [class*="text-[#f5d97f]"],
+main[data-active-view="customers"] [class*="text-[#D4AF37]"] { color: #38bdf8 !important; }
+main[data-active-view="customers"] [class*="border-[#D4AF37]"] { border-color: rgba(56,189,248,.45) !important; }
+main[data-active-view="customers"] [class*="bg-[#D4AF37]"] { background: #0ea5e9 !important; color: #06121f !important; }
+main[data-active-view="customers"] [class*="from-[#D4AF37]"] { --tw-gradient-from: #0ea5e9 var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(14 165 233 / 0) var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from),var(--tw-gradient-to) !important; }
+main[data-active-view="customers"] [class*="to-[#b39029]"] { --tw-gradient-to: #0284c7 var(--tw-gradient-to-position) !important; }
+main[data-active-view="customers"] input:focus,
+main[data-active-view="customers"] select:focus,
+main[data-active-view="customers"] textarea:focus { border-color: rgba(56,189,248,.7) !important; box-shadow: 0 0 0 2px rgba(14,165,233,.08); }
+main[data-active-view="customers"] .custom-scrollbar { scrollbar-color: rgba(14,165,233,.55) rgba(24,24,27,.8); }

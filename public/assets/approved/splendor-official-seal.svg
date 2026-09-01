@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200" role="img" aria-labelledby="title desc">
+  <title id="title">Splendor Car Rental LLC corporate seal</title>
+  <desc id="desc">Transparent luxury corporate seal for Splendor Car Rental LLC, Dubai, United Arab Emirates.</desc>
+  <defs>
+    <path id="topArc" d="M 190 600 A 410 410 0 0 1 1010 600" />
+    <path id="bottomArc" d="M 1010 600 A 410 410 0 0 1 190 600" />
+    <filter id="inkSoftness" x="-8%" y="-8%" width="116%" height="116%">
+      <feGaussianBlur stdDeviation="0.35" />
+    </filter>
+  </defs>
+
+  <g fill="none" stroke="#8B1028" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="600" cy="600" r="520" stroke-width="14" />
+    <circle cx="600" cy="600" r="493" stroke-width="3" opacity="0.9" />
+    <circle cx="600" cy="600" r="365" stroke-width="5" />
+    <circle cx="600" cy="600" r="340" stroke-width="2" opacity="0.75" />
+
+    <path d="M 315 602 C 366 545 435 511 512 493 C 554 483 612 477 680 481 C 754 486 822 510 884 553 C 910 571 933 594 954 620" stroke-width="10" />
+    <path d="M 343 626 C 411 620 471 618 535 620 C 615 624 697 626 785 624 C 840 623 891 621 936 617" stroke-width="8" />
+    <path d="M 438 498 L 501 438 C 522 418 548 408 580 408 L 682 408 C 721 408 752 422 777 450 L 829 507" stroke-width="10" />
+    <path d="M 502 445 L 558 445 L 558 495" stroke-width="6" />
+    <path d="M 690 445 L 753 445 L 795 502" stroke-width="6" />
+    <circle cx="447" cy="627" r="52" stroke-width="12" />
+    <circle cx="839" cy="627" r="52" stroke-width="12" />
+    <circle cx="447" cy="627" r="20" stroke-width="6" />
+    <circle cx="839" cy="627" r="20" stroke-width="6" />
+  </g>
+
+  <g fill="#8B1028" font-family="Montserrat, Arial, sans-serif" text-anchor="middle" filter="url(#inkSoftness)">
+    <text font-size="61" font-weight="800" letter-spacing="3">
+      <textPath href="#topArc" startOffset="50%">SPLENDOR CAR RENTAL L.L.C.</textPath>
+    </text>
+    <text font-size="50" font-weight="700" direction="rtl" unicode-bidi="plaintext">
+      <textPath href="#bottomArc" startOffset="50%">سبلندر لتأجير السيارات ش ذ م م</textPath>
+    </text>
+
+    <text x="600" y="765" font-family="Georgia, 'Times New Roman', serif" font-size="93" font-weight="700" letter-spacing="11">SPLENDOR</text>
+    <text x="600" y="825" font-size="30" font-weight="700" letter-spacing="10">PRESTIGE BEYOND LIMITS</text>
+    <text x="600" y="876" font-size="27" font-weight="700" letter-spacing="7">DUBAI • UNITED ARAB EMIRATES</text>
+  </g>
+
+  <g fill="#8B1028">
+    <circle cx="171" cy="600" r="14" />
+    <circle cx="1029" cy="600" r="14" />
+    <path d="M 590 324 L 600 299 L 610 324 L 636 334 L 610 344 L 600 369 L 590 344 L 564 334 Z" />
+    <path d="M 590 901 L 600 876 L 610 901 L 636 911 L 610 921 L 600 946 L 590 921 L 564 911 Z" />
+  </g>
+</svg>

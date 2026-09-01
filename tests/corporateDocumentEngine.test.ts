@@ -26,7 +26,8 @@ describe('corporate document engine', () => {
   it('places the approved red stamp at the existing company signature anchor', () => {
     const stamped = applyCorporateStamp('<div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div>');
     expect(stamped).toContain('corporate-stamp-anchor');
-    expect(stamped).toContain('data:image/svg+xml;base64,');
+    expect(stamped).toContain('data:image/webp;base64,');
+    expect(stamped).not.toContain('data:image/svg+xml;base64,');
     expect(stamped).not.toContain('____________________');
   });
 

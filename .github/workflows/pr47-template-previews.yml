@@ -1,0 +1,41 @@
+name: PR47 Approved Template Previews
+
+on:
+  push:
+    branches:
+      - feat/contextual-documents-customer-intake
+    paths:
+      - .github/workflows/pr47-template-previews.yml
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/contextual-documents-customer-intake
+      - name: Install PDF renderer
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - name: Render approved forms
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p template-previews
+          i=0
+          find docs/approved-forms -maxdepth 1 -type f -name '*.pdf' -print0 | sort -z | while IFS= read -r -d '' file; do
+            i=$((i+1))
+            base=$(basename "$file" .pdf)
+            safe=$(printf '%02d' "$i")
+            pdftoppm -f 1 -singlefile -jpeg -jpegopt quality=82 -r 100 "$file" "template-previews/${safe}" >/dev/null 2>&1
+            printf '%s\t%s\n' "$safe.jpg" "$base" >> template-previews/index.tsv
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr47-approved-template-previews
+          path: template-previews
+          if-no-files-found: error
+          retention-days: 1

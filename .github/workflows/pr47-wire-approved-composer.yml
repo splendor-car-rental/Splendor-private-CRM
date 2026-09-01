@@ -1,0 +1,61 @@
+name: PR47 Wire Approved Composer
+
+on:
+  push:
+    branches:
+      - feat/contextual-documents-customer-intake
+    paths:
+      - .github/workflows/pr47-wire-approved-composer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/contextual-documents-customer-intake
+          fetch-depth: 1
+      - name: Patch document engine
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/server/corporateDocumentEngine.ts')
+          s = p.read_text(encoding='utf-8')
+
+          import_anchor = "import { applyCorporateStamp } from './corporateDocumentStamp';\n"
+          if "composeApprovedCorporateDocument" not in s:
+              s = s.replace(import_anchor, import_anchor + "import { composeApprovedCorporateDocument } from './approvedDocumentComposer';\n")
+
+          old_union = """export type CorporateDocumentKind =\n  | 'lpo'\n  | 'credit_note'\n  | 'fines_notice'\n  | 'debit_note'\n  | 'contract_extension'\n  | 'payment_receipt'\n  | 'tax_invoice'\n  | 'simplified_tax_invoice'\n  | 'official_letter'\n  | 'vehicle_record_card'\n  | 'vehicle_exit_permit'\n  | 'account_statement'\n  | 'quotation';"""
+          new_union = """export type CorporateDocumentKind =\n  | 'rental_contract'\n  | 'lpo'\n  | 'credit_note'\n  | 'fines_notice'\n  | 'debit_note'\n  | 'payment_demand'\n  | 'damage_claim'\n  | 'contract_extension'\n  | 'payment_receipt'\n  | 'tax_invoice'\n  | 'simplified_tax_invoice'\n  | 'official_letter'\n  | 'vehicle_record_card'\n  | 'vehicle_exit_permit'\n  | 'fleet_document_renewal_schedule'\n  | 'account_statement'\n  | 'quotation';"""
+          if old_union in s:
+              s = s.replace(old_union, new_union)
+
+          meta_anchor = "const META: Record<CorporateDocumentKind, { ar: string; en: string; numbering: string }> = {\n"
+          additions = """  rental_contract: { ar: 'عقد إيجار مركبة', en: 'RENTAL AGREEMENT', numbering: 'contract' },\n"""
+          if "rental_contract:" not in s:
+              s = s.replace(meta_anchor, meta_anchor + additions)
+          if "payment_demand:" not in s:
+              s = s.replace("  debit_note: { ar: 'إشعار مدين', en: 'DEBIT NOTE', numbering: 'document' },\n", "  debit_note: { ar: 'إشعار مدين', en: 'DEBIT NOTE', numbering: 'document' },\n  payment_demand: { ar: 'إنذار بالسداد', en: 'PAYMENT DEMAND', numbering: 'document' },\n  damage_claim: { ar: 'مطالبة أضرار', en: 'DAMAGE CLAIM', numbering: 'document' },\n")
+          if "fleet_document_renewal_schedule:" not in s:
+              s = s.replace("  vehicle_exit_permit: { ar: 'تصريح خروج مركبة خارج الدولة', en: 'VEHICLE EXIT PERMIT', numbering: 'document' },\n", "  vehicle_exit_permit: { ar: 'تصريح خروج مركبة خارج الدولة', en: 'VEHICLE EXIT PERMIT', numbering: 'document' },\n  fleet_document_renewal_schedule: { ar: 'جدول متابعة تجديد وثائق الأسطول', en: 'FLEET DOCUMENT RENEWAL SCHEDULE', numbering: 'document' },\n")
+
+          old_render = """  const html = buildCorporateDocumentHtml(input, serial);\n  const browser = await launchBrowser();\n  try {\n    const page = await browser.newPage();\n    await page.setContent(html, { waitUntil: 'domcontentloaded' });\n    const pdf = Buffer.from(await page.pdf({\n      format: 'A4',\n      printBackground: true,\n      displayHeaderFooter: true,\n      headerTemplate: `<div style=\"width:100%;margin:0;padding:0\"><img src=\"data:image/png;base64,${LTO_LETTERHEAD_HEADER_PNG_BASE64}\" style=\"width:100%;display:block\" /></div>`,\n      footerTemplate: `<div style=\"width:100%;margin:0;padding:0\"><img src=\"data:image/png;base64,${LTO_LETTERHEAD_FOOTER_PNG_BASE64}\" style=\"width:100%;display:block\" /></div>`,\n      margin: { top: '30mm', bottom: '24mm', left: '0', right: '0' }\n    }));\n    return { serial, kind: input.kind, pdf, fileName: `${serial}-${meta.en.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf` };\n  } finally {\n    await browser.close();\n  }"""
+          new_render = """  const composed = await composeApprovedCorporateDocument({ ...input, serial }, serial);\n  return {\n    serial,\n    kind: input.kind,\n    pdf: composed.pdf,\n    fileName: `${serial}-${meta.en.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`\n  };"""
+          if old_render not in s:
+              raise SystemExit('Expected legacy render block was not found; refusing an unsafe broad patch.')
+          s = s.replace(old_render, new_render)
+
+          p.write_text(s, encoding='utf-8')
+      - name: Commit wiring
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/server/corporateDocumentEngine.ts
+          git commit -m 'feat(documents): render from immutable approved PDF masters [source-art]'
+          git push origin HEAD:feat/contextual-documents-customer-intake

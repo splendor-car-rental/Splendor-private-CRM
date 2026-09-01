@@ -4,6 +4,7 @@ import { issueNextNumber } from './idGenerator';
 import { LTO_LETTERHEAD_HEADER_PNG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
 import { escapeHtml } from './htmlEscape';
 import { applyCorporateStamp } from './corporateDocumentStamp';
+import { composeApprovedCorporateDocument } from './approvedDocumentComposer';
 
 /**
  * Corporate stationery is an immutable master asset.
@@ -12,10 +13,13 @@ import { applyCorporateStamp } from './corporateDocumentStamp';
  * content inside the document body between the fixed bands.
  */
 export type CorporateDocumentKind =
+  | 'rental_contract'
   | 'lpo'
   | 'credit_note'
   | 'fines_notice'
   | 'debit_note'
+  | 'payment_demand'
+  | 'damage_claim'
   | 'contract_extension'
   | 'payment_receipt'
   | 'tax_invoice'
@@ -23,6 +27,7 @@ export type CorporateDocumentKind =
   | 'official_letter'
   | 'vehicle_record_card'
   | 'vehicle_exit_permit'
+  | 'fleet_document_renewal_schedule'
   | 'account_statement'
   | 'quotation';
 
@@ -47,10 +52,13 @@ export interface IssuedCorporateDocument {
 }
 
 const META: Record<CorporateDocumentKind, { ar: string; en: string; numbering: string }> = {
+  rental_contract: { ar: 'عقد إيجار مركبة', en: 'RENTAL AGREEMENT', numbering: 'contract' },
   lpo: { ar: 'أمر شراء / أمر توريد', en: 'LPO / PURCHASE ORDER', numbering: 'purchaseorder' },
   credit_note: { ar: 'إشعار دائن', en: 'CREDIT NOTE', numbering: 'document' },
   fines_notice: { ar: 'إشعار مخالفات ورسوم', en: 'FINES & CHARGES NOTICE', numbering: 'document' },
   debit_note: { ar: 'إشعار مدين', en: 'DEBIT NOTE', numbering: 'document' },
+  payment_demand: { ar: 'إنذار بالسداد', en: 'PAYMENT DEMAND', numbering: 'document' },
+  damage_claim: { ar: 'مطالبة أضرار', en: 'DAMAGE CLAIM', numbering: 'document' },
   contract_extension: { ar: 'ملحق تمديد عقد إيجار', en: 'CONTRACT EXTENSION ADDENDUM', numbering: 'contract' },
   payment_receipt: { ar: 'سند قبض', en: 'PAYMENT RECEIPT', numbering: 'receipt' },
   tax_invoice: { ar: 'فاتورة ضريبية', en: 'TAX INVOICE', numbering: 'invoice' },
@@ -58,6 +66,7 @@ const META: Record<CorporateDocumentKind, { ar: string; en: string; numbering: s
   official_letter: { ar: 'مكاتبة رسمية', en: 'OFFICIAL LETTER', numbering: 'document' },
   vehicle_record_card: { ar: 'بطاقة مركبة', en: 'VEHICLE RECORD CARD', numbering: 'document' },
   vehicle_exit_permit: { ar: 'تصريح خروج مركبة خارج الدولة', en: 'VEHICLE EXIT PERMIT', numbering: 'document' },
+  fleet_document_renewal_schedule: { ar: 'جدول متابعة تجديد وثائق الأسطول', en: 'FLEET DOCUMENT RENEWAL SCHEDULE', numbering: 'document' },
   account_statement: { ar: 'كشف حساب', en: 'ACCOUNT STATEMENT', numbering: 'accountstatement' },
   quotation: { ar: 'عرض سعر', en: 'QUOTATION', numbering: 'quotation' }
 };
@@ -148,23 +157,13 @@ async function launchBrowser() {
 export async function issueAndRenderCorporateDocument(input: CorporateDocumentInput): Promise<IssuedCorporateDocument> {
   const meta = META[input.kind];
   const serial = input.serial || await issueNextNumber(meta.numbering);
-  const html = buildCorporateDocumentHtml(input, serial);
-  const browser = await launchBrowser();
-  try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'domcontentloaded' });
-    const pdf = Buffer.from(await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      displayHeaderFooter: true,
-      headerTemplate: `<div style="width:100%;margin:0;padding:0"><img src="data:image/png;base64,${LTO_LETTERHEAD_HEADER_PNG_BASE64}" style="width:100%;display:block" /></div>`,
-      footerTemplate: `<div style="width:100%;margin:0;padding:0"><img src="data:image/png;base64,${LTO_LETTERHEAD_FOOTER_PNG_BASE64}" style="width:100%;display:block" /></div>`,
-      margin: { top: '30mm', bottom: '24mm', left: '0', right: '0' }
-    }));
-    return { serial, kind: input.kind, pdf, fileName: `${serial}-${meta.en.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf` };
-  } finally {
-    await browser.close();
-  }
+  const composed = await composeApprovedCorporateDocument({ ...input, serial }, serial);
+  return {
+    serial,
+    kind: input.kind,
+    pdf: composed.pdf,
+    fileName: `${serial}-${meta.en.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`
+  };
 }
 
 export function getCorporateDocumentMeta(kind: CorporateDocumentKind) {

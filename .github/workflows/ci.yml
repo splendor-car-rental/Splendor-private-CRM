@@ -44,7 +44,9 @@ jobs:
         run: bun run test
       - name: Production build
         run: bun run build
-      - name: Verify build output exists
+      - name: Verify build output exists and Vercel API bundle loads
         run: |
           test -s dist/server.cjs
+          test -s dist/api-handler.cjs
           test -s dist/index.html
+          VERCEL=1 node -e "const m=require('./dist/api-handler.cjs'); const h=m.default||m; if(typeof h!=='function') throw new Error('Bundled Vercel API handler did not export a function');"

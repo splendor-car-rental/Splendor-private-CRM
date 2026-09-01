@@ -22,6 +22,42 @@ body,
   overflow-x: hidden;
 }
 
+/* The CRM is a full-height application shell. Keep document scrolling on
+   the main content pane instead of the body so mouse-wheel, trackpad and
+   touch scrolling all target one explicit scroll container. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow-y: hidden;
+}
+
+#root > div {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+#root > div > div.flex-1 {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#root main {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
 *,
 *::before,
 *::after {
@@ -46,10 +82,22 @@ iframe {
   max-width: 100%;
 }
 
-/* Long Arabic/English labels must wrap instead of expanding a flex row beyond the viewport. */
+/* Long labels may wrap at normal word boundaries, but never split Arabic
+   words letter-by-letter merely to satisfy a narrow flex item. */
 .font-arabic,
 .font-arabic * {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* Horizontal tab/action rails must preserve readable button labels. The
+   rail itself scrolls horizontally rather than shrinking buttons to a few
+   pixels and stacking Arabic characters vertically. */
+main .overflow-x-auto > .flex.min-w-max > button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+  overflow-wrap: normal;
   word-break: normal;
 }
 
@@ -240,5 +288,19 @@ aside button:not([class*="bg-[#D4AF37]/10"]):hover:not(:disabled) span {
     max-width: calc(100vw - 0.5rem) !important;
     max-height: calc(100vh - 0.5rem);
     overflow-y: auto;
+  }
+}
+
+@media print {
+  html,
+  body,
+  #root,
+  #root > div,
+  #root > div > div.flex-1,
+  #root main {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    overscroll-behavior: auto !important;
   }
 }

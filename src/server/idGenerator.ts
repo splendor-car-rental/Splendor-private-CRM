@@ -46,6 +46,7 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   charge: { prefix: 'CHG-', digits: 6 },
   communication: { prefix: 'COMM-', digits: 6 },
   document: { prefix: 'DOC-', digits: 6 },
+  accountstatement: { prefix: 'STMT-', digits: 6 },
   tollimportbatch: { prefix: 'TOLBATCH-', digits: 4 },
   plateassignment: { prefix: 'PLT-', digits: 6 },
   auditlog: { prefix: 'AUD-', digits: 6 },

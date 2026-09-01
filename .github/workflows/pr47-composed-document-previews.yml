@@ -1,0 +1,55 @@
+name: PR47 Composed Document Previews
+
+on:
+  push:
+    branches:
+      - feat/contextual-documents-customer-intake
+    paths:
+      - src/server/approvedDocumentComposer.ts
+      - src/server/corporateDocumentEngine.ts
+      - src/server/corporateDocumentStamp.ts
+      - scripts/renderApprovedDocumentSamples.ts
+      - docs/approved-forms/**
+      - public/assets/approved/**
+      - .github/workflows/pr47-composed-document-previews.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compose-and-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install PDF renderer and Arabic fonts
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils fonts-noto-core fonts-noto-extra
+      - name: Compose sample documents from approved masters
+        run: bunx tsx scripts/renderApprovedDocumentSamples.ts
+      - name: Render first pages for visual QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/composed-previews
+          for pdf in tmp/composed-documents/*.pdf; do
+            base="$(basename "$pdf" .pdf)"
+            pdftoppm -f 1 -singlefile -jpeg -jpegopt quality=92 -r 150 "$pdf" "tmp/composed-previews/$base"
+          done
+      - name: Verify generated documents are non-empty
+        shell: bash
+        run: |
+          test "$(find tmp/composed-documents -name '*.pdf' | wc -l)" -ge 10
+          find tmp/composed-documents -name '*.pdf' -size 0 -print -quit | grep -q . && exit 1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr47-composed-approved-documents
+          path: |
+            tmp/composed-documents/*.pdf
+            tmp/composed-documents/*.audit.json
+            tmp/composed-previews/*.jpg
+          retention-days: 2

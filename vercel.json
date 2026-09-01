@@ -1,5 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": [
+        "dist/approved-forms/**",
+        "public/assets/approved/**"
+      ]
+    }
+  },
   "rewrites": [
     { "source": "/api/whatsapp/webhook", "destination": "/api/whatsapp-webhook" },
     { "source": "/api/:path*", "destination": "/api" }
