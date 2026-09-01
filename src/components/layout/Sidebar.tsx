@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
-  Sparkles, ShieldCheck, ShieldAlert, Settings, ChevronRight, LogOut, Globe, KeyRound, X, Camera,
+  Sparkles, ShieldCheck, ShieldAlert, Settings, LogOut, KeyRound, X, Camera,
   TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare, Crown, Calculator, Radio,
   Activity, Building2, ClipboardList
 } from 'lucide-react';
@@ -21,8 +21,17 @@ interface SidebarProps {
   onMobileClose: () => void;
 }
 
+const ROLE_LABELS_AR: Record<string, string> = {
+  ceo: 'الرئيس التنفيذي',
+  admin: 'الإدارة',
+  operations: 'العمليات',
+  fleet: 'إدارة الأسطول',
+  finance: 'المالية',
+  sales: 'المبيعات',
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose }) => {
-  const { language, setLanguage, t } = useLanguage();
+  const { language, t } = useLanguage();
   const { currentUser, logout, updateMyProfile } = useAuth();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -82,14 +91,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'operations-control-room',
           label: language === 'ar' ? 'غرفة العمليات المباشرة' : 'Operations Control Room',
           icon: <Activity className="w-4 h-4 text-blue-400" />,
-          badge: 'Live Ops',
+          badge: language === 'ar' ? 'عمليات مباشرة' : 'Live Ops',
           badgeVariant: 'sky' as const
         },
         {
           id: 'live-radar',
           label: language === 'ar' ? 'رادار الأسطول المباشر' : 'Live Fleet Radar',
           icon: <Radio className="w-4 h-4 text-emerald-400" />,
-          badge: 'GPS Live',
+          badge: language === 'ar' ? 'تتبع مباشر' : 'GPS Live',
           badgeVariant: 'emerald' as const
         },
         {
@@ -99,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
         },
         {
           id: 'vip-tiers',
-          label: language === 'ar' ? 'تصنيف عملاء الـ VIP' : 'VIP Loyalty Tiers',
+          label: language === 'ar' ? 'تصنيف العملاء المميزين' : 'VIP Loyalty Tiers',
           icon: <Crown className="w-4 h-4 text-[#f5d97f]" />
         },
         {
@@ -113,7 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'fleet',
           label: t('fleet'),
           icon: <Car className="w-4 h-4" />,
-          badge: `${availableFleetCount} Avail`,
+          badge: language === 'ar' ? `${availableFleetCount} متاح` : `${availableFleetCount} Avail`,
           badgeVariant: 'emerald' as const
         }
       ]
@@ -135,14 +144,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'contracts',
           label: t('contracts'),
           icon: <FileSignature className="w-4 h-4" />,
-          badge: activeRentalsCount > 0 ? `${activeRentalsCount} Active` : undefined,
+          badge: activeRentalsCount > 0 ? (language === 'ar' ? `${activeRentalsCount} نشط` : `${activeRentalsCount} Active`) : undefined,
           badgeVariant: 'gold' as const
         },
         {
           id: 'lease-to-own',
           label: language === 'ar' ? 'الإيجار المنتهي بالتملك' : 'Lease-to-Own',
           icon: <KeySquare className="w-4 h-4" />,
-          badge: activeLtoCount > 0 ? `${activeLtoCount} Active` : undefined,
+          badge: activeLtoCount > 0 ? (language === 'ar' ? `${activeLtoCount} نشط` : `${activeLtoCount} Active`) : undefined,
           badgeVariant: 'gold' as const
         },
         {
@@ -169,21 +178,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'corporate-branches',
           label: language === 'ar' ? 'الشركات والائتمان والفروع' : 'Corporate & Branches',
           icon: <Building2 className="w-4 h-4 text-blue-400" />,
-          badge: 'B2B',
+          badge: language === 'ar' ? 'بين الشركات' : 'B2B',
           badgeVariant: 'sky' as const
         },
         {
           id: 'reconciliation',
           label: t('reconciliation'),
           icon: <Landmark className="w-4 h-4" />,
-          badge: unreconciledCount > 0 ? `${unreconciledCount} Review` : undefined,
+          badge: unreconciledCount > 0 ? (language === 'ar' ? `${unreconciledCount} للمراجعة` : `${unreconciledCount} Review`) : undefined,
           badgeVariant: 'rose' as const
         },
         {
           id: 'tolls',
           label: t('tolls'),
           icon: <TicketCheck className="w-4 h-4" />,
-          badge: unmatchedTollsCount > 0 ? `${unmatchedTollsCount} Unmatched` : undefined,
+          badge: unmatchedTollsCount > 0 ? (language === 'ar' ? `${unmatchedTollsCount} غير مطابق` : `${unmatchedTollsCount} Unmatched`) : undefined,
           badgeVariant: 'rose' as const
         },
         {
@@ -200,14 +209,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
         },
         {
           id: 'purchase-orders',
-          label: language === 'ar' ? 'أوامر التوريد للشركات (LPO)' : 'Purchase Orders (LPO)',
+          label: language === 'ar' ? 'أوامر التوريد للشركات' : 'Purchase Orders (LPO)',
           icon: <ClipboardList className="w-4 h-4 text-[#f5d97f]" />,
-          badge: 'B2B LPO',
+          badge: language === 'ar' ? 'أمر توريد' : 'B2B LPO',
           badgeVariant: 'gold' as const
         },
         {
           id: 'fleet-acquisition-roi',
-          label: language === 'ar' ? 'محاكي الاستثمار والعائد (ROI)' : 'Fleet ROI Simulator',
+          label: language === 'ar' ? 'محاكي الاستثمار والعائد' : 'Fleet ROI Simulator',
           icon: <Calculator className="w-4 h-4 text-emerald-400" />
         },
         {
@@ -229,14 +238,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           id: 'ai-studio',
           label: language === 'ar' ? 'استوديو الذكاء الاصطناعي' : 'AI Intelligence',
           icon: <Sparkles className="w-4 h-4 text-[#D4AF37]" />,
-          badge: 'Gemini 3.7',
+          badge: language === 'ar' ? 'جيميناي 3.7' : 'Gemini 3.7',
           badgeVariant: 'gold' as const
         },
         {
           id: 'test-suite',
           label: language === 'ar' ? 'مختبر الفحص الآلي' : 'Test Suite Runner',
           icon: <ShieldCheck className="w-4 h-4 text-emerald-400" />,
-          badge: '12/12 Passed',
+          badge: language === 'ar' ? '12/12 ناجح' : '12/12 Passed',
           badgeVariant: 'emerald' as const
         },
         {
@@ -247,6 +256,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
       ]
     }
   ];
+
+  const roleLabel = language === 'ar'
+    ? (ROLE_LABELS_AR[(currentUser.role || '').toLowerCase()] || currentUser.role || '')
+    : (currentUser.role || '').toUpperCase();
 
   return (
     <>
@@ -280,7 +293,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           <button
             onClick={onMobileClose}
             className="md:hidden p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-colors shrink-0"
-            aria-label="Close menu"
+            aria-label={language === 'ar' ? 'إغلاق القائمة' : 'Close menu'}
           >
             <X className="w-4 h-4" />
           </button>
@@ -328,7 +341,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           })}
         </div>
 
-        {/* User & Role Switcher */}
+        {/* User & Role */}
         <div className="p-3.5 border-t border-zinc-800/80 bg-zinc-900/30">
           <div className="flex items-center gap-2.5 mb-2.5">
             <button
@@ -357,10 +370,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
             />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-zinc-200 truncate">
-                {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : (currentUser.name || currentUser.email || 'User')}
+                {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : (currentUser.name || currentUser.email || (language === 'ar' ? 'مستخدم' : 'User'))}
               </p>
-              <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider truncate">
-                {(currentUser.role || '').toUpperCase()} • {(currentUser.branch || '').split(' ')[0] || ''}
+              <p className="text-[10px] text-zinc-500 font-mono tracking-wider truncate">
+                {roleLabel}{currentUser.branch ? ` • ${currentUser.branch}` : ''}
               </p>
             </div>
           </div>
