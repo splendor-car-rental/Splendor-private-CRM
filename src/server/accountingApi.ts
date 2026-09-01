@@ -1,11 +1,9 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
 import {
-  allocateExistingCustomerPayment,
   closeAccountingPeriod,
   configureAccountingAccount,
   createFinanceExpense,
-  createFinancialNote,
   decideFinanceExpense,
   decideManualJournal,
   getAPAging,
@@ -14,7 +12,6 @@ import {
   getEffectiveChartOfAccounts,
   getFinanceDashboard,
   getFinancialReports,
-  getPostingGaps,
   getSupplierStatement,
   getVehicleProfitability,
   linkBankReconciliationToAccounting,
@@ -23,9 +20,6 @@ import {
   listJournals,
   listPayables,
   listPeriods,
-  payAccountsPayable,
-  postApprovedSupplierInvoiceToAP,
-  postDepositToAccounting,
   postInvoiceToAccounting,
   postPaymentToAccounting,
   requestManualJournal,
@@ -33,6 +27,14 @@ import {
   type AccountingActor
 } from './accounting';
 import { recordAtomicAccountingPayment } from './safeAccountingPayment';
+import { createAtomicFinancialNote } from './safeFinancialNote';
+import { allocateCustomerCreditAtomic } from './safeAccountingAllocation';
+import { payAccountsPayableAtomic } from './safePayablePayment';
+import { postSupplierInvoiceToAPAtomic } from './safeSupplierInvoicePosting';
+import { applyDepositToApprovedChargeAtomic, postApprovedChargeAtomic, refundManualDepositAtomic } from './safeDepositAccounting';
+import { postManualDepositReceiptAtomic } from './safeDepositReceipt';
+import { getExtendedPostingGaps } from './extendedPostingGaps';
+import { getCashFlowReport } from './cashFlow';
 import { recordAccountingAudit } from './accountingAudit';
 import { dispatchCustomerNotification, dispatchNotificationEvent } from './notificationEngine';
 import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
@@ -64,6 +66,11 @@ function assertExecutiveActor(actor: AccountingActor) {
   if (!['ceo', 'admin'].includes(actor.role)) throw new Error('You do not have permission to perform this executive accounting action.');
 }
 
+function idempotencyKeyFromRequest(req: Request): string | undefined {
+  const value = req.headers['idempotency-key'];
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function resolveReceiptSettlementAccount(method: string, requestedAccount?: string): string {
   const requested = String(requestedAccount || '').trim();
   if (requested) return requested;
@@ -71,6 +78,39 @@ function resolveReceiptSettlementAccount(method: string, requestedAccount?: stri
   if (method === 'bank_transfer') return ACCOUNTING_CONTROL_ACCOUNTS.bank;
   if (['card', 'pos_card', 'cheque', 'online_link'].includes(method)) return ACCOUNTING_CONTROL_ACCOUNTS.cardClearing;
   throw new Error('This payment method requires an explicit cash/bank/clearing settlement account.');
+}
+
+async function executeDepositLifecycle(
+  req: Request,
+  res: Response,
+  actor: AccountingActor,
+  depositId: string,
+  action: 'post' | 'apply' | 'refund'
+) {
+  if (action === 'post') {
+    const result = await postManualDepositReceiptAtomic(
+      depositId,
+      String(req.body?.settlementAccountCode || ''),
+      actor,
+      recordAccountingAudit
+    );
+    return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, journal: result.journal });
+  }
+  if (action === 'apply') {
+    const result = await applyDepositToApprovedChargeAtomic(depositId, {
+      amount: Number(req.body?.amount ?? req.body?.applyAmount),
+      chargeId: String(req.body?.chargeId || ''),
+      reason: req.body?.reason
+    }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+    return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, charge: result.charge, journal: result.journal });
+  }
+  const result = await refundManualDepositAtomic(depositId, {
+    amount: Number(req.body?.amount ?? req.body?.refundAmount),
+    settlementAccountCode: req.body?.settlementAccountCode,
+    reason: req.body?.reason,
+    refundDate: req.body?.refundDate
+  }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+  return res.status(result.replayed ? 200 : 201).json({ deposit: result.deposit, journal: result.journal });
 }
 
 /**
@@ -85,7 +125,8 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     const [resource, id, action] = segments;
 
     if ((resource === undefined || resource === 'dashboard') && req.method === 'GET') {
-      return res.json(await getFinanceDashboard());
+      const [dashboard, gaps] = await Promise.all([getFinanceDashboard(), getExtendedPostingGaps()]);
+      return res.json({ ...dashboard, unpostedSourceCount: gaps.length });
     }
 
     if (resource === 'chart-of-accounts') {
@@ -127,7 +168,7 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       if (req.method === 'POST' && id && action === 'close') {
         assertExecutiveActor(actor);
         const bounds = accountingPeriodBounds(id);
-        const blockingGaps = (await getPostingGaps()).filter(gap => {
+        const blockingGaps = (await getExtendedPostingGaps()).filter(gap => {
           const date = gap.date?.slice(0, 10);
           return Boolean(date && date >= bounds.startDate && date <= bounds.endDate);
         });
@@ -173,22 +214,29 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     if (resource === 'payables') {
       if (req.method === 'GET' && !id) return res.json(await listPayables());
       if (req.method === 'POST' && id && action === 'pay') {
-        return res.json(await payAccountsPayable(id, {
+        const result = await payAccountsPayableAtomic(id, {
           amount: Number(req.body?.amount),
           settlementAccountCode: String(req.body?.settlementAccountCode || ''),
           reference: req.body?.reference,
           paymentDate: req.body?.paymentDate
-        }, actor, recordAccountingAudit));
+        }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+        return res.status(result.replayed ? 200 : 201).json({ payable: result.payable, payment: result.payment, journal: result.journal });
       }
     }
 
     if (resource === 'supplier-invoices' && req.method === 'POST' && id && action === 'post') {
-      return res.json(await postApprovedSupplierInvoiceToAP(id, {
+      const result = await postSupplierInvoiceToAPAtomic(id, {
         amountBeforeVat: Number(req.body?.amountBeforeVat),
         vatAmount: Number(req.body?.vatAmount),
         dueDate: String(req.body?.dueDate || ''),
         expenseAccountCode: String(req.body?.expenseAccountCode || '')
-      }, actor, recordAccountingAudit));
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json({ payable: result.payable, journal: result.journal });
+    }
+
+    if (resource === 'charges' && req.method === 'POST' && id && action === 'post') {
+      const result = await postApprovedChargeAtomic(id, actor, recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json({ charge: result.charge, journal: result.journal });
     }
 
     if (resource === 'ar-aging' && req.method === 'GET') {
@@ -198,14 +246,19 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       return res.json(await getAPAging(String(req.query.asOf || new Date().toISOString().slice(0, 10))));
     }
     if (resource === 'reports' && req.method === 'GET') {
-      return res.json(await getFinancialReports({
+      const input = {
         startDate: req.query.startDate ? String(req.query.startDate) : undefined,
         endDate: req.query.endDate ? String(req.query.endDate) : undefined,
         asOf: req.query.asOf ? String(req.query.asOf) : undefined
-      }));
+      };
+      const [reports, cashFlow] = await Promise.all([
+        getFinancialReports(input),
+        getCashFlowReport({ startDate: input.startDate, endDate: input.endDate })
+      ]);
+      return res.json({ ...reports, cashFlow });
     }
     if (resource === 'vehicle-profitability' && req.method === 'GET') return res.json(await getVehicleProfitability());
-    if (resource === 'posting-gaps' && req.method === 'GET') return res.json(await getPostingGaps());
+    if (resource === 'posting-gaps' && req.method === 'GET') return res.json(await getExtendedPostingGaps());
 
     if (resource === 'invoices' && req.method === 'POST' && id && action === 'post') {
       return res.json(await postInvoiceToAccounting(id, String(req.body?.revenueAccountCode || '4000'), actor, recordAccountingAudit));
@@ -214,31 +267,40 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
       return res.json(await postPaymentToAccounting(id, String(req.body?.settlementAccountCode || ''), actor, recordAccountingAudit));
     }
     if (resource === 'payments' && req.method === 'POST' && id && action === 'allocate') {
-      return res.json(await allocateExistingCustomerPayment(id, Array.isArray(req.body?.allocations) ? req.body.allocations : [], actor, recordAccountingAudit));
+      const result = await allocateCustomerCreditAtomic(
+        id,
+        Array.isArray(req.body?.allocations) ? req.body.allocations : [],
+        actor,
+        idempotencyKeyFromRequest(req),
+        recordAccountingAudit
+      );
+      return res.status(result.replayed ? 200 : 201).json({ payment: result.payment, journal: result.journal });
     }
-    if (resource === 'deposits' && req.method === 'POST' && id && action === 'post') {
-      return res.json(await postDepositToAccounting(id, String(req.body?.settlementAccountCode || ''), actor, recordAccountingAudit));
+    if (resource === 'deposits' && req.method === 'POST' && id && (action === 'post' || action === 'apply' || action === 'refund')) {
+      return executeDepositLifecycle(req, res, actor, id, action);
     }
 
     if (resource === 'credit-notes' && req.method === 'POST') {
-      return res.status(201).json(await createFinancialNote('credit_note', {
+      const result = await createAtomicFinancialNote('credit_note', {
         invoiceId: String(req.body?.invoiceId || ''),
         issueDate: String(req.body?.issueDate || new Date().toISOString()),
         reason: String(req.body?.reason || ''),
         amountBeforeVat: Number(req.body?.amountBeforeVat),
         vatAmount: Number(req.body?.vatAmount),
         revenueAccountCode: String(req.body?.revenueAccountCode || '4000')
-      }, actor, recordAccountingAudit));
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json(result.note);
     }
     if (resource === 'debit-notes' && req.method === 'POST') {
-      return res.status(201).json(await createFinancialNote('debit_note', {
+      const result = await createAtomicFinancialNote('debit_note', {
         invoiceId: String(req.body?.invoiceId || ''),
         issueDate: String(req.body?.issueDate || new Date().toISOString()),
         reason: String(req.body?.reason || ''),
         amountBeforeVat: Number(req.body?.amountBeforeVat),
         vatAmount: Number(req.body?.vatAmount),
         revenueAccountCode: String(req.body?.revenueAccountCode || '4000')
-      }, actor, recordAccountingAudit));
+      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
+      return res.status(result.replayed ? 200 : 201).json(result.note);
     }
     if (resource === 'financial-notes' && req.method === 'GET') {
       return res.json(await listFinancialNotes(req.query.invoiceId ? String(req.query.invoiceId) : undefined));
@@ -253,6 +315,27 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     if (resource === 'customers' && id && action === 'statement' && req.method === 'GET') return res.json(await getCustomerAccountingStatement(id));
 
     return res.status(404).json({ error: 'Accounting route not found.' });
+  } catch (error) {
+    return badRequest(res, error);
+  }
+}
+
+/**
+ * Compatibility boundary for the legacy CRM context. Existing UI callers
+ * still POST /api/deposits/:id/apply|refund; api/index.ts intercepts those
+ * paths and routes them here, so they receive the same atomic journal +
+ * idempotency semantics without requiring a risky wholesale CRMContext edit.
+ */
+export async function handleSafeLegacyDepositMutation(
+  req: Request,
+  res: Response,
+  actor: AccountingActor,
+  depositId: string,
+  action: 'apply' | 'refund'
+) {
+  try {
+    assertFinanceActor(actor);
+    return await executeDepositLifecycle(req, res, actor, depositId, action);
   } catch (error) {
     return badRequest(res, error);
   }
@@ -288,9 +371,7 @@ export async function handleSafeCustomerPaymentRequest(req: Request, res: Respon
       settlementAccountCode,
       proofDocumentId: body.proofDocumentId
     };
-    const headerValue = req.headers['idempotency-key'];
-    const idempotencyKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-    const outcome = await recordAtomicAccountingPayment(input, actor, idempotencyKey, recordAccountingAudit);
+    const outcome = await recordAtomicAccountingPayment(input, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
     const result = outcome.result;
 
     // Notifications are side effects, not part of the financial commit. An
