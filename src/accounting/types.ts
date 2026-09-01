@@ -1,5 +1,6 @@
 export type AccountingAccountClass = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
 export type AccountingNormalSide = 'debit' | 'credit';
+export type CashFlowClass = 'operating' | 'investing' | 'financing';
 export type AccountingPostingStatus = 'unposted' | 'posted' | 'reversed' | 'blocked_closed_period';
 export type AccountingApprovalStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'posted' | 'reversed' | 'cancelled';
 
@@ -16,6 +17,8 @@ export interface AccountingAccount {
   system: boolean;
   allowDirectPosting: boolean;
   cashEquivalent?: boolean;
+  /** Classification used only for cash-flow reporting when this account is the non-cash counterpart. Configurable; never changes debit/credit semantics. */
+  cashFlowClass?: CashFlowClass;
   updatedAt?: string;
   updatedBy?: string;
   updatedByName?: string;
@@ -274,6 +277,24 @@ export interface CashBookRow {
   inflow: number;
   outflow: number;
   runningBalance: number;
+}
+
+export interface CashFlowSection {
+  inflows: number;
+  outflows: number;
+  net: number;
+}
+
+export interface CashFlowReport {
+  periodStart: string;
+  periodEnd: string;
+  openingCash: number;
+  operating: CashFlowSection;
+  investing: CashFlowSection;
+  financing: CashFlowSection;
+  unclassified: CashFlowSection;
+  netCashMovement: number;
+  closingCash: number;
 }
 
 export interface VehicleProfitabilityRow {
