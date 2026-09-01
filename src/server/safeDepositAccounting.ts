@@ -120,7 +120,27 @@ export async function postApprovedChargeAtomic(
     if (!freshChargeSnap.exists) throw new Error('Charge not found.');
     const freshCharge = freshChargeSnap.data() as AdditionalCharge & { accountingJournalId?: string; accountingPostingStatus?: string };
     if (freshCharge.approvalStatus !== 'approved') throw new Error('Charge must be approved before accounting posting.');
+
+    const freshTotal = money(freshCharge.totalAmount);
+    const freshNet = money(freshCharge.amount);
+    const freshVat = money(freshCharge.vatAmount);
+    const financialFieldsChanged = freshTotal !== total
+      || freshNet !== net
+      || freshVat !== vat
+      || freshCharge.customerId !== charge.customerId
+      || freshCharge.relatedContractId !== charge.relatedContractId
+      || freshCharge.vehicleId !== charge.vehicleId;
+    if (financialFieldsChanged) {
+      throw new Error('Charge financial fields changed while accounting posting was being prepared. Retry from the latest approved charge state.');
+    }
+
     if (existingJournal.exists) {
+      const posted = existingJournal.data() as JournalEntry;
+      if (posted.sourceType !== 'AdditionalCharge' || posted.sourceId !== charge.id || posted.sourceAction !== sourceAction || Math.abs(money(posted.totalDebit) - total) > 0.01 || Math.abs(money(posted.totalCredit) - total) > 0.01) {
+        throw new Error('Existing charge journal does not match the approved charge. Manual accounting review is required.');
+      }
+      const now = new Date().toISOString();
+      tx.set(chargeRef, { accountingPostingStatus: 'posted', accountingJournalId: journal.id, updatedAt: now }, { merge: true });
       replayed = true;
       resultingCharge = { ...freshCharge, accountingPostingStatus: 'posted', accountingJournalId: journal.id } as typeof charge;
       return;
