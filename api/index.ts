@@ -6,6 +6,7 @@ import admin from 'firebase-admin';
 // @ts-ignore TS5097 -- intentional Vercel bundling entrypoint.
 import app from '../server.ts';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
+import { handleAccountingRequest, handleSafeCustomerPaymentRequest } from '../src/server/accountingApi.js';
 import {
   issueAndRenderCorporateDocument,
   getCorporateDocumentMeta,
@@ -100,6 +101,26 @@ async function handleCorporateDocuments(req: Request, res: Response) {
 async function handler(req: Request, res: Response) {
   if (req.path === '/api/corporate-documents') {
     return handleCorporateDocuments(req, res);
+  }
+
+  // Finance & Accounting Control Center. The generic Express fallback also
+  // authenticates /api/* routes, but this serverless boundary resolves the
+  // actor once here so the accounting layer receives a verified uid/name/
+  // role and never accepts identity or role fields from request bodies.
+  if (req.path === '/api/accounting' || req.path.startsWith('/api/accounting/')) {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    if (!actor) return;
+    return handleAccountingRequest(req, res, actor);
+  }
+
+  // Replace only the production POST /api/payments write boundary. Existing
+  // readers and verification/refund routes remain on the legacy Express
+  // app. The safe writer is backward-compatible with callers that provide a
+  // single invoiceId, and adds guarded multi-allocation + customer credit.
+  if (req.path === '/api/payments' && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    if (!actor) return;
+    return handleSafeCustomerPaymentRequest(req, res, actor);
   }
 
   if (req.path === '/api/tests/run-all') {

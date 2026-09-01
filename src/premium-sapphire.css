@@ -167,6 +167,37 @@ aside button:not([class*="bg-[#D4AF37]/10"]):hover:not(:disabled) span {
   min-width: 0;
 }
 
+/* Finance/accounting forms: one reusable control treatment that is RTL-safe
+   and does not rely on component-specific inline widths. */
+.field {
+  width: 100%;
+  min-width: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgb(39 39 42);
+  background: rgb(9 9 11);
+  color: rgb(244 244 245);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.field:hover:not(:disabled) {
+  border-color: rgba(var(--splendor-sapphire-rgb), 0.22);
+}
+
+.field:focus {
+  border-color: var(--splendor-sapphire-border);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
+}
+
+.field:disabled,
+.field[readonly] {
+  cursor: not-allowed;
+  background: rgb(24 24 27);
+}
+
 /* Explicit reusable classes for future UI additions. */
 .splendor-sapphire-active {
   color: #7dd3fc !important;

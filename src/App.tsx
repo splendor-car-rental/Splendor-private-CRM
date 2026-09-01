@@ -21,7 +21,7 @@ import { FleetCRMView } from './components/views/FleetCRMView';
 import { QuotationsView } from './components/views/QuotationsView';
 import { ReservationsView } from './components/views/ReservationsView';
 import { ContractsOpsView } from './components/views/ContractsOpsView';
-import { FinanceLedgerView } from './components/views/FinanceLedgerView';
+import { FinanceControlCenterView } from './components/views/FinanceControlCenterView';
 import { BankReconciliationView } from './components/views/BankReconciliationView';
 import { TollsParkingView } from './components/views/TollsParkingView';
 import { NotificationWhatsAppCenterView } from './components/views/NotificationWhatsAppCenterView';
@@ -77,7 +77,7 @@ const MainLayout: React.FC = () => {
       case 'quotations': return <QuotationsView />;
       case 'reservations': return <ReservationsView />;
       case 'contracts': return <ContractsOpsView />;
-      case 'finance': return <FinanceLedgerView />;
+      case 'finance': return <FinanceControlCenterView />;
       case 'reconciliation':
       case 'bank-reconciliation': return <BankReconciliationView />;
       case 'tolls': return <TollsParkingView />;
