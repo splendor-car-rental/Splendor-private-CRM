@@ -3,7 +3,7 @@ import {
   Activity, AlertTriangle, Banknote, BarChart3, BookOpen, Building2,
   CalendarClock, Car, CheckCircle2, CircleDollarSign, FileMinus2, FilePlus2,
   Loader2, Plus, Receipt, RefreshCw, Scale, ShieldCheck,
-  TrendingDown, TrendingUp
+  TrendingDown, TrendingUp, WalletCards
 } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useLanguage } from '../../context/LanguageContext';
@@ -13,18 +13,36 @@ import { Modal } from '../common/Modal';
 import { FinanceLedgerView } from './FinanceLedgerView';
 import type {
   AccountingAccount, AccountingPeriod, AccountsPayableEntry, ARAgingRow, APAgingRow,
-  FinanceDashboardSummary, FinanceExpense, FinancialNote, JournalEntry, PostingGap,
-  VehicleProfitabilityRow
+  CashFlowReport, FinanceDashboardSummary, FinanceExpense, FinancialNote, JournalEntry,
+  PostingGap, VehicleProfitabilityRow
 } from '../../accounting/types';
 
-type TabKey = 'overview' | 'operations' | 'expenses' | 'ar' | 'ap' | 'vat' | 'ledger' | 'periods' | 'vehicles' | 'integrity';
+type TabKey = 'overview' | 'operations' | 'expenses' | 'ar' | 'ap' | 'vat' | 'cashflow' | 'ledger' | 'periods' | 'vehicles' | 'integrity';
+
+type SupplierInvoiceLite = {
+  id: string;
+  supplierId: string;
+  supplierName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  amount: number;
+  status: string;
+};
+
+type FinanceReports = {
+  trialBalance?: Array<{ debit: number; credit: number }>;
+  profitLoss?: { revenue: number; expenses: number; netProfit: number };
+  balanceSheet?: { assets: number; liabilities: number; equity: number; currentEarnings: number; balanced: boolean };
+  vat?: { outputVat: number; inputVat: number; vatPayable: number };
+  cashFlow?: CashFlowReport;
+};
 
 const money = (value: number | undefined) => `${(Number(value) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} د.إ`;
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await apiFetch(url, init);
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || `Request failed (${response.status})`);
+  if (!response.ok) throw new Error(body?.error || `فشل الطلب (${response.status})`);
   return body as T;
 }
 
@@ -49,6 +67,7 @@ const TABS: Array<{ id: TabKey; label: string; icon: React.ReactNode }> = [
   { id: 'ar', label: 'ذمم العملاء', icon: <CircleDollarSign className="w-4 h-4" /> },
   { id: 'ap', label: 'ذمم الموردين', icon: <Building2 className="w-4 h-4" /> },
   { id: 'vat', label: 'الضريبة', icon: <Scale className="w-4 h-4" /> },
+  { id: 'cashflow', label: 'التدفقات النقدية', icon: <WalletCards className="w-4 h-4" /> },
   { id: 'ledger', label: 'دفتر الأستاذ', icon: <BookOpen className="w-4 h-4" /> },
   { id: 'periods', label: 'إقفال الفترات', icon: <CalendarClock className="w-4 h-4" /> },
   { id: 'vehicles', label: 'ربحية المركبات', icon: <Car className="w-4 h-4" /> },
@@ -68,15 +87,20 @@ export const FinanceControlCenterView: React.FC = () => {
   const [arRows, setArRows] = useState<ARAgingRow[]>([]);
   const [apRows, setApRows] = useState<APAgingRow[]>([]);
   const [payables, setPayables] = useState<AccountsPayableEntry[]>([]);
+  const [supplierInvoices, setSupplierInvoices] = useState<SupplierInvoiceLite[]>([]);
   const [journals, setJournals] = useState<JournalEntry[]>([]);
   const [periods, setPeriods] = useState<AccountingPeriod[]>([]);
   const [vehicleRows, setVehicleRows] = useState<VehicleProfitabilityRow[]>([]);
   const [postingGaps, setPostingGaps] = useState<PostingGap[]>([]);
-  const [reports, setReports] = useState<any>(null);
+  const [reports, setReports] = useState<FinanceReports | null>(null);
   const [notes, setNotes] = useState<FinancialNote[]>([]);
   const [expenseModalOpen, setExpenseModalOpen] = useState(false);
   const [periodModalOpen, setPeriodModalOpen] = useState(false);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
+  const [supplierPostModalOpen, setSupplierPostModalOpen] = useState(false);
+  const [payablePaymentModalOpen, setPayablePaymentModalOpen] = useState(false);
+  const [selectedSupplierInvoice, setSelectedSupplierInvoice] = useState<SupplierInvoiceLite | null>(null);
+  const [selectedPayable, setSelectedPayable] = useState<AccountsPayableEntry | null>(null);
   const [noteType, setNoteType] = useState<'credit_note' | 'debit_note'>('credit_note');
   const [workingId, setWorkingId] = useState<string | null>(null);
 
@@ -87,11 +111,13 @@ export const FinanceControlCenterView: React.FC = () => {
   });
   const [closeForm, setCloseForm] = useState({ period: new Date().toISOString().slice(0, 7), reason: '' });
   const [noteForm, setNoteForm] = useState({ invoiceId: '', issueDate: new Date().toISOString().slice(0, 10), reason: '', amountBeforeVat: 0, vatAmount: 0, revenueAccountCode: '4000' });
+  const [supplierPostForm, setSupplierPostForm] = useState({ amountBeforeVat: 0, vatAmount: 0, dueDate: '', expenseAccountCode: '5170' });
+  const [payablePaymentForm, setPayablePaymentForm] = useState({ amount: 0, settlementAccountCode: '1100', reference: '', paymentDate: new Date().toISOString().slice(0, 10) });
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [dash, coa, exp, ar, ap, payableList, journalList, periodList, vehicleList, gaps, reportData, noteList] = await Promise.all([
+      const [dash, coa, exp, ar, ap, payableList, journalList, periodList, vehicleList, gaps, reportData, noteList, supplierInvoiceList] = await Promise.all([
         getJson<FinanceDashboardSummary>('/api/accounting/dashboard'),
         getJson<AccountingAccount[]>('/api/accounting/chart-of-accounts'),
         getJson<FinanceExpense[]>('/api/accounting/expenses'),
@@ -102,11 +128,13 @@ export const FinanceControlCenterView: React.FC = () => {
         getJson<AccountingPeriod[]>('/api/accounting/periods'),
         getJson<VehicleProfitabilityRow[]>('/api/accounting/vehicle-profitability'),
         getJson<PostingGap[]>('/api/accounting/posting-gaps'),
-        getJson<any>('/api/accounting/reports'),
-        getJson<FinancialNote[]>('/api/accounting/financial-notes')
+        getJson<FinanceReports>('/api/accounting/reports'),
+        getJson<FinancialNote[]>('/api/accounting/financial-notes'),
+        getJson<SupplierInvoiceLite[]>('/api/supplier-invoices').catch(() => [])
       ]);
       setDashboard(dash); setAccounts(coa); setExpenses(exp); setArRows(ar); setApRows(ap); setPayables(payableList);
       setJournals(journalList); setPeriods(periodList); setVehicleRows(vehicleList); setPostingGaps(gaps); setReports(reportData); setNotes(noteList);
+      setSupplierInvoices(supplierInvoiceList);
     } catch (error: any) {
       showToast('تعذر تحميل المركز المالي', error?.message || 'حدث خطأ أثناء تحميل بيانات المحاسبة.', 'error');
     } finally {
@@ -172,77 +200,131 @@ export const FinanceControlCenterView: React.FC = () => {
     finally { setWorkingId(null); }
   };
 
+  const openSupplierPost = (invoice: SupplierInvoiceLite) => {
+    setSelectedSupplierInvoice(invoice);
+    setSupplierPostForm({ amountBeforeVat: Number(invoice.amount || 0), vatAmount: 0, dueDate: '', expenseAccountCode: '5170' });
+    setSupplierPostModalOpen(true);
+  };
+
+  const postSupplierInvoice = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedSupplierInvoice) return;
+    setWorkingId(`post-${selectedSupplierInvoice.id}`);
+    try {
+      await getJson(`/api/accounting/supplier-invoices/${encodeURIComponent(selectedSupplierInvoice.id)}/post`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(supplierPostForm)
+      });
+      setSupplierPostModalOpen(false);
+      showToast('تم ترحيل فاتورة المورد', 'تم إنشاء الذمة الدائنة والقيد المحاسبي في عملية ذرية واحدة.', 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر ترحيل فاتورة المورد', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
+  const openPayablePayment = (payable: AccountsPayableEntry) => {
+    setSelectedPayable(payable);
+    setPayablePaymentForm({ amount: payable.balance, settlementAccountCode: '1100', reference: '', paymentDate: new Date().toISOString().slice(0, 10) });
+    setPayablePaymentModalOpen(true);
+  };
+
+  const payPayable = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedPayable) return;
+    setWorkingId(`pay-${selectedPayable.id}`);
+    try {
+      await getJson(`/api/accounting/payables/${encodeURIComponent(selectedPayable.id)}/pay`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payablePaymentForm)
+      });
+      setPayablePaymentModalOpen(false);
+      showToast('تم تسجيل سداد المورد', 'تم تحديث رصيد المورد وإنشاء قيد السداد في معاملة محاسبية ذرية.', 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر تسجيل سداد المورد', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
   const closeAllowed = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
   return (
     <div className="space-y-5 animate-fade-in pb-12" dir={isAr ? 'rtl' : 'ltr'}>
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-blue-300 text-xs font-semibold mb-1">
-            <Activity className="w-4 h-4" />
-            <span>مركز الرقابة المالية والمحاسبية</span>
-          </div>
+          <div className="flex items-center gap-2 text-blue-300 text-xs font-semibold mb-1"><Activity className="w-4 h-4" /><span>مركز الرقابة المالية والمحاسبية</span></div>
           <h2 className="text-2xl lg:text-3xl font-display font-bold text-zinc-100">المالية والمحاسبة التنفيذية</h2>
-          <p className="text-xs text-zinc-400 mt-1 max-w-3xl">دفتر أستاذ مزدوج القيد، المصروفات، ذمم العملاء والموردين، الضريبة، إقفال الفترات وربحية المركبات مع سجل تدقيق وترحيل محكوم.</p>
+          <p className="text-xs text-zinc-400 mt-1 max-w-3xl">دفتر أستاذ مزدوج القيد، المصروفات، ذمم العملاء والموردين، الضريبة، التدفقات النقدية، إقفال الفترات وربحية المركبات مع سجل تدقيق وترحيل محكوم.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setExpenseModalOpen(true)} className="px-4 py-2.5 rounded-xl bg-blue-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-blue-400 transition-colors"><Plus className="w-4 h-4" />تسجيل مصروف</button>
           <button onClick={() => { setNoteType('credit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FileMinus2 className="w-4 h-4" />إشعار دائن</button>
           <button onClick={() => { setNoteType('debit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FilePlus2 className="w-4 h-4" />إشعار مدين</button>
-          <button onClick={() => void refresh()} disabled={loading} className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
+          <button onClick={() => void refresh()} disabled={loading} className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300" title="تحديث البيانات"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
         </div>
       </div>
 
-      {loading && !dashboard ? (
-        <div className="min-h-[320px] flex items-center justify-center"><Loader2 className="w-7 h-7 animate-spin text-blue-400" /></div>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-            <Kpi title="إيراد الشهر" value={money(dashboard?.revenueMonth)} icon={<TrendingUp className="w-4 h-4" />} />
-            <Kpi title="مصروفات الشهر" value={money(dashboard?.expensesMonth)} icon={<TrendingDown className="w-4 h-4" />} />
-            <Kpi title="صافي ربح الشهر" value={money(dashboard?.netProfitMonth)} icon={<BarChart3 className="w-4 h-4" />} />
-            <Kpi title="السيولة الدفترية" value={money(dashboard?.cashPosition)} icon={<Banknote className="w-4 h-4" />} />
-            <Kpi title="مستحقات العملاء" value={money(dashboard?.arOutstanding)} icon={<CircleDollarSign className="w-4 h-4" />} />
-            <Kpi title="مستحقات الموردين" value={money(dashboard?.apOutstanding)} icon={<Building2 className="w-4 h-4" />} />
-          </div>
+      {loading && !dashboard ? <div className="min-h-[320px] flex items-center justify-center"><Loader2 className="w-7 h-7 animate-spin text-blue-400" /></div> : <>
+        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+          <Kpi title="إيراد الشهر" value={money(dashboard?.revenueMonth)} icon={<TrendingUp className="w-4 h-4" />} />
+          <Kpi title="مصروفات الشهر" value={money(dashboard?.expensesMonth)} icon={<TrendingDown className="w-4 h-4" />} />
+          <Kpi title="صافي ربح الشهر" value={money(dashboard?.netProfitMonth)} icon={<BarChart3 className="w-4 h-4" />} />
+          <Kpi title="السيولة الدفترية" value={money(dashboard?.cashPosition)} icon={<Banknote className="w-4 h-4" />} />
+          <Kpi title="مستحقات العملاء" value={money(dashboard?.arOutstanding)} icon={<CircleDollarSign className="w-4 h-4" />} />
+          <Kpi title="مستحقات الموردين" value={money(dashboard?.apOutstanding)} icon={<Building2 className="w-4 h-4" />} />
+        </div>
 
-          <div className="overflow-x-auto pb-1">
-            <div className="flex gap-2 min-w-max border-b border-zinc-800 pb-2">
-              {TABS.map(item => <button key={item.id} onClick={() => setTab(item.id)} className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${tab === item.id ? 'bg-blue-500/15 border border-blue-500/40 text-blue-300' : 'border border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'}`}>{item.icon}{item.label}</button>)}
-            </div>
-          </div>
+        <div className="overflow-x-auto pb-1"><div className="flex gap-2 min-w-max border-b border-zinc-800 pb-2">{TABS.map(item => <button key={item.id} onClick={() => setTab(item.id)} className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${tab === item.id ? 'bg-blue-500/15 border border-blue-500/40 text-blue-300' : 'border border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'}`}>{item.icon}{item.label}</button>)}</div></div>
 
-          {tab === 'overview' && <Overview dashboard={dashboard} reports={reports} postingGaps={postingGaps} notes={notes} />}
-          {tab === 'operations' && <FinanceLedgerView />}
-          {tab === 'expenses' && <ExpensesTable expenses={expenses} currentUserId={currentUser.id} workingId={workingId} onDecision={decideExpense} />}
-          {tab === 'ar' && <ARAgingTable rows={arRows} />}
-          {tab === 'ap' && <APAgingTable rows={apRows} payables={payables} />}
-          {tab === 'vat' && <VatView reports={reports} />}
-          {tab === 'ledger' && <LedgerView journals={journals} accounts={accounts} reports={reports} />}
-          {tab === 'periods' && <PeriodsView periods={periods} closeAllowed={closeAllowed} onClose={() => setPeriodModalOpen(true)} />}
-          {tab === 'vehicles' && <VehicleProfitabilityTable rows={vehicleRows} />}
-          {tab === 'integrity' && <PostingGapsTable gaps={postingGaps} />}
-        </>
-      )}
+        {tab === 'overview' && <Overview dashboard={dashboard} reports={reports} postingGaps={postingGaps} notes={notes} />}
+        {tab === 'operations' && <FinanceLedgerView />}
+        {tab === 'expenses' && <ExpensesTable expenses={expenses} currentUserId={currentUser.id} workingId={workingId} onDecision={decideExpense} />}
+        {tab === 'ar' && <ARAgingTable rows={arRows} />}
+        {tab === 'ap' && <APView rows={apRows} payables={payables} supplierInvoices={supplierInvoices} workingId={workingId} onPost={openSupplierPost} onPay={openPayablePayment} />}
+        {tab === 'vat' && <VatView reports={reports} />}
+        {tab === 'cashflow' && <CashFlowView cashFlow={reports?.cashFlow} />}
+        {tab === 'ledger' && <LedgerView journals={journals} accounts={accounts} reports={reports} />}
+        {tab === 'periods' && <PeriodsView periods={periods} closeAllowed={closeAllowed} onClose={() => setPeriodModalOpen(true)} />}
+        {tab === 'vehicles' && <VehicleProfitabilityTable rows={vehicleRows} />}
+        {tab === 'integrity' && <PostingGapsTable gaps={postingGaps} />}
+      </>}
 
       <Modal isOpen={expenseModalOpen} onClose={() => setExpenseModalOpen(false)} title="تسجيل مصروف جديد" subtitle="يُسجل أولًا كقيد معلق ولا يُرحّل قبل اعتماد شخص آخر" maxWidth="4xl">
-        <form onSubmit={createExpense} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <Field label="التاريخ"><input type="date" required value={expenseForm.date} onChange={e => setExpenseForm({ ...expenseForm, date: e.target.value })} className="field" /></Field>
-            <Field label="الجهة / المورد"><input value={expenseForm.vendor} onChange={e => setExpenseForm({ ...expenseForm, vendor: e.target.value })} className="field" /></Field>
-            <Field label="الفئة"><select value={expenseForm.category} onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value, expenseAccountCode: EXPENSE_ACCOUNT_BY_CATEGORY[e.target.value] || '5990' })} className="field">{EXPENSE_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-            <Field label="حساب المصروف"><select required value={expenseForm.expenseAccountCode} onChange={e => setExpenseForm({ ...expenseForm, expenseAccountCode: e.target.value })} className="field">{expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>
-            <Field label="المبلغ قبل الضريبة"><input type="number" min="0" step="0.01" required value={expenseForm.amountBeforeVat} onChange={e => { const net = Number(e.target.value); setExpenseForm({ ...expenseForm, amountBeforeVat: net, totalAmount: Number((net + Number(expenseForm.vatAmount)).toFixed(2)) }); }} className="field" /></Field>
-            <Field label="ضريبة المدخلات"><input type="number" min="0" step="0.01" required value={expenseForm.vatAmount} onChange={e => { const vat = Number(e.target.value); setExpenseForm({ ...expenseForm, vatAmount: vat, totalAmount: Number((Number(expenseForm.amountBeforeVat) + vat).toFixed(2)) }); }} className="field" /></Field>
-            <Field label="الإجمالي"><input type="number" readOnly value={expenseForm.totalAmount} className="field opacity-70" /></Field>
-            <Field label="حالة السداد"><select value={expenseForm.paymentStatus} onChange={e => setExpenseForm({ ...expenseForm, paymentStatus: e.target.value })} className="field"><option value="paid">مسدد</option><option value="unpaid">غير مسدد / مستحق</option></select></Field>
-            {expenseForm.paymentStatus === 'paid' && <Field label="حساب السداد"><select value={expenseForm.settlementAccountCode} onChange={e => setExpenseForm({ ...expenseForm, settlementAccountCode: e.target.value })} className="field">{settlementAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>}
-            <Field label="المرجع"><input value={expenseForm.reference} onChange={e => setExpenseForm({ ...expenseForm, reference: e.target.value })} className="field" /></Field>
-            <Field label="المركبة (اختياري)"><select value={expenseForm.vehicleId} onChange={e => setExpenseForm({ ...expenseForm, vehicleId: e.target.value })} className="field"><option value="">بدون ربط</option>{vehicles.map(v => <option key={v.id} value={v.id}>{v.make} {v.model} — {v.plateNumber}</option>)}</select></Field>
-            <Field label="العقد (اختياري)"><select value={expenseForm.contractId} onChange={e => setExpenseForm({ ...expenseForm, contractId: e.target.value })} className="field"><option value="">بدون ربط</option>{contracts.map(c => <option key={c.id} value={c.id}>{c.contractNumber} — {c.customerName}</option>)}</select></Field>
+        <form onSubmit={createExpense} className="space-y-4 text-xs"><div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Field label="التاريخ"><input type="date" required value={expenseForm.date} onChange={e => setExpenseForm({ ...expenseForm, date: e.target.value })} className="field" /></Field>
+          <Field label="الجهة / المورد"><input value={expenseForm.vendor} onChange={e => setExpenseForm({ ...expenseForm, vendor: e.target.value })} className="field" /></Field>
+          <Field label="الفئة"><select value={expenseForm.category} onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value, expenseAccountCode: EXPENSE_ACCOUNT_BY_CATEGORY[e.target.value] || '5990' })} className="field">{EXPENSE_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+          <Field label="حساب المصروف"><select required value={expenseForm.expenseAccountCode} onChange={e => setExpenseForm({ ...expenseForm, expenseAccountCode: e.target.value })} className="field">{expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>
+          <Field label="المبلغ قبل الضريبة"><input type="number" min="0" step="0.01" required value={expenseForm.amountBeforeVat} onChange={e => { const net = Number(e.target.value); setExpenseForm({ ...expenseForm, amountBeforeVat: net, totalAmount: Number((net + Number(expenseForm.vatAmount)).toFixed(2)) }); }} className="field" /></Field>
+          <Field label="ضريبة المدخلات"><input type="number" min="0" step="0.01" required value={expenseForm.vatAmount} onChange={e => { const vat = Number(e.target.value); setExpenseForm({ ...expenseForm, vatAmount: vat, totalAmount: Number((Number(expenseForm.amountBeforeVat) + vat).toFixed(2)) }); }} className="field" /></Field>
+          <Field label="الإجمالي"><input type="number" readOnly value={expenseForm.totalAmount} className="field opacity-70" /></Field>
+          <Field label="حالة السداد"><select value={expenseForm.paymentStatus} onChange={e => setExpenseForm({ ...expenseForm, paymentStatus: e.target.value })} className="field"><option value="paid">مسدد</option><option value="unpaid">غير مسدد / مستحق</option></select></Field>
+          {expenseForm.paymentStatus === 'paid' && <Field label="حساب السداد"><select value={expenseForm.settlementAccountCode} onChange={e => setExpenseForm({ ...expenseForm, settlementAccountCode: e.target.value })} className="field">{settlementAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>}
+          <Field label="المرجع"><input value={expenseForm.reference} onChange={e => setExpenseForm({ ...expenseForm, reference: e.target.value })} className="field" /></Field>
+          <Field label="المركبة (اختياري)"><select value={expenseForm.vehicleId} onChange={e => setExpenseForm({ ...expenseForm, vehicleId: e.target.value })} className="field"><option value="">بدون ربط</option>{vehicles.map(v => <option key={v.id} value={v.id}>{v.make} {v.model} — {v.plateNumber}</option>)}</select></Field>
+          <Field label="العقد (اختياري)"><select value={expenseForm.contractId} onChange={e => setExpenseForm({ ...expenseForm, contractId: e.target.value })} className="field"><option value="">بدون ربط</option>{contracts.map(c => <option key={c.id} value={c.id}>{c.contractNumber} — {c.customerName}</option>)}</select></Field>
+        </div><Field label="ملاحظات"><textarea rows={3} value={expenseForm.notes} onChange={e => setExpenseForm({ ...expenseForm, notes: e.target.value })} className="field" /></Field><div className="flex justify-end gap-2 pt-3 border-t border-zinc-800"><button type="button" onClick={() => setExpenseModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">إلغاء</button><button disabled={workingId === 'new-expense'} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold flex items-center gap-2">{workingId === 'new-expense' && <Loader2 className="w-4 h-4 animate-spin" />}حفظ وإرسال للاعتماد</button></div></form>
+      </Modal>
+
+      <Modal isOpen={supplierPostModalOpen} onClose={() => setSupplierPostModalOpen(false)} title="ترحيل فاتورة مورد إلى الذمم الدائنة" subtitle="أدخل صافي الفاتورة والضريبة وتاريخ الاستحقاق صراحةً؛ النظام لا يفترض الضريبة أو الاستحقاق" maxWidth="lg">
+        <form onSubmit={postSupplierInvoice} className="space-y-4 text-xs">
+          <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-zinc-300">{selectedSupplierInvoice?.supplierName} — {selectedSupplierInvoice?.invoiceNumber} — الإجمالي {money(selectedSupplierInvoice?.amount)}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="المبلغ قبل الضريبة"><input type="number" min="0" step="0.01" required value={supplierPostForm.amountBeforeVat} onChange={e => setSupplierPostForm({ ...supplierPostForm, amountBeforeVat: Number(e.target.value) })} className="field" /></Field>
+            <Field label="ضريبة المدخلات"><input type="number" min="0" step="0.01" required value={supplierPostForm.vatAmount} onChange={e => setSupplierPostForm({ ...supplierPostForm, vatAmount: Number(e.target.value) })} className="field" /></Field>
+            <Field label="تاريخ الاستحقاق"><input type="date" required value={supplierPostForm.dueDate} onChange={e => setSupplierPostForm({ ...supplierPostForm, dueDate: e.target.value })} className="field" /></Field>
+            <Field label="حساب المصروف"><select required value={supplierPostForm.expenseAccountCode} onChange={e => setSupplierPostForm({ ...supplierPostForm, expenseAccountCode: e.target.value })} className="field">{expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>
           </div>
-          <Field label="ملاحظات"><textarea rows={3} value={expenseForm.notes} onChange={e => setExpenseForm({ ...expenseForm, notes: e.target.value })} className="field" /></Field>
-          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800"><button type="button" onClick={() => setExpenseModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">إلغاء</button><button disabled={workingId === 'new-expense'} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold flex items-center gap-2">{workingId === 'new-expense' && <Loader2 className="w-4 h-4 animate-spin" />}حفظ وإرسال للاعتماد</button></div>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setSupplierPostModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800">إلغاء</button><button disabled={Boolean(selectedSupplierInvoice && workingId === `post-${selectedSupplierInvoice.id}`)} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold">ترحيل الفاتورة</button></div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={payablePaymentModalOpen} onClose={() => setPayablePaymentModalOpen(false)} title="سداد مستحق لمورد" subtitle="السداد يحدّث رصيد المورد ويُنشئ قيد مدين للمورد ودائن لحساب السداد في معاملة واحدة" maxWidth="lg">
+        <form onSubmit={payPayable} className="space-y-4 text-xs">
+          <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-zinc-300">{selectedPayable?.supplierName} — {selectedPayable?.invoiceNumber} — المتبقي {money(selectedPayable?.balance)}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="مبلغ السداد"><input type="number" min="0.01" max={selectedPayable?.balance} step="0.01" required value={payablePaymentForm.amount} onChange={e => setPayablePaymentForm({ ...payablePaymentForm, amount: Number(e.target.value) })} className="field" /></Field>
+            <Field label="حساب السداد"><select required value={payablePaymentForm.settlementAccountCode} onChange={e => setPayablePaymentForm({ ...payablePaymentForm, settlementAccountCode: e.target.value })} className="field">{settlementAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>
+            <Field label="تاريخ السداد"><input type="date" required value={payablePaymentForm.paymentDate} onChange={e => setPayablePaymentForm({ ...payablePaymentForm, paymentDate: e.target.value })} className="field" /></Field>
+            <Field label="مرجع السداد"><input value={payablePaymentForm.reference} onChange={e => setPayablePaymentForm({ ...payablePaymentForm, reference: e.target.value })} className="field" /></Field>
+          </div>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setPayablePaymentModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800">إلغاء</button><button disabled={Boolean(selectedPayable && workingId === `pay-${selectedPayable.id}`)} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold">تسجيل السداد</button></div>
         </form>
       </Modal>
 
@@ -259,19 +341,26 @@ export const FinanceControlCenterView: React.FC = () => {
 
 const Kpi: React.FC<{ title: string; value: string; icon: React.ReactNode }> = ({ title, value, icon }) => <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 min-w-0"><div className="flex items-center justify-between gap-2"><p className="text-[10px] text-zinc-500 font-semibold">{title}</p><span className="text-blue-400">{icon}</span></div><p className="text-lg font-bold text-zinc-100 mt-2 truncate">{value}</p></div>;
 const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => <label className="block"><span className="block text-zinc-400 font-medium mb-1">{label}</span>{children}</label>;
-
-const Overview: React.FC<{ dashboard: FinanceDashboardSummary | null; reports: any; postingGaps: PostingGap[]; notes: FinancialNote[] }> = ({ dashboard, reports, postingGaps, notes }) => <div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><div className="xl:col-span-2 p-5 rounded-3xl bg-zinc-900/70 border border-zinc-800"><h3 className="font-bold text-zinc-100 flex items-center gap-2"><Scale className="w-4 h-4 text-blue-400" />موقف الميزانية</h3><div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4"><Mini label="الأصول" value={money(reports?.balanceSheet?.assets)} /><Mini label="الالتزامات" value={money(reports?.balanceSheet?.liabilities)} /><Mini label="حقوق الملكية" value={money(reports?.balanceSheet?.equity)} /><Mini label="أرباح الفترة الحالية" value={money(reports?.balanceSheet?.currentEarnings)} /></div><div className={`mt-4 p-3 rounded-xl border text-xs flex items-center gap-2 ${reports?.balanceSheet?.balanced ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{reports?.balanceSheet?.balanced ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}{reports?.balanceSheet?.balanced ? 'المعادلة المحاسبية متوازنة وفق القيود المرحلة.' : 'يوجد فرق لأن بعض العمليات التاريخية غير مرحلة بعد. راجع سلامة الترحيل.'}</div></div><div className="p-5 rounded-3xl bg-zinc-900/70 border border-zinc-800"><h3 className="font-bold text-zinc-100">رقابة سريعة</h3><div className="space-y-3 mt-4"><Mini label="ضريبة مستحقة للشهر" value={money(dashboard?.vatPayable)} /><Mini label="تأمينات عملاء محتجزة" value={money(dashboard?.securityDepositsHeld)} /><Mini label="مصادر غير مرحلة" value={String(postingGaps.length)} /><Mini label="إشعارات دائنة/مدينة" value={String(notes.length)} /></div></div></div>;
+const Overview: React.FC<{ dashboard: FinanceDashboardSummary | null; reports: FinanceReports | null; postingGaps: PostingGap[]; notes: FinancialNote[] }> = ({ dashboard, reports, postingGaps, notes }) => <div className="grid grid-cols-1 xl:grid-cols-3 gap-4"><div className="xl:col-span-2 p-5 rounded-3xl bg-zinc-900/70 border border-zinc-800"><h3 className="font-bold text-zinc-100 flex items-center gap-2"><Scale className="w-4 h-4 text-blue-400" />موقف الميزانية</h3><div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4"><Mini label="الأصول" value={money(reports?.balanceSheet?.assets)} /><Mini label="الالتزامات" value={money(reports?.balanceSheet?.liabilities)} /><Mini label="حقوق الملكية" value={money(reports?.balanceSheet?.equity)} /><Mini label="أرباح الفترة الحالية" value={money(reports?.balanceSheet?.currentEarnings)} /></div><div className={`mt-4 p-3 rounded-xl border text-xs flex items-center gap-2 ${reports?.balanceSheet?.balanced ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{reports?.balanceSheet?.balanced ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}{reports?.balanceSheet?.balanced ? 'المعادلة المحاسبية متوازنة وفق القيود المرحلة.' : 'يوجد فرق لأن بعض العمليات التاريخية غير مرحلة بعد. راجع سلامة الترحيل.'}</div></div><div className="p-5 rounded-3xl bg-zinc-900/70 border border-zinc-800"><h3 className="font-bold text-zinc-100">رقابة سريعة</h3><div className="space-y-3 mt-4"><Mini label="ضريبة مستحقة للشهر" value={money(dashboard?.vatPayable)} /><Mini label="تأمينات عملاء محتجزة" value={money(dashboard?.securityDepositsHeld)} /><Mini label="مصادر غير مرحلة" value={String(postingGaps.length)} /><Mini label="إشعارات دائنة/مدينة" value={String(notes.length)} /></div></div></div>;
 const Mini: React.FC<{ label: string; value: string }> = ({ label, value }) => <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800"><p className="text-[10px] text-zinc-500">{label}</p><p className="text-sm font-bold text-zinc-100 mt-1">{value}</p></div>;
-
 const ExpensesTable: React.FC<{ expenses: FinanceExpense[]; currentUserId: string; workingId: string | null; onDecision: (id: string, decision: 'approve' | 'reject') => void }> = ({ expenses, currentUserId, workingId, onDecision }) => <TableShell title="سجل المصروفات"><table className="w-full text-xs min-w-[980px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الرقم</Th><Th>التاريخ</Th><Th>الجهة</Th><Th>الفئة</Th><Th>الإجمالي</Th><Th>الاعتماد</Th><Th>الترحيل</Th><Th>الإجراء</Th></tr></thead><tbody>{expenses.map(e => <tr key={e.id} className="border-b border-zinc-800/50 text-zinc-300"><Td mono>{e.id}</Td><Td>{e.date}</Td><Td>{e.vendor || '—'}</Td><Td>{e.category}</Td><Td>{money(e.totalAmount)}</Td><Td>{e.approvalStatus === 'approved' ? 'معتمد' : e.approvalStatus === 'rejected' ? 'مرفوض' : 'قيد الاعتماد'}</Td><Td>{e.postingStatus === 'posted' ? 'مرحّل' : 'غير مرحّل'}</Td><Td>{e.approvalStatus === 'pending_approval' && e.createdBy !== currentUserId ? <div className="flex gap-1"><button disabled={workingId === e.id} onClick={() => onDecision(e.id, 'approve')} className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300">اعتماد</button><button disabled={workingId === e.id} onClick={() => onDecision(e.id, 'reject')} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-300">رفض</button></div> : <span className="text-zinc-600">—</span>}</Td></tr>)}</tbody></table></TableShell>;
 const ARAgingTable: React.FC<{ rows: ARAgingRow[] }> = ({ rows }) => <TableShell title="أعمار ديون العملاء"><table className="w-full text-xs min-w-[900px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>العميل</Th><Th>الإجمالي</Th><Th>حالي</Th><Th>1–30</Th><Th>31–60</Th><Th>61–90</Th><Th>+90</Th><Th>أولوية التحصيل</Th></tr></thead><tbody>{rows.map(r => <tr key={r.customerId} className="border-b border-zinc-800/50"><Td>{r.customerName}</Td><Td>{money(r.totalOutstanding)}</Td><Td>{money(r.current)}</Td><Td>{money(r['1_30'])}</Td><Td>{money(r['31_60'])}</Td><Td>{money(r['61_90'])}</Td><Td>{money(r['90_plus'])}</Td><Td>{r.collectionPriority === 'critical' ? 'حرجة' : r.collectionPriority === 'high' ? 'عالية' : r.collectionPriority === 'attention' ? 'تحتاج متابعة' : 'طبيعية'}</Td></tr>)}</tbody></table></TableShell>;
-const APAgingTable: React.FC<{ rows: APAgingRow[]; payables: AccountsPayableEntry[] }> = ({ rows, payables }) => <div className="space-y-4"><TableShell title="أعمار مستحقات الموردين"><table className="w-full text-xs min-w-[760px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>المورد</Th><Th>الإجمالي</Th><Th>حالي</Th><Th>1–30</Th><Th>31–60</Th><Th>61–90</Th><Th>+90</Th></tr></thead><tbody>{rows.map(r => <tr key={r.supplierId} className="border-b border-zinc-800/50"><Td>{r.supplierName}</Td><Td>{money(r.totalOutstanding)}</Td><Td>{money(r.current)}</Td><Td>{money(r['1_30'])}</Td><Td>{money(r['31_60'])}</Td><Td>{money(r['61_90'])}</Td><Td>{money(r['90_plus'])}</Td></tr>)}</tbody></table></TableShell><TableShell title="فواتير الموردين المرحلة"><table className="w-full text-xs min-w-[760px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الفاتورة</Th><Th>المورد</Th><Th>الاستحقاق</Th><Th>الإجمالي</Th><Th>المسدد</Th><Th>المتبقي</Th><Th>الحالة</Th></tr></thead><tbody>{payables.map(p => <tr key={p.id} className="border-b border-zinc-800/50"><Td mono>{p.invoiceNumber}</Td><Td>{p.supplierName}</Td><Td>{p.dueDate}</Td><Td>{money(p.totalAmount)}</Td><Td>{money(p.paidAmount)}</Td><Td>{money(p.balance)}</Td><Td>{p.status === 'paid' ? 'مسدد' : p.status === 'partially_paid' ? 'مسدد جزئيًا' : 'مستحق'}</Td></tr>)}</tbody></table></TableShell></div>;
-const VatView: React.FC<{ reports: any }> = ({ reports }) => <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><Kpi title="ضريبة المخرجات" value={money(reports?.vat?.outputVat)} icon={<TrendingUp className="w-4 h-4" />} /><Kpi title="ضريبة المدخلات" value={money(reports?.vat?.inputVat)} icon={<TrendingDown className="w-4 h-4" />} /><Kpi title="صافي الضريبة المستحقة" value={money(reports?.vat?.vatPayable)} icon={<Scale className="w-4 h-4" />} /><div className="md:col-span-3 p-4 rounded-2xl bg-zinc-900/70 border border-zinc-800 text-xs text-zinc-400">التقرير يعرض فقط الضريبة الناتجة عن القيود المحاسبية المرحلة. لا يتم افتراض ضريبة الموردين تلقائيًا؛ يتم إدخال صافي وضريبة فاتورة المورد قبل ترحيلها.</div></div>;
-const LedgerView: React.FC<{ journals: JournalEntry[]; accounts: AccountingAccount[]; reports: any }> = ({ journals, accounts, reports }) => <div className="space-y-4"><div className="grid grid-cols-2 md:grid-cols-4 gap-3"><Mini label="إجمالي مدين ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s: number, r: any) => s + r.debit, 0))} /><Mini label="إجمالي دائن ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s: number, r: any) => s + r.credit, 0))} /><Mini label="عدد القيود" value={String(journals.length)} /><Mini label="الحسابات النشطة" value={String(accounts.filter(a => a.active).length)} /></div><TableShell title="القيود المرحلة"><table className="w-full text-xs min-w-[900px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>القيد</Th><Th>التاريخ</Th><Th>المصدر</Th><Th>المرجع</Th><Th>البيان</Th><Th>مدين</Th><Th>دائن</Th></tr></thead><tbody>{journals.map(j => <tr key={j.id} className="border-b border-zinc-800/50"><Td mono>{j.id}</Td><Td>{j.date}</Td><Td>{j.sourceType}</Td><Td mono>{j.reference || j.sourceId}</Td><Td>{j.memo}</Td><Td>{money(j.totalDebit)}</Td><Td>{money(j.totalCredit)}</Td></tr>)}</tbody></table></TableShell></div>;
+const APView: React.FC<{ rows: APAgingRow[]; payables: AccountsPayableEntry[]; supplierInvoices: SupplierInvoiceLite[]; workingId: string | null; onPost: (invoice: SupplierInvoiceLite) => void; onPay: (payable: AccountsPayableEntry) => void }> = ({ rows, payables, supplierInvoices, workingId, onPost, onPay }) => {
+  const postedSupplierInvoiceIds = new Set(payables.map(p => p.supplierInvoiceId));
+  const readyToPost = supplierInvoices.filter(invoice => invoice.status === 'approved' && !postedSupplierInvoiceIds.has(invoice.id));
+  return <div className="space-y-4">
+    {readyToPost.length > 0 && <TableShell title="فواتير موردين معتمدة بانتظار الترحيل المحاسبي"><table className="w-full text-xs min-w-[760px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الفاتورة</Th><Th>المورد</Th><Th>التاريخ</Th><Th>الإجمالي</Th><Th>الإجراء</Th></tr></thead><tbody>{readyToPost.map(invoice => <tr key={invoice.id} className="border-b border-zinc-800/50"><Td mono>{invoice.invoiceNumber}</Td><Td>{invoice.supplierName}</Td><Td>{invoice.invoiceDate}</Td><Td>{money(invoice.amount)}</Td><Td><button disabled={workingId === `post-${invoice.id}`} onClick={() => onPost(invoice)} className="px-3 py-1.5 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 font-bold">ترحيل للذمم</button></Td></tr>)}</tbody></table></TableShell>}
+    <TableShell title="أعمار مستحقات الموردين"><table className="w-full text-xs min-w-[760px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>المورد</Th><Th>الإجمالي</Th><Th>حالي</Th><Th>1–30</Th><Th>31–60</Th><Th>61–90</Th><Th>+90</Th></tr></thead><tbody>{rows.map(r => <tr key={r.supplierId} className="border-b border-zinc-800/50"><Td>{r.supplierName}</Td><Td>{money(r.totalOutstanding)}</Td><Td>{money(r.current)}</Td><Td>{money(r['1_30'])}</Td><Td>{money(r['31_60'])}</Td><Td>{money(r['61_90'])}</Td><Td>{money(r['90_plus'])}</Td></tr>)}</tbody></table></TableShell>
+    <TableShell title="فواتير الموردين المرحلة"><table className="w-full text-xs min-w-[880px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الفاتورة</Th><Th>المورد</Th><Th>الاستحقاق</Th><Th>الإجمالي</Th><Th>المسدد</Th><Th>المتبقي</Th><Th>الحالة</Th><Th>الإجراء</Th></tr></thead><tbody>{payables.map(p => <tr key={p.id} className="border-b border-zinc-800/50"><Td mono>{p.invoiceNumber}</Td><Td>{p.supplierName}</Td><Td>{p.dueDate}</Td><Td>{money(p.totalAmount)}</Td><Td>{money(p.paidAmount)}</Td><Td>{money(p.balance)}</Td><Td>{p.status === 'paid' ? 'مسدد' : p.status === 'partially_paid' ? 'مسدد جزئيًا' : 'مستحق'}</Td><Td>{p.balance > 0 && p.status !== 'cancelled' ? <button disabled={workingId === `pay-${p.id}`} onClick={() => onPay(p)} className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold">تسجيل سداد</button> : '—'}</Td></tr>)}</tbody></table></TableShell>
+  </div>;
+};
+const VatView: React.FC<{ reports: FinanceReports | null }> = ({ reports }) => <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><Kpi title="ضريبة المخرجات" value={money(reports?.vat?.outputVat)} icon={<TrendingUp className="w-4 h-4" />} /><Kpi title="ضريبة المدخلات" value={money(reports?.vat?.inputVat)} icon={<TrendingDown className="w-4 h-4" />} /><Kpi title="صافي الضريبة المستحقة" value={money(reports?.vat?.vatPayable)} icon={<Scale className="w-4 h-4" />} /><div className="md:col-span-3 p-4 rounded-2xl bg-zinc-900/70 border border-zinc-800 text-xs text-zinc-400">التقرير يعرض فقط الضريبة الناتجة عن القيود المحاسبية المرحلة. لا يتم افتراض ضريبة الموردين تلقائيًا؛ يتم إدخال صافي وضريبة فاتورة المورد قبل ترحيلها.</div></div>;
+const CashFlowView: React.FC<{ cashFlow?: CashFlowReport }> = ({ cashFlow }) => !cashFlow ? <div className="p-5 rounded-2xl bg-zinc-900/70 border border-zinc-800 text-zinc-400 text-sm">لا توجد بيانات تدفقات نقدية متاحة للفترة الحالية.</div> : <div className="space-y-4"><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><Kpi title="رصيد النقد أول الفترة" value={money(cashFlow.openingCash)} icon={<WalletCards className="w-4 h-4" />} /><Kpi title="صافي النشاط التشغيلي" value={money(cashFlow.operating.net)} icon={<TrendingUp className="w-4 h-4" />} /><Kpi title="صافي النشاط الاستثماري" value={money(cashFlow.investing.net)} icon={<Car className="w-4 h-4" />} /><Kpi title="صافي النشاط التمويلي" value={money(cashFlow.financing.net)} icon={<Building2 className="w-4 h-4" />} /></div><TableShell title={`التدفقات النقدية من ${cashFlow.periodStart} إلى ${cashFlow.periodEnd}`}><table className="w-full text-xs min-w-[640px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>التصنيف</Th><Th>المتحصلات</Th><Th>المدفوعات</Th><Th>الصافي</Th></tr></thead><tbody><CashFlowRow label="تشغيلي" section={cashFlow.operating} /><CashFlowRow label="استثماري" section={cashFlow.investing} /><CashFlowRow label="تمويلي" section={cashFlow.financing} /><CashFlowRow label="غير مصنف — يحتاج مراجعة" section={cashFlow.unclassified} /></tbody></table></TableShell><div className="grid grid-cols-2 gap-3"><Mini label="صافي حركة النقد" value={money(cashFlow.netCashMovement)} /><Mini label="رصيد النقد آخر الفترة" value={money(cashFlow.closingCash)} /></div>{Math.abs(cashFlow.unclassified.net) > 0.005 && <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0" /><span>توجد حركة نقدية ذات أطراف محاسبية من أكثر من تصنيف. تم إبقاؤها «غير مصنفة» بدل تخمين تصنيف غير مؤكد.</span></div>}</div>;
+const CashFlowRow: React.FC<{ label: string; section: { inflows: number; outflows: number; net: number } }> = ({ label, section }) => <tr className="border-b border-zinc-800/50"><Td>{label}</Td><Td>{money(section.inflows)}</Td><Td>{money(section.outflows)}</Td><Td>{money(section.net)}</Td></tr>;
+const LedgerView: React.FC<{ journals: JournalEntry[]; accounts: AccountingAccount[]; reports: FinanceReports | null }> = ({ journals, accounts, reports }) => <div className="space-y-4"><div className="grid grid-cols-2 md:grid-cols-4 gap-3"><Mini label="إجمالي مدين ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.debit, 0))} /><Mini label="إجمالي دائن ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.credit, 0))} /><Mini label="عدد القيود" value={String(journals.length)} /><Mini label="الحسابات النشطة" value={String(accounts.filter(a => a.active).length)} /></div><TableShell title="القيود المرحلة"><table className="w-full text-xs min-w-[900px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>القيد</Th><Th>التاريخ</Th><Th>المصدر</Th><Th>المرجع</Th><Th>البيان</Th><Th>مدين</Th><Th>دائن</Th></tr></thead><tbody>{journals.map(j => <tr key={j.id} className="border-b border-zinc-800/50"><Td mono>{j.id}</Td><Td>{j.date}</Td><Td>{j.sourceType}</Td><Td mono>{j.reference || j.sourceId}</Td><Td>{j.memo}</Td><Td>{money(j.totalDebit)}</Td><Td>{money(j.totalCredit)}</Td></tr>)}</tbody></table></TableShell></div>;
 const PeriodsView: React.FC<{ periods: AccountingPeriod[]; closeAllowed: boolean; onClose: () => void }> = ({ periods, closeAllowed, onClose }) => <div className="space-y-4">{closeAllowed && <div className="flex justify-end"><button onClick={onClose} className="px-4 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-2"><CalendarClock className="w-4 h-4" />إقفال فترة</button></div>}<TableShell title="الفترات المقفلة"><table className="w-full text-xs"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الفترة</Th><Th>من</Th><Th>إلى</Th><Th>الحالة</Th><Th>تاريخ الإقفال</Th><Th>بواسطة</Th></tr></thead><tbody>{periods.map(p => <tr key={p.id} className="border-b border-zinc-800/50"><Td mono>{p.id}</Td><Td>{p.startDate}</Td><Td>{p.endDate}</Td><Td>{p.status === 'closed' ? 'مقفلة' : 'مفتوحة'}</Td><Td>{p.closedAt?.slice(0, 10) || '—'}</Td><Td>{p.closedByName || '—'}</Td></tr>)}</tbody></table></TableShell><div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400">إعادة فتح فترة مقفلة غير متاحة من هذه الواجهة عمدًا. أي تغيير في هذا السلوك يحتاج قرار حوكمة مستقل؛ التصحيح الحالي يتم بقيد عكسي أو قيد تسوية في فترة مفتوحة.</div></div>;
 const VehicleProfitabilityTable: React.FC<{ rows: VehicleProfitabilityRow[] }> = ({ rows }) => <TableShell title="ربحية المركبات من القيود المرتبطة بالمركبة"><table className="w-full text-xs min-w-[980px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>المركبة</Th><Th>الإيراد</Th><Th>الصيانة</Th><Th>التأمين</Th><Th>الترخيص</Th><Th>التمويل</Th><Th>التجهيز</Th><Th>إجمالي التكلفة</Th><Th>صافي الربح</Th><Th>العائد</Th></tr></thead><tbody>{rows.map(r => <tr key={r.vehicleId} className="border-b border-zinc-800/50"><Td>{r.vehicleName || r.vehicleId}</Td><Td>{money(r.revenue)}</Td><Td>{money(r.maintenanceCost)}</Td><Td>{money(r.insuranceCost)}</Td><Td>{money(r.registrationCost)}</Td><Td>{money(r.financeCost)}</Td><Td>{money(r.cleaningCost)}</Td><Td>{money(r.totalCost)}</Td><Td>{money(r.netProfit)}</Td><Td>{r.roiPercent == null ? '—' : `${r.roiPercent}%`}</Td></tr>)}</tbody></table></TableShell>;
-const PostingGapsTable: React.FC<{ gaps: PostingGap[] }> = ({ gaps }) => <div className="space-y-4"><div className={`p-4 rounded-2xl border text-xs flex items-start gap-3 ${gaps.length === 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{gaps.length === 0 ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}<div><p className="font-bold">{gaps.length === 0 ? 'لا توجد فجوات ترحيل مكتشفة' : `${gaps.length} عملية تشغيلية تحتاج ربطًا محاسبيًا`}</p><p className="opacity-80 mt-1">لا يقوم النظام بأي Backfill تلقائي للبيانات التاريخية. تظهر الفجوة للمراجعة ولا يتم اختراع حساب أو ضريبة أو تاريخ استحقاق.</p></div></div><TableShell title="فجوات الترحيل التاريخية والحالية"><table className="w-full text-xs min-w-[860px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>النوع</Th><Th>المرجع</Th><Th>التاريخ</Th><Th>البيان</Th><Th>المبلغ</Th><Th>سبب الفجوة</Th></tr></thead><tbody>{gaps.map((g, i) => <tr key={`${g.sourceType}-${g.sourceId}-${i}`} className="border-b border-zinc-800/50"><Td>{g.sourceType}</Td><Td mono>{g.sourceId}</Td><Td>{g.date || '—'}</Td><Td>{g.description}</Td><Td>{g.amount == null ? '—' : money(g.amount)}</Td><Td>{g.reason}</Td></tr>)}</tbody></table></TableShell></div>;
-
+const PostingGapsTable: React.FC<{ gaps: PostingGap[] }> = ({ gaps }) => <div className="space-y-4"><div className={`p-4 rounded-2xl border text-xs flex items-start gap-3 ${gaps.length === 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{gaps.length === 0 ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}<div><p className="font-bold">{gaps.length === 0 ? 'لا توجد فجوات ترحيل مكتشفة' : `${gaps.length} عملية تشغيلية تحتاج ربطًا محاسبيًا`}</p><p className="opacity-80 mt-1">لا يقوم النظام بأي ترحيل رجعي تلقائي للبيانات التاريخية. تظهر الفجوة للمراجعة ولا يتم اختراع حساب أو ضريبة أو تاريخ استحقاق.</p></div></div><TableShell title="فجوات الترحيل التاريخية والحالية"><table className="w-full text-xs min-w-[860px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>النوع</Th><Th>المرجع</Th><Th>التاريخ</Th><Th>البيان</Th><Th>المبلغ</Th><Th>سبب الفجوة</Th></tr></thead><tbody>{gaps.map((g, i) => <tr key={`${g.sourceType}-${g.sourceId}-${i}`} className="border-b border-zinc-800/50"><Td>{g.sourceType}</Td><Td mono>{g.sourceId}</Td><Td>{g.date || '—'}</Td><Td>{g.description}</Td><Td>{g.amount == null ? '—' : money(g.amount)}</Td><Td>{g.reason}</Td></tr>)}</tbody></table></TableShell></div>;
 const TableShell: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => <div className="rounded-3xl bg-zinc-900/70 border border-zinc-800 overflow-hidden"><div className="px-4 py-3 border-b border-zinc-800 font-bold text-sm text-zinc-100">{title}</div><div className="overflow-x-auto">{children}</div></div>;
 const Th: React.FC<{ children: React.ReactNode }> = ({ children }) => <th className="p-3 text-start font-medium whitespace-nowrap">{children}</th>;
 const Td: React.FC<{ children: React.ReactNode; mono?: boolean }> = ({ children, mono }) => <td className={`p-3 text-zinc-300 whitespace-nowrap ${mono ? 'font-mono' : ''}`}>{children}</td>;
