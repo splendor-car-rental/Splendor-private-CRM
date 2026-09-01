@@ -11,6 +11,7 @@ import { PWAInstallBanner } from './components/pwa/PWAInstallBanner';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ApprovedFormsLibrary } from './components/common/ApprovedFormsLibrary';
+import { ArabicInterfaceGuard } from './components/common/ArabicInterfaceGuard';
 
 // Views
 import { DashboardView } from './components/views/DashboardView';
@@ -111,6 +112,7 @@ const MainLayout: React.FC = () => {
 
   return (
     <div className={`min-h-screen bg-zinc-950 text-zinc-100 flex font-sans ${language === 'ar' ? 'font-arabic' : ''}`}>
+      <ArabicInterfaceGuard />
       <ToastContainer />
       <Sidebar isMobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
 
