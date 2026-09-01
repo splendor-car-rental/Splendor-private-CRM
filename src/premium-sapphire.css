@@ -1,5 +1,5 @@
 /* Splendor OS 3.0 — Premium Sapphire interaction layer.
-   Black remains the dominant surface; sapphire is a controlled executive accent. */
+   Black remains the dominant surface; sapphire is the executive UI accent. */
 
 :root {
   --splendor-sapphire: #00AEEF;
@@ -9,6 +9,55 @@
   --splendor-sapphire-border: rgba(var(--splendor-sapphire-rgb), 0.28);
   --splendor-sapphire-focus: rgba(var(--splendor-sapphire-rgb), 0.34);
   --splendor-sapphire-glow: rgba(var(--splendor-sapphire-rgb), 0.16);
+}
+
+/* Global responsive foundation: no application surface may force the viewport wider than the device. */
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+main,
+main > *,
+main section,
+main article,
+main form,
+main [role="dialog"] {
+  max-width: 100%;
+}
+
+img,
+svg,
+video,
+canvas,
+iframe {
+  max-width: 100%;
+}
+
+/* Long Arabic/English labels must wrap instead of expanding a flex row beyond the viewport. */
+.font-arabic,
+.font-arabic * {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Keep data tables usable: the table itself may scroll, never the whole application. */
+.overflow-x-auto {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 /* Global interaction language */
@@ -29,7 +78,46 @@ textarea:focus-visible {
   box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
 }
 
+/* Interactive gold controls are now sapphire; document artwork and printed templates remain untouched. */
+button[class*="bg-[#D4AF37]"],
+button[class*="bg-[#D4AF37]/"],
+button[class*="from-[#D4AF37]"],
+button[class*="to-[#b39029]"],
+button[class*="border-[#D4AF37]"],
+button[class*="border-[#D4AF37]/"] {
+  background-color: var(--splendor-sapphire) !important;
+  background-image: none !important;
+  color: #03131a !important;
+  border-color: var(--splendor-sapphire-border) !important;
+  box-shadow: 0 8px 24px -12px var(--splendor-sapphire-glow) !important;
+}
+
+button[class*="bg-[#D4AF37]"]:hover:not(:disabled),
+button[class*="from-[#D4AF37]"]:hover:not(:disabled) {
+  background-color: #38bdf8 !important;
+  filter: brightness(1.04);
+}
+
+/* Common gold text/icon accents used by navigation and controls become sapphire. */
+[class*="text-[#D4AF37]"],
+[class*="text-[#f5d97f]"],
+[class*="text-[#D4AF37]/"] {
+  color: var(--splendor-sapphire) !important;
+}
+
+[class*="border-[#D4AF37]"],
+[class*="border-[#D4AF37]/"] {
+  border-color: var(--splendor-sapphire-border) !important;
+}
+
 /* Sidebar — blue signal on active state, blue-tinted hover, black luxury base. */
+aside {
+  flex: 0 1 auto;
+  max-width: min(19rem, 88vw);
+  min-width: 0 !important;
+  overflow-x: hidden;
+}
+
 aside button[class*="bg-[#D4AF37]/10"] {
   background: var(--splendor-sapphire-soft) !important;
   color: #7dd3fc !important;
@@ -61,6 +149,24 @@ aside button:not([class*="bg-[#D4AF37]/10"]):hover:not(:disabled) span {
   background-color: rgba(var(--splendor-sapphire-rgb), 0.045) !important;
 }
 
+/* Modal/dialog safety on small and medium screens. */
+[role="dialog"] {
+  width: min(100%, 72rem) !important;
+  max-width: calc(100vw - 1rem) !important;
+  margin-inline: auto;
+}
+
+[role="dialog"] > * {
+  max-width: 100%;
+}
+
+/* Action toolbars wrap instead of pushing the document outside the viewport. */
+.no-print.flex,
+.no-print.flex.items-center,
+.no-print .flex {
+  min-width: 0;
+}
+
 /* Explicit reusable classes for future UI additions. */
 .splendor-sapphire-active {
   color: #7dd3fc !important;
@@ -79,3 +185,29 @@ aside button:not([class*="bg-[#D4AF37]/10"]):hover:not(:disabled) span {
 .splendor-sapphire-border { border-color: var(--splendor-sapphire-border) !important; }
 .splendor-sapphire-surface { background: var(--splendor-sapphire-soft) !important; }
 .splendor-sapphire-glow { box-shadow: 0 0 18px -8px var(--splendor-sapphire-glow) !important; }
+
+@media (max-width: 1024px) {
+  aside {
+    max-width: min(17rem, 86vw);
+  }
+
+  main {
+    padding-inline: 1rem !important;
+  }
+}
+
+@media (max-width: 767px) {
+  aside {
+    max-width: 90vw;
+  }
+
+  main {
+    padding: 0.75rem !important;
+  }
+
+  [role="dialog"] {
+    max-width: calc(100vw - 0.5rem) !important;
+    max-height: calc(100vh - 0.5rem);
+    overflow-y: auto;
+  }
+}
