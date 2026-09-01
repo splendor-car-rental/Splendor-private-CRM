@@ -128,7 +128,11 @@ vi.mock('firebase-admin', () => {
 });
 
 let app: any;
-let adminMock: { verifyIdToken: Mock; usersDb: Map<string, { role: string; name: string }> };
+let adminMock: {
+  verifyIdToken: Mock;
+  usersDb: Map<string, { role: string; name: string }>;
+  store: Map<string, Map<string, any>>;
+};
 
 const CEO_UID = 'ceo-uid';
 const FINANCE_UID = 'finance-uid';
@@ -224,4 +228,28 @@ describe('Phase 6 — financial/fleet route authorization audit', () => {
       });
     });
   }
+});
+
+describe('GET /api/fleet — Firestore source-of-truth read', () => {
+  it('returns Firestore vehicles even when the process cache is empty', async () => {
+    const vehicle = {
+      id: 'VEH-FIRESTORE-ONLY',
+      make: 'Mercedes-Benz',
+      model: 'G 63',
+      status: 'available',
+      plateNumber: 'A 12345',
+      plateCity: 'Dubai'
+    };
+    adminMock.store.set('vehicles', new Map([[vehicle.id, vehicle]]));
+
+    const { globalStore } = await import('../src/server/dataStore');
+    globalStore.vehicles = [];
+
+    const res = await request(app).get('/api/fleet').set(authAs(CEO_UID));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ id: vehicle.id, make: vehicle.make, model: vehicle.model });
+    expect(globalStore.vehicles).toHaveLength(1);
+  });
 });

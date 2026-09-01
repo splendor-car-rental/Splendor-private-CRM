@@ -196,6 +196,12 @@ function initFirebaseAdmin() {
   }
   try {
     const serviceAccount = JSON.parse(raw);
+    const expectedProjectId = 'splendor-private-crm';
+    if (serviceAccount.project_id && serviceAccount.project_id !== expectedProjectId) {
+      throw new Error(
+        `Configured Firebase service account belongs to an unexpected project; expected "${expectedProjectId}".`
+      );
+    }
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
       storageBucket: 'splendor-private-crm.firebasestorage.app'
@@ -266,6 +272,39 @@ app.use('/api', (req, res, next) => {
     return next();
   }
   return requireAuth(req, res, next);
+});
+
+// Vercel starts handling requests as soon as this module is imported. The
+// previous cold-start path launched Firestore hydration in the background,
+// so fleet mutations and availability checks could observe DataStore's
+// initial [] before the real vehicles query completed. Fleet requests now
+// wait for one shared hydration promise. A failed hydration fails closed
+// with 503 and is retryable; it is never represented as an empty fleet.
+let storeHydrationPromise: Promise<void> | null = null;
+function ensureStoreHydrated(): Promise<void> {
+  if (!storeHydrationPromise) {
+    storeHydrationPromise = hydrateStoreFromFirestore().catch((error) => {
+      storeHydrationPromise = null;
+      throw error;
+    });
+  }
+  return storeHydrationPromise;
+}
+
+app.use('/api', async (req, res, next) => {
+  if (!req.path.startsWith('/fleet')) return next();
+
+  if (admin.apps.length === 0) {
+    return res.status(503).json({ error: 'CRM persistence is not configured.' });
+  }
+
+  try {
+    await ensureStoreHydrated();
+    next();
+  } catch (error) {
+    console.error('[hydrate] Refusing to serve an unverified/partial CRM dataset:', error);
+    res.status(503).json({ error: 'CRM data is temporarily unavailable. No empty dataset was substituted.' });
+  }
 });
 
 // In-memory rate limiting and CORS middleware for public website endpoints
@@ -1298,17 +1337,37 @@ app.put('/api/opportunities/:id', asyncHandler(async (req, res) => {
 // ----------------------------------------------------
 // 4. FLEET CRM & AVAILABILITY ENGINE (SPLENDOR CONNECT)
 // ----------------------------------------------------
-app.get('/api/fleet', (req, res) => {
-  res.json(globalStore.vehicles);
+app.get('/api/fleet', asyncHandler(async (_req, res) => {
+  // Firestore is the fleet source of truth. Reading it here avoids returning
+  // a stale per-instance serverless cache after another warm instance has
+  // created or edited a vehicle. The cache remains only a compatibility
+  // mirror for legacy engines within this process.
+  const snap = await admin.firestore().collection('vehicles').get();
+  const vehicles = normalizeVehicleRecords(
+    snap.docs.map(d => ({ ...(d.data() as any), id: d.id }))
+  );
+  globalStore.vehicles = vehicles;
+  res.json(vehicles);
+}));
+
+// Keep the specific reconciliation route before /api/fleet/:id. Express
+// otherwise treats "reconciliation" as a vehicle id and the report route is
+// unreachable.
+app.get('/api/fleet/reconciliation/report', (_req, res) => {
+  const report = SplendorConnectEngine.getReconciliationReport();
+  res.json({ success: true, report });
 });
 
-app.get('/api/fleet/:id', (req, res) => {
-  const vehicle = globalStore.vehicles.find(v => v.id === req.params.id);
+app.get('/api/fleet/:id', asyncHandler(async (req, res) => {
+  const snap = await admin.firestore().collection('vehicles').doc(req.params.id).get();
+  const vehicle = snap.exists
+    ? normalizeVehicleRecords([{ ...(snap.data() as any), id: snap.id }])[0]
+    : undefined;
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
   const contracts = globalStore.contracts.filter(c => c.vehicleId === vehicle.id);
   const reservations = globalStore.reservations.filter(r => r.vehicleId === vehicle.id);
   res.json({ vehicle, contracts, reservations });
-});
+}));
 
 app.post('/api/fleet/availability', (req, res) => {
   const { vehicleId, startDate, endDate, excludeReservationId } = req.body;
@@ -1569,12 +1628,6 @@ app.post('/api/fleet/:id/log-maintenance', requireRole('ceo', 'admin', 'fleet'),
   if (index !== -1) globalStore.vehicles[index] = vehicle;
   res.json(vehicle);
 }));
-
-// Fleet Reconciliation Report
-app.get('/api/fleet/reconciliation/report', (req, res) => {
-  const report = SplendorConnectEngine.getReconciliationReport();
-  res.json({ success: true, report });
-});
 
 // Historical Toll & Fine Attribution Check API
 app.post('/api/fleet/attribution/check', (req, res) => {
@@ -8604,6 +8657,7 @@ process.on('uncaughtException', (err) => {
 const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   users: 'users',
   customers: 'customers',
+  corporateAccounts: 'corporate_accounts',
   vehicles: 'vehicles',
   leads: 'leads',
   opportunities: 'opportunities',
@@ -8663,6 +8717,7 @@ async function hydrateStoreFromFirestore() {
 
   let hydratedCollections = 0;
   let totalDocs = 0;
+  const failures: Array<{ collectionName: string; error: unknown }> = [];
 
   await Promise.all(
     Object.entries(FIRESTORE_COLLECTION_BY_FIELD).map(async ([field, collectionName]) => {
@@ -8672,25 +8727,7 @@ async function hydrateStoreFromFirestore() {
         
         // Normalize vehicles if any exist
         if (field === 'vehicles') {
-          records.forEach((v: any) => {
-            if (!v.lifecycleStatus) v.lifecycleStatus = 'ACTIVE';
-            if (!v.plateHistory && v.plateNumber) {
-              v.plateHistory = [
-                {
-                  id: `PLT-${v.id}`,
-                  plateNumber: v.plateNumber,
-                  plateCity: v.plateCity || 'Dubai',
-                  vehicleId: v.id,
-                  vehicleVin: v.vin || '',
-                  vehicleName: `${v.make} ${v.model}`,
-                  startDate: v.createdAt || '2025-01-01T00:00:00Z',
-                  isCurrent: true,
-                  assignedBy: 'USR-001',
-                  createdAt: v.createdAt || '2025-01-01T00:00:00Z'
-                }
-              ];
-            }
-          });
+          normalizeVehicleRecords(records);
         }
 
         // For system configuration collections, preserve system defaults if Firestore collection is empty
@@ -8706,10 +8743,15 @@ async function hydrateStoreFromFirestore() {
           totalDocs += records.length;
         }
       } catch (error) {
+        failures.push({ collectionName, error });
         console.error(`[hydrate] Failed to load "${collectionName}" from Firestore:`, error);
       }
     })
   );
+
+  if (failures.length > 0) {
+    throw new Error(`Firestore hydration failed for ${failures.length} collection(s).`);
+  }
 
   // tollPricingConfig is a single settings record, not a list -- hydrated
   // separately from the array-shaped collections above.
@@ -8741,7 +8783,33 @@ async function hydrateStoreFromFirestore() {
     console.error('[hydrate] Failed to load dead-letter queue from Firestore:', error);
   }
 
-  console.log(`[hydrate] Restored ${totalDocs} record(s) across ${hydratedCollections} collection(s) from Firestore.`);
+  console.log(
+    `[hydrate] Restored ${totalDocs} record(s) across ${hydratedCollections} collection(s) from Firestore; fleet=${globalStore.vehicles.length}.`
+  );
+}
+
+function normalizeVehicleRecords<T>(records: T[]): T[] {
+  records.forEach((record) => {
+    const vehicle = record as any;
+    if (!vehicle.lifecycleStatus) vehicle.lifecycleStatus = 'ACTIVE';
+    if (!vehicle.plateHistory && vehicle.plateNumber) {
+      vehicle.plateHistory = [
+        {
+          id: `PLT-${vehicle.id}`,
+          plateNumber: vehicle.plateNumber,
+          plateCity: vehicle.plateCity || 'Dubai',
+          vehicleId: vehicle.id,
+          vehicleVin: vehicle.vin || '',
+          vehicleName: `${vehicle.make} ${vehicle.model}`,
+          startDate: vehicle.createdAt || '2025-01-01T00:00:00Z',
+          isCurrent: true,
+          assignedBy: 'USR-001',
+          createdAt: vehicle.createdAt || '2025-01-01T00:00:00Z'
+        }
+      ];
+    }
+  });
+  return records;
 }
 
 // ----------------------------------------------------
@@ -8773,7 +8841,7 @@ async function hydrateStoreFromFirestore() {
 // call (and eventually the login bootstrap's own Firestore calls that
 // route through this pattern in spirit) looked broken.
 async function startStandaloneServer() {
-  await hydrateStoreFromFirestore();
+  await ensureStoreHydrated();
 
   if (process.env.NODE_ENV !== 'production') {
     // Dynamic import: keeps Vite's dev-server machinery out of the
@@ -8800,7 +8868,7 @@ async function startStandaloneServer() {
 if (process.env.VERCEL) {
   // Cold start on Vercel: still hydrate the in-memory store from
   // Firestore, just without opening a port.
-  hydrateStoreFromFirestore().catch((err) => {
+  ensureStoreHydrated().catch((err) => {
     console.error('[hydrate] Failed during Vercel cold start:', err);
   });
 } else {
