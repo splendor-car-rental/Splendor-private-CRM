@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Search, Bell, Plus, Sparkles,
+  Search, Bell, Plus, Sparkles, UserPlus,
   Car, FileSignature, RefreshCw, Globe, ChevronDown,
   CheckCircle2, Menu
 } from 'lucide-react';
@@ -85,7 +85,6 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </div>
 
-          {/* Desktop language switcher */}
           <div className="hidden sm:flex items-center bg-zinc-900/70 p-0.5 rounded-xl border border-zinc-800">
             <button
               onClick={() => chooseLanguage('ar')}
@@ -105,7 +104,6 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </div>
 
-          {/* Compact mobile language control */}
           <div className="relative sm:hidden">
             <button
               onClick={() => setLanguageMenuOpen(value => !value)}
@@ -168,7 +166,7 @@ export const Header: React.FC<HeaderProps> = ({
                   <div><div className="font-medium">{language === 'ar' ? 'إضافة سيارة للأسطول' : 'Add Vehicle to Fleet'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'سجل الأسطول وفحص التوفر' : 'Fleet inventory'}</div></div>
                 </button>
                 <button onClick={() => setAddCustomerOpen(true)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white hover:bg-zinc-900 text-start transition-all group">
-                  <Plus className="w-4 h-4 text-[#D4AF37] group-hover:scale-105 transition-transform" />
+                  <UserPlus className="w-4 h-4 text-[#D4AF37] group-hover:scale-105 transition-transform" />
                   <div><div className="font-medium">{language === 'ar' ? 'تسجيل عميل مميز جديد' : 'Register VIP Customer'}</div><div className="text-[10px] text-zinc-500">{language === 'ar' ? 'ملف العميل والتحقق من الهوية' : 'Customer KYC profile'}</div></div>
                 </button>
                 <button onClick={() => setAddContractOpen(true)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white hover:bg-zinc-900 text-start transition-all group">
