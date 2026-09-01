@@ -462,15 +462,6 @@ export const DEFAULT_BUSINESS_RULES: SeedRule[] = [
     tier: 'system_configuration', valueType: 'string', value: 'avatars/, customer-documents/', editable: false,
     sourceNote: 'server.ts:589. Editable by policy would create a path-traversal/data-exposure risk.'
   },
-  {
-    id: 'security.adminDataResetConfirmPhrase',
-    label: 'Admin data-reset confirmation phrase',
-    labelAr: 'عبارة تأكيد إعادة تعيين بيانات الإدارة',
-    description: 'Exact phrase required to run the irreversible transactional-data wipe.',
-    tier: 'system_configuration', valueType: 'string', value: 'DELETE ALL DATA', editable: false,
-    sourceNote: 'server.ts:428. Deliberately friction-adding and irreversible -- must never be softened or made configurable.'
-  },
-
   // ---- sensitive_rule: Data Retention Policy framework (Phase 23.9) ----
   // FRAMEWORK ONLY, per the explicit governance decision: every value below
   // is seeded `null` ("not yet defined") -- none of them may be filled in

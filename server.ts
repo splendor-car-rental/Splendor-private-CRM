@@ -241,7 +241,7 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
   }
 }
 
-// Every /api/* route requires a verified session, except the plain health check, test runner, and public website endpoints.
+// Every /api/* route requires a verified session, except the plain health check and externally-authenticated/public endpoints.
 app.use('/api', (req, res, next) => {
   // /notifications/run-checks has its own auth logic (Vercel Cron secret OR
   // a signed-in Admin/CEO) since Vercel's scheduled invocations can't carry
@@ -264,7 +264,6 @@ app.use('/api', (req, res, next) => {
   if (
     req.path === '/health' ||
     req.path.startsWith('/public/') ||
-    req.path === '/tests/run-all' ||
     req.path === '/notifications/run-checks' ||
     req.path === '/whatsapp/webhook' ||
     req.path === '/payment-gateway/webhook'
@@ -649,6 +648,14 @@ const RESET_CLEARED_FIELDS: (keyof DataStore)[] = [
 
 app.post('/api/admin/reset-transactional-data', requireRole('ceo', 'admin'), async (req, res) => {
   try {
+    // This endpoint exists only for local emulator QA. Production and
+    // preview deployments must never expose a bulk-delete/reset primitive,
+    // even to administrators: operational recovery is performed from
+    // verified backups, never by erasing and reseeding the live project.
+    if (!process.env.FIRESTORE_EMULATOR_HOST || process.env.VERCEL_ENV === 'production') {
+      return res.status(404).json({ error: 'Not found.' });
+    }
+
     const { confirmText } = req.body || {};
     if (confirmText !== RESET_CONFIRM_PHRASE) {
       return res.status(400).json({ error: `Type "${RESET_CONFIRM_PHRASE}" exactly to confirm this irreversible action.` });
@@ -5992,7 +5999,7 @@ app.post('/api/ai/customer-summary', async (req, res) => {
 // ----------------------------------------------------
 // 12. AUTOMATED END-TO-END WORKFLOW TEST SUITE
 // ----------------------------------------------------
-app.post('/api/tests/run-all', (req, res) => {
+app.post('/api/tests/run-all', requireRole('ceo', 'admin'), (req, res) => {
   // Every TC-xx fixture below (fake leads, customers, vehicles, contracts,
   // bank transactions...) used to push directly into the shared production
   // `globalStore` singleton -- meaning running this test suite injected
