@@ -40,7 +40,6 @@ import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiV
 import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
 import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
 import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
-import { PurchaseOrdersManagementView } from './components/views/PurchaseOrdersManagementView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -83,10 +82,10 @@ const MainLayout: React.FC = () => {
       case 'tolls': return <TollsParkingView />;
       case 'notification-center': return <NotificationWhatsAppCenterView />;
       case 'tasks': return <TasksFollowupsView />;
-      case 'procurement': return <ProcurementView />;
+      case 'procurement':
       case 'purchase-orders':
       case 'lpo':
-      case 'supply-orders': return <PurchaseOrdersManagementView />;
+      case 'supply-orders': return <ProcurementView />;
       case 'security': return <SecurityBlocklistView />;
       case 'inspections': return <VehicleInspectionsView />;
       case 'lease-to-own': return <LeaseToOwnView />;
