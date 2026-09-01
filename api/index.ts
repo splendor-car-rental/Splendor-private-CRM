@@ -6,7 +6,7 @@ import admin from 'firebase-admin';
 // @ts-ignore TS5097 -- intentional Vercel bundling entrypoint.
 import app from '../server.ts';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
-import { handleAccountingRequest, handleSafeCustomerPaymentRequest } from '../src/server/accountingApi.js';
+import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
 import {
   issueAndRenderCorporateDocument,
   getCorporateDocumentMeta,
@@ -111,6 +111,23 @@ async function handler(req: Request, res: Response) {
     const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleAccountingRequest(req, res, actor);
+  }
+
+  // Existing CRM screens historically call /api/deposits/:id/apply|refund.
+  // Intercept those exact money-moving paths here before the legacy Express
+  // fallback so they use the same atomic journal/idempotency controls as the
+  // Accounting Center without forcing a risky wholesale frontend rewrite.
+  const depositMutationMatch = req.path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);
+  if (depositMutationMatch && req.method === 'POST') {
+    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    if (!actor) return;
+    return handleSafeLegacyDepositMutation(
+      req,
+      res,
+      actor,
+      decodeURIComponent(depositMutationMatch[1]),
+      depositMutationMatch[2] as 'apply' | 'refund'
+    );
   }
 
   // Replace only the production POST /api/payments write boundary. Existing
