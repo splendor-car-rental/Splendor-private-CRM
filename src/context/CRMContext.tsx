@@ -1457,20 +1457,23 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Contract Deleted', `Contract ${id} has been permanently deleted.`);
   };
 
+  // Backward-compatible name: the server intentionally treats DELETE as an
+  // archive transition so a fleet record can never be physically removed.
   const deleteVehicle = async (id: string, reason?: string) => {
     const res = await fetch(`/api/fleet/${id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason })
     });
+    let result: { vehicle: Vehicle };
     try {
-      await parseApiResponse(res, 'Failed to delete vehicle.');
+      result = await parseApiResponse<{ vehicle: Vehicle }>(res, 'Failed to archive vehicle.');
     } catch (err: any) {
-      showToast('Deletion Failed', err.message, 'error');
+      showToast('Archive Failed', err.message, 'error');
       throw err;
     }
-    setVehicles(prev => prev.filter(v => v.id !== id));
-    showToast('Vehicle Deleted', `Vehicle ${id} removed from fleet.`);
+    setVehicles(prev => prev.map(v => v.id === id ? result.vehicle : v));
+    showToast('Vehicle Archived', `Vehicle ${id} retained in the fleet archive.`);
   };
 
   const deleteCustomer = async (id: string, reason?: string) => {

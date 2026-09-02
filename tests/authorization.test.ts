@@ -201,6 +201,7 @@ const CASES: RouteCase[] = [
   { name: 'POST /api/bank-transactions/:id/reconcile', method: 'post', path: '/api/bank-transactions/BTX-000001/reconcile', deniedUid: FLEET_UID, allowedUid: FINANCE_UID, body: {} },
   { name: 'DELETE /api/tolls/:id', method: 'delete', path: '/api/tolls/TOL-000001', deniedUid: SALES_UID, allowedUid: FINANCE_UID },
   { name: 'PUT /api/fleet/:id', method: 'put', path: '/api/fleet/VEH-0001', deniedUid: SALES_UID, allowedUid: CEO_UID, body: {} },
+  { name: 'DELETE /api/fleet/:id', method: 'delete', path: '/api/fleet/VEH-0001', deniedUid: SALES_UID, allowedUid: CEO_UID, body: { reason: 'Retired from active service' } },
   { name: 'POST /api/fleet/:id/assign-plate', method: 'post', path: '/api/fleet/VEH-0001/assign-plate', deniedUid: SALES_UID, allowedUid: CEO_UID, body: { plateNumber: 'A 1', plateCity: 'Dubai' } }
 ];
 
@@ -251,5 +252,80 @@ describe('GET /api/fleet — Firestore source-of-truth read', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({ id: vehicle.id, make: vehicle.make, model: vehicle.model });
     expect(globalStore.vehicles).toHaveLength(1);
+  });
+});
+
+describe('DELETE /api/fleet/:id — non-destructive archive boundary', () => {
+  it('archives the vehicle in Firestore and cache without deleting its master record', async () => {
+    const vehicle = {
+      id: 'VEH-ARCHIVE-GUARD',
+      make: 'Bentley',
+      model: 'Bentayga',
+      status: 'available',
+      lifecycleStatus: 'ACTIVE',
+      website: {
+        enabled: true,
+        visibility: 'WEBSITE',
+        featured: false,
+        publicVehicleId: 'bentley-bentayga',
+        publicName: 'Bentley Bentayga',
+        publicDescription: 'Test fixture'
+      },
+      timeline: [],
+      updatedAt: '2026-01-01T00:00:00.000Z'
+    };
+    adminMock.store.set('vehicles', new Map([[vehicle.id, vehicle]]));
+
+    const { globalStore } = await import('../src/server/dataStore');
+    globalStore.vehicles = [vehicle as any];
+    globalStore.contracts = [];
+
+    const res = await request(app)
+      .delete(`/api/fleet/${vehicle.id}`)
+      .set(authAs(CEO_UID))
+      .send({ reason: 'Retired from active service' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, archived: true });
+
+    const persisted = adminMock.store.get('vehicles')?.get(vehicle.id);
+    expect(persisted).toMatchObject({
+      id: vehicle.id,
+      lifecycleStatus: 'ARCHIVED',
+      status: 'unavailable',
+      archivedBy: CEO_UID,
+      archivedReason: 'Retired from active service',
+      website: { enabled: false, visibility: 'INTERNAL_ONLY' }
+    });
+    expect(persisted.timeline).toHaveLength(1);
+    expect(persisted.timeline[0]).toMatchObject({ action: 'ARCHIVED', vehicleId: vehicle.id });
+    expect(globalStore.vehicles.find(v => v.id === vehicle.id)).toMatchObject({ lifecycleStatus: 'ARCHIVED' });
+  });
+
+  it('is idempotent when an already archived vehicle is retried', async () => {
+    const vehicle = {
+      id: 'VEH-ARCHIVE-RETRY',
+      make: 'Rolls-Royce',
+      model: 'Ghost',
+      status: 'unavailable',
+      lifecycleStatus: 'ARCHIVED',
+      archivedAt: '2026-01-01T00:00:00.000Z',
+      timeline: [{ id: 'EVT-ARCHIVED', action: 'ARCHIVED' }]
+    };
+    adminMock.store.set('vehicles', new Map([[vehicle.id, vehicle]]));
+
+    const { globalStore } = await import('../src/server/dataStore');
+    globalStore.vehicles = [vehicle as any];
+    globalStore.contracts = [];
+
+    const res = await request(app)
+      .delete(`/api/fleet/${vehicle.id}`)
+      .set(authAs(CEO_UID))
+      .send({ reason: 'Retry after network timeout' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toContain('already archived');
+    expect(adminMock.store.get('vehicles')?.has(vehicle.id)).toBe(true);
+    expect(adminMock.store.get('vehicles')?.get(vehicle.id).timeline).toHaveLength(1);
   });
 });

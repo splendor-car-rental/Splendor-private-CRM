@@ -2874,6 +2874,10 @@ app.delete('/api/contracts/:id', requireRole('ceo', 'admin'), asyncHandler(async
   res.json({ success: true, message: `Contract ${contractId} successfully deleted.` });
 }));
 
+// Fleet records are financial/operational master data. A DELETE request is
+// therefore implemented as an audited archive transition, never as a
+// Firestore document deletion. Keeping the existing method preserves API
+// compatibility while removing the data-loss path.
 app.delete('/api/fleet/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const vehicleId = req.params.id;
   const index = globalStore.vehicles.findIndex(v => v.id === vehicleId);
@@ -2889,8 +2893,51 @@ app.delete('/api/fleet/:id', requireRole('ceo', 'admin'), asyncHandler(async (re
   const actor = await getRequesterActor(req);
   const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
 
-  await deleteDurable('vehicles', vehicleId);
-  globalStore.vehicles.splice(index, 1);
+  // Retrying the same request is safe and does not append duplicate timeline
+  // or audit entries. This matters when a browser retries after losing the
+  // first response even though Firestore already committed the transition.
+  if (vehicle.lifecycleStatus === 'ARCHIVED') {
+    return res.json({
+      success: true,
+      archived: true,
+      vehicle,
+      message: `Vehicle ${vehicleId} is already archived.`
+    });
+  }
+
+  const now = new Date().toISOString();
+  const previousLifecycleStatus = vehicle.lifecycleStatus || 'ACTIVE';
+  const archivedVehicle: Vehicle = {
+    ...vehicle,
+    lifecycleStatus: 'ARCHIVED',
+    status: 'unavailable',
+    archivedAt: now,
+    archivedBy: actor?.uid || 'USR-001',
+    archivedReason: reason,
+    updatedAt: now,
+    website: vehicle.website
+      ? { ...vehicle.website, enabled: false, visibility: 'INTERNAL_ONLY' }
+      : vehicle.website,
+    timeline: [
+      ...(vehicle.timeline || []),
+      {
+        id: `EVT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        vehicleId,
+        date: now,
+        action: 'ARCHIVED',
+        previousState: { lifecycleStatus: previousLifecycleStatus, status: vehicle.status },
+        newState: { lifecycleStatus: 'ARCHIVED', status: 'unavailable' },
+        reason,
+        userId: actor?.uid || 'USR-001',
+        userName: actor?.name || 'Administrator',
+        userRole: actor?.role || 'admin',
+        createdAt: now
+      }
+    ]
+  };
+
+  await updateDurable('vehicles', vehicleId, archivedVehicle as unknown as Record<string, unknown>);
+  globalStore.vehicles[index] = archivedVehicle;
 
   await recordAudit({
     userId: actor?.uid || 'USR-001',
@@ -2898,13 +2945,18 @@ app.delete('/api/fleet/:id', requireRole('ceo', 'admin'), asyncHandler(async (re
     userRole: (actor?.role as any) || 'admin',
     entityType: 'Vehicle',
     entityId: vehicleId,
-    action: 'delete',
-    previousValue: JSON.stringify({ make: vehicle.make, model: vehicle.model, plate: vehicle.plateNumber }),
-    newValue: 'Vehicle permanently removed from fleet inventory.',
+    action: 'status_change',
+    previousValue: JSON.stringify({ lifecycleStatus: previousLifecycleStatus, status: vehicle.status }),
+    newValue: JSON.stringify({ lifecycleStatus: 'ARCHIVED', status: 'unavailable' }),
     reason
   });
 
-  res.json({ success: true, message: `Vehicle ${vehicleId} successfully deleted.` });
+  res.json({
+    success: true,
+    archived: true,
+    vehicle: archivedVehicle,
+    message: `Vehicle ${vehicleId} successfully archived.`
+  });
 }));
 
 app.delete('/api/customers/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
