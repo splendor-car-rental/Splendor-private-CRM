@@ -13,6 +13,7 @@ import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/
 const JOURNALS = 'accounting_journals';
 const PERIODS = 'accounting_periods';
 const AUDIT_RECOVERY = 'accounting_audit_recovery';
+const ALLOWED_MANUAL_DEPOSIT_METHODS = new Set(['cash', 'bank_transfer', 'card', 'pos_card', 'cheque', 'online_link', 'other']);
 
 export interface SafeManualDepositInput {
   customerId: string;
@@ -52,9 +53,15 @@ export async function createManualDepositAtomic(
 ): Promise<{ deposit: Deposit; journal: JournalEntry; replayed: boolean }> {
   if (!idempotencyKey) throw new Error('Idempotency-Key is required for manual security deposits.');
   if (!input.customerId) throw new Error('Customer is required.');
-  const amount = money(input.amount);
+  const rawAmount = Number(input.amount);
+  if (!Number.isFinite(rawAmount)) throw new Error('Security deposit amount must be a finite number.');
+  const amount = money(rawAmount);
   if (amount <= 0) throw new Error('Security deposit amount must be greater than zero.');
-  if (input.paymentMethod === 'corporate_credit') throw new Error('Corporate credit is not a received security deposit.');
+  const paymentMethod = String(input.paymentMethod || '');
+  if (!ALLOWED_MANUAL_DEPOSIT_METHODS.has(paymentMethod)) throw new Error(`Unsupported security-deposit payment method: ${paymentMethod || 'missing'}.`);
+  if (paymentMethod === 'online_link') {
+    throw new Error('Online-link deposits must be created by the signed payment-gateway lifecycle, not the manual deposit route.');
+  }
 
   const settlementAccountCode = String(input.settlementAccountCode || defaultSettlementAccount(input.paymentMethod) || '');
   if (!settlementAccountCode) throw new Error('This deposit payment method requires an explicit cash/bank/clearing settlement account.');
@@ -101,7 +108,7 @@ export async function createManualDepositAtomic(
     contractId: input.contractId || '',
     reservationId: input.reservationId || '',
     amount,
-    paymentMethod: input.paymentMethod,
+    paymentMethod,
     settlementAccountCode,
     transactionRef: input.transactionRef || '',
     holdReleaseDueDate: input.holdReleaseDueDate || '',
@@ -116,14 +123,31 @@ export async function createManualDepositAtomic(
       const depositRef = firestore.collection('deposits').doc(depositId);
       const journalRef = firestore.collection(JOURNALS).doc(jId);
       const periodRef = firestore.collection(PERIODS).doc(periodKey);
-      const [customerSnap, periodSnap, existingDeposit, existingJournal] = await Promise.all([
-        tx.get(customerRef), tx.get(periodRef), tx.get(depositRef), tx.get(journalRef)
+      const contractRef = input.contractId ? firestore.collection('contracts').doc(input.contractId) : null;
+      const reservationRef = input.reservationId ? firestore.collection('reservations').doc(input.reservationId) : null;
+      const [customerSnap, periodSnap, existingDeposit, existingJournal, contractSnap, reservationSnap] = await Promise.all([
+        tx.get(customerRef),
+        tx.get(periodRef),
+        tx.get(depositRef),
+        tx.get(journalRef),
+        contractRef ? tx.get(contractRef) : Promise.resolve(null),
+        reservationRef ? tx.get(reservationRef) : Promise.resolve(null)
       ]);
       if (!customerSnap.exists) throw new Error('Customer not found.');
+      if (contractRef) {
+        if (!contractSnap?.exists) throw new Error('Linked contract not found.');
+        if (String((contractSnap.data() as any).customerId || '') !== input.customerId) throw new Error('Linked contract belongs to a different customer.');
+      }
+      if (reservationRef) {
+        if (!reservationSnap?.exists) throw new Error('Linked reservation not found.');
+        if (String((reservationSnap.data() as any).customerId || '') !== input.customerId) throw new Error('Linked reservation belongs to a different customer.');
+      }
       if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${periodKey} is closed.`);
       if (existingDeposit.exists || existingJournal.exists) throw new Error('Duplicate security deposit posting detected.');
 
       const customer = customerSnap.data() as any;
+      const currentHeld = Number(customer.securityDepositsHeld || 0);
+      if (!Number.isFinite(currentHeld)) throw new Error('Customer held-deposit balance is invalid and requires accounting review.');
       const customerName = input.customerName || customer.fullName || input.customerId;
       const deposit = {
         id: depositId,
@@ -151,7 +175,7 @@ export async function createManualDepositAtomic(
       tx.create(depositRef, deposit as unknown as FirebaseFirestore.DocumentData);
       tx.create(journalRef, { ...journal, memo: `Security deposit received — ${customerName}` } as unknown as FirebaseFirestore.DocumentData);
       tx.set(customerRef, {
-        securityDepositsHeld: money(Number(customer.securityDepositsHeld || 0) + amount),
+        securityDepositsHeld: money(currentHeld + amount),
         updatedAt: now
       }, { merge: true });
       return { deposit, journal: { ...journal, memo: `Security deposit received — ${customerName}` } };
