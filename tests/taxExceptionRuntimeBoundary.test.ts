@@ -18,10 +18,15 @@ describe('Tax Blocking Exception runtime boundary', () => {
     expect(runtime).toContain('runTransaction');
     expect(runtime).toContain("where('periodId', '==', periodId)");
     expect(runtime).toContain("status === 'open'");
-    expect(runtime).toContain('blockingExceptionCount: openCount + 1');
+    expect(runtime).toContain('applyBlockingExceptionToPeriod(period, openCount + 1, now)');
     expect(runtime).toContain('blockingExceptionCount: Math.max(0, openCount - 1)');
     expect(runtime).toContain("entityType: 'TaxBlockingException'");
     expect(runtime).toContain("entityType: 'TaxPeriod'");
+  });
+
+  it('invalidates completed internal-review readiness when a new blocker appears', () => {
+    expect(runtime).toContain('applyBlockingExceptionToPeriod');
+    expect(runtime).toContain('Any completed internal-review readiness is invalidated until independent review passes again.');
   });
 
   it('requires Four-Eyes resolution evidence and blocks downstream validation/close while blockers remain', () => {

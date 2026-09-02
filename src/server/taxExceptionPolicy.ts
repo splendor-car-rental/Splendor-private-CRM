@@ -25,6 +25,26 @@ export function validateCreateBlockingException(
   return null;
 }
 
+export function applyBlockingExceptionToPeriod(period: TaxPeriod, blockingExceptionCount: number, updatedAt: string): TaxPeriod {
+  const next: TaxPeriod = {
+    ...period,
+    blockingExceptionCount,
+    updatedAt
+  };
+
+  if (period.status === 'ready_for_professional_review') {
+    next.status = 'under_review';
+    next.governanceReadiness = 'INTERNAL_REVIEW';
+    next.reviewStatus = 'pending';
+    delete next.reviewNotes;
+    delete next.reviewedBy;
+    delete next.reviewedByName;
+    delete next.reviewedAt;
+  }
+
+  return next;
+}
+
 export function validateResolveBlockingException(
   period: TaxPeriod,
   exception: TaxBlockingException,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateCreateBlockingException, validateResolveBlockingException } from '../src/server/taxExceptionPolicy';
+import { applyBlockingExceptionToPeriod, validateCreateBlockingException, validateResolveBlockingException } from '../src/server/taxExceptionPolicy';
 import type { TaxBlockingException } from '../src/tax/exceptionTypes';
 import type { TaxPeriod } from '../src/tax/types';
 
@@ -47,6 +47,26 @@ describe('Tax Blocking Exception policy', () => {
   it('does not mutate professionally validated or closed periods', () => {
     expect(validateCreateBlockingException({ ...period, status: 'professionally_validated' }, exception)).toContain('cannot be mutated');
     expect(validateCreateBlockingException({ ...period, status: 'closed' }, exception)).toContain('cannot be mutated');
+  });
+
+  it('invalidates prior internal-review readiness when a new blocker is opened after review', () => {
+    const ready: TaxPeriod = {
+      ...period,
+      status: 'ready_for_professional_review',
+      governanceReadiness: 'AWAITING_PROFESSIONAL_VALIDATION',
+      reviewStatus: 'passed',
+      reviewedBy: 'admin-test',
+      reviewedByName: 'Admin Test',
+      reviewedAt: '2099-01-03T00:00:00.000Z',
+      reviewNotes: 'Synthetic review passed.'
+    };
+    const next = applyBlockingExceptionToPeriod(ready, 2, '2099-01-04T00:00:00.000Z');
+    expect(next.status).toBe('under_review');
+    expect(next.governanceReadiness).toBe('INTERNAL_REVIEW');
+    expect(next.reviewStatus).toBe('pending');
+    expect(next.reviewedBy).toBeUndefined();
+    expect(next.reviewedAt).toBeUndefined();
+    expect(next.blockingExceptionCount).toBe(2);
   });
 
   it('requires independent resolver and durable resolution evidence', () => {

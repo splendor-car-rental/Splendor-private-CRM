@@ -5,7 +5,7 @@ import type { TaxBlockingException, TaxBlockingExceptionCategory } from '../tax/
 import type { TaxPeriod, TaxPermission } from '../tax/types';
 import type { UserRole } from '../types';
 import type { TaxActor } from './taxCompliancePolicy';
-import { validateCreateBlockingException, validateResolveBlockingException } from './taxExceptionPolicy';
+import { applyBlockingExceptionToPeriod, validateCreateBlockingException, validateResolveBlockingException } from './taxExceptionPolicy';
 
 const PERIOD_COLLECTION = 'tax_periods';
 const EXCEPTION_COLLECTION = 'tax_period_exceptions';
@@ -140,12 +140,12 @@ async function createException(req: Request, res: Response, actor: TaxActor) {
 
     const existingSnap = await tx.get(db.collection(EXCEPTION_COLLECTION).where('periodId', '==', periodId));
     const openCount = existingSnap.docs.filter(doc => (doc.data() as TaxBlockingException).status === 'open').length;
-    const nextPeriod: TaxPeriod = { ...period, blockingExceptionCount: openCount + 1, updatedAt: now };
+    const nextPeriod = applyBlockingExceptionToPeriod(period, openCount + 1, now);
 
     tx.create(exceptionRef, exception);
     tx.set(periodRef, nextPeriod, { merge: false });
     writeAuditInTransaction(tx, actor, 'TaxBlockingException', exception.id, 'open', undefined, exception, description);
-    writeAuditInTransaction(tx, actor, 'TaxPeriod', period.id, 'blocking_exception_added', period, nextPeriod, `Blocking exception ${exception.id} opened.`);
+    writeAuditInTransaction(tx, actor, 'TaxPeriod', period.id, 'blocking_exception_added', period, nextPeriod, `Blocking exception ${exception.id} opened. Any completed internal-review readiness is invalidated until independent review passes again.`);
     return exception;
   }).catch(error => ({ error: error instanceof Error ? error.message : 'Tax Blocking Exception creation failed.' }));
 
