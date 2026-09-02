@@ -25,6 +25,7 @@ interface ChargeDepositAllocation {
 type AccountingCharge = AdditionalCharge & {
   accountingJournalId?: string;
   accountingPostingStatus?: string;
+  updatedAt?: string;
   /** Cumulative amount actually settled from one or more deposits. */
   depositAppliedAmount?: number;
   /** Immutable append-only evidence for each deposit allocation. */
