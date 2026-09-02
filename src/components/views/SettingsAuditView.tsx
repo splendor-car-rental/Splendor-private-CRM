@@ -56,7 +56,7 @@ export const SettingsAuditView: React.FC = () => {
             {language === 'ar' ? 'إعدادات النظام وسجل التدقيق الأمني' : 'System Configuration & Security Audit'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            {language === 'ar' ? 'إدارة الصلاحيات، سجل التغييرات غير القابل للتعديل، وبيانات الشركة الضريبية' : 'Manage corporate tax entities, role-based access control & immutable operational audit logs'}
+            {language === 'ar' ? 'إدارة بيانات الشركة والصلاحيات وسجل التغييرات التشغيلي غير القابل للتعديل' : 'Manage company configuration, role-based access control & immutable operational audit logs'}
           </p>
         </div>
 
@@ -162,11 +162,11 @@ export const SettingsAuditView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'نسبة ضريبة القيمة المضافة' : 'UAE Standard VAT Rate'}</label>
+                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'نسبة ضريبة القيمة المضافة المهيأة' : 'Configured VAT Rate'}</label>
                   <input
                     type="text"
                     readOnly
-                    value={language === 'ar' ? '5.0% (تلقائي)' : '5.0% (Automated)'}
+                    value={language === 'ar' ? '5.0% (مهيأة)' : '5.0% (Configured)'}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-emerald-400 font-bold"
                   />
                 </div>
@@ -250,8 +250,8 @@ export const SettingsAuditView: React.FC = () => {
 
               <div className="p-3 rounded-2xl bg-zinc-950/60 border border-zinc-800 text-[11px] text-zinc-400">
                 {language === 'ar'
-                  ? 'كل حسابات الأسعار وتفاصيل ضريبة الفواتير تلتزم بلوائح الهيئة الاتحادية للضرائب بدولة الإمارات (FTA).'
-                  : 'All rate calculations and invoice VAT breakdowns adhere to UAE Federal Tax Authority (FTA) regulatory compliance.'}
+                  ? 'هذه الشاشة تعرض إعدادات تشغيل وحسابات ضريبة مهيأة فقط. جاهزية الإقرار الضريبي تُراجع في قسم الامتثال الضريبي بعد التحقق من المصادر واعتماد المختص.'
+                  : 'This screen shows configured operating and VAT calculations only. Filing readiness is assessed in Tax Compliance after source validation and professional review.'}
               </div>
             </div>
           </div>
