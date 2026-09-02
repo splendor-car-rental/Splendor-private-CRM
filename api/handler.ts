@@ -9,6 +9,11 @@ import { issueNextNumber } from '../src/server/idGenerator.js';
 import { appendToAuditChain } from '../src/server/auditIntegrity.js';
 import { globalStore } from '../src/server/dataStore.js';
 import {
+  beginContractReturn,
+  settleContractReturn,
+  ContractReturnWorkflowError
+} from '../src/server/contractReturnWorkflow.js';
+import {
   issueAndRenderCorporateDocument,
   getCorporateDocumentMeta,
   type CorporateDocumentInput,
@@ -51,6 +56,8 @@ const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
 const ALL_STAFF_ROLES = ['ceo', 'admin', 'operations', 'sales', 'finance', 'fleet'];
 const ISSUED_DOCUMENT_PREFIX = 'issued-documents/';
 const HANDOVER_ROLES = ['ceo', 'admin', 'operations'];
+const RETURN_INTAKE_ROLES = ['ceo', 'admin', 'operations'];
+const RETURN_SETTLEMENT_ROLES = ['ceo', 'admin', 'finance'];
 const HANDOVER_KYC_REQUIRED: Record<string, string[]> = {
   UAE_RESIDENT: ['EMIRATES_ID_FRONT', 'EMIRATES_ID_BACK', 'DRIVING_LICENSE_FRONT', 'DRIVING_LICENSE_BACK'],
   GCC_NATIONAL: ['PASSPORT', 'DRIVING_LICENSE_FRONT', 'DRIVING_LICENSE_BACK'],
@@ -173,7 +180,13 @@ function validateHandoverEvidence(handoverData: any) {
   return { startMileage, fuelLevelPercent, customerSignatureUrl, employeeSignatureUrl };
 }
 
-async function persistHandoverAudit(actor: { uid: string; name: string; role: string }, contract: any, startMileage: number) {
+async function persistContractLifecycleAudit(
+  actor: { uid: string; name: string; role: string },
+  contractId: string,
+  previousValue: string,
+  newValue: string,
+  reason: string
+) {
   try {
     const id = await issueNextNumber('AuditLog');
     const timestamp = new Date().toISOString();
@@ -184,18 +197,18 @@ async function persistHandoverAudit(actor: { uid: string; name: string; role: st
       userName: actor.name,
       userRole: actor.role,
       entityType: 'Contract',
-      entityId: contract.id,
+      entityId: contractId,
       action: 'status_change',
-      previousValue: 'Status: Signed',
-      newValue: `Status: Active (verified handover at ${startMileage} km)`,
-      reason: 'Atomic production handover gate passed: KYC, deposit, signatures, vehicle readiness and schedule conflict checks verified'
+      previousValue,
+      newValue,
+      reason
     };
     const chain = await appendToAuditChain(baseEntry);
     const entry = { ...baseEntry, ...chain };
     await admin.firestore().collection('audit_logs').doc(id).set(entry);
     globalStore.auditLogs.unshift(entry as any);
   } catch (error) {
-    console.error('[contract-handover] handover succeeded but audit persistence failed', error);
+    console.error('[contract-lifecycle] lifecycle mutation succeeded but audit persistence failed', error);
   }
 }
 
@@ -348,8 +361,90 @@ async function handleProductionContractHandover(req: Request, res: Response, con
   const customerIndex = globalStore.customers.findIndex(c => c.id === outcome.customer.id);
   if (customerIndex !== -1) globalStore.customers[customerIndex] = outcome.customer;
 
-  await persistHandoverAudit(actor, outcome.contract, evidence.startMileage);
+  await persistContractLifecycleAudit(
+    actor,
+    outcome.contract.id,
+    'Status: Signed',
+    `Status: Active (verified handover at ${evidence.startMileage} km)`,
+    'Atomic production handover gate passed: KYC, deposit, signatures, vehicle readiness and schedule conflict checks verified'
+  );
   return res.status(200).json({ success: true, contract: outcome.contract });
+}
+
+function applyLifecycleResultToCache(outcome: { contract: any; vehicle: any; customer: any }) {
+  const contractIndex = globalStore.contracts.findIndex(c => c.id === outcome.contract.id);
+  if (contractIndex !== -1) globalStore.contracts[contractIndex] = outcome.contract;
+  const vehicleIndex = globalStore.vehicles.findIndex(v => v.id === outcome.vehicle.id);
+  if (vehicleIndex !== -1) globalStore.vehicles[vehicleIndex] = outcome.vehicle;
+  const customerIndex = globalStore.customers.findIndex(c => c.id === outcome.customer.id);
+  if (customerIndex !== -1) globalStore.customers[customerIndex] = outcome.customer;
+}
+
+async function handleProductionContractReturn(req: Request, res: Response, contractId: string) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method not allowed.' });
+  }
+  const actor = await getVerifiedStaff(req, res, RETURN_INTAKE_ROLES);
+  if (!actor) return;
+
+  const inspectionId = String((req.body || {}).inspectionId || (req.body || {}).returnData?.inspectionId || '').trim();
+  try {
+    const outcome = await beginContractReturn(contractId, inspectionId, actor);
+    applyLifecycleResultToCache(outcome);
+    await persistContractLifecycleAudit(
+      actor,
+      outcome.contract.id,
+      'Status: Active',
+      'Return received — settlement pending; vehicle unavailable',
+      `Completed return inspection ${outcome.inspection.id} accepted as the physical return source of truth`
+    );
+    return res.status(202).json({ success: true, settlementPending: true, contract: outcome.contract });
+  } catch (error) {
+    if (error instanceof ContractReturnWorkflowError) return res.status(error.status).json({ error: error.message });
+    console.error('[contract-return] return intake failed', error);
+    return res.status(500).json({ error: 'Contract return intake failed atomically.' });
+  }
+}
+
+async function handleProductionContractReturnSettlement(req: Request, res: Response, contractId: string) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method not allowed.' });
+  }
+  const actor = await getVerifiedStaff(req, res, RETURN_SETTLEMENT_ROLES);
+  if (!actor) return;
+
+  const body = req.body || {};
+  try {
+    const outcome = await settleContractReturn(contractId, {
+      settlementReference: String(body.settlementReference || ''),
+      settlementNotes: body.settlementNotes,
+      settledChargeIds: Array.isArray(body.settledChargeIds) ? body.settledChargeIds.map(String) : []
+    }, actor);
+    applyLifecycleResultToCache(outcome);
+    for (const chargeId of outcome.settledChargeIds) {
+      const charge = globalStore.charges.find(c => c.id === chargeId);
+      if (charge) Object.assign(charge as any, {
+        settledAt: outcome.contract.returnWorkflow?.settledAt,
+        settledBy: actor.uid,
+        settledByName: actor.name,
+        settlementReference: outcome.contract.returnWorkflow?.settlementReference
+      });
+    }
+    await persistContractLifecycleAudit(
+      actor,
+      outcome.contract.id,
+      'Return settlement pending',
+      'Status: Completed; vehicle released to Available',
+      `Finance/management return settlement approved under reference ${outcome.contract.returnWorkflow?.settlementReference}`
+    );
+    return res.status(200).json({ success: true, contract: outcome.contract, settledChargeIds: outcome.settledChargeIds });
+  } catch (error) {
+    if (error instanceof ContractReturnWorkflowError) return res.status(error.status).json({ error: error.message });
+    console.error('[contract-return] settlement close failed', error);
+    return res.status(500).json({ error: 'Return settlement failed atomically. The contract remains open.' });
+  }
 }
 
 async function handleContextualCorporateDocument(req: Request, res: Response, mode: 'preview' | 'issue') {
@@ -470,6 +565,16 @@ async function handleIssuedDocumentFile(req: Request, res: Response) {
 }
 
 async function handler(req: Request, res: Response) {
+  const returnSettlementMatch = req.path.match(/^\/api\/contracts\/([^/]+)\/return\/settle$/);
+  if (returnSettlementMatch) {
+    return handleProductionContractReturnSettlement(req, res, decodeURIComponent(returnSettlementMatch[1]));
+  }
+
+  const returnMatch = req.path.match(/^\/api\/contracts\/([^/]+)\/return$/);
+  if (returnMatch) {
+    return handleProductionContractReturn(req, res, decodeURIComponent(returnMatch[1]));
+  }
+
   const handoverMatch = req.path.match(/^\/api\/contracts\/([^/]+)\/handover$/);
   if (handoverMatch) {
     return handleProductionContractHandover(req, res, decodeURIComponent(handoverMatch[1]));
