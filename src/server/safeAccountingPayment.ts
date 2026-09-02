@@ -27,9 +27,21 @@ const PERIOD_COLLECTION = 'accounting_periods';
 const NOTE_COLLECTION = 'accounting_financial_notes';
 const AUDIT_RECOVERY_COLLECTION = 'accounting_audit_recovery';
 
+type AtomicCustomerPaymentInput = SafeCustomerPaymentInput & {
+  /** Only server-owned trusted lifecycles (for example a signed gateway webhook) may set this. */
+  trustedVerification?: boolean;
+  gatewayPaymentIntentId?: string;
+};
+
 function firestore() {
   if (admin.apps.length === 0) throw new Error('Firebase Admin is not initialized.');
   return admin.firestore();
+}
+
+function finiteMoney(value: unknown, label: string): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) throw new Error(`${label} must be a finite number.`);
+  return money(numeric);
 }
 
 function journalIdForPayment(paymentId: string): string {
@@ -102,17 +114,18 @@ function buildPaymentJournal(
 
 /**
  * Records receipt + invoice allocations + customer balance + accounting
- * journal in ONE Firestore transaction. The idempotency record is written
- * by runIdempotent in that same transaction, so a browser retry can never
- * create a second receipt after a partial-success response failure.
+ * journal in ONE Firestore transaction. Manual entries are deliberately
+ * tagged pending_review; a server-owned trusted source such as a verified
+ * payment-gateway webhook may mark its evidence verified at creation.
  */
 export async function recordAtomicAccountingPayment(
-  input: SafeCustomerPaymentInput,
+  input: AtomicCustomerPaymentInput,
   actor: AccountingActor,
   idempotencyKey: string | undefined,
   recordAudit: RecordAuditFn
 ): Promise<{ result: SafeCustomerPaymentResult; replayed: boolean }> {
-  const amount = money(input.amount);
+  if (!idempotencyKey) throw new Error('Idempotency-Key is required for received payments.');
+  const amount = finiteMoney(input.amount, 'Payment amount');
   if (amount <= 0) throw new Error('Payment amount must be greater than zero.');
   if (!input.customerId) throw new Error('Customer is required.');
   if (!input.settlementAccountCode) throw new Error('A settlement account is required for every received payment.');
@@ -128,11 +141,11 @@ export async function recordAtomicAccountingPayment(
     : input.invoiceId ? [{ invoiceId: input.invoiceId, amount }] : [];
   const consolidated = new Map<string, number>();
   for (const allocation of requestedAllocations) {
-    const allocationAmount = money(allocation.amount);
+    const allocationAmount = finiteMoney(allocation.amount, 'Invoice allocation amount');
     if (!allocation.invoiceId || allocationAmount <= 0) throw new Error('Every allocation requires an invoice and positive amount.');
     consolidated.set(allocation.invoiceId, money((consolidated.get(allocation.invoiceId) || 0) + allocationAmount));
   }
-  const requestedAllocatedAmount = money([...consolidated.values()].reduce((sum, value) => sum + value, 0));
+  const requestedAllocatedAmount = finiteMoney([...consolidated.values()].reduce((sum, value) => sum + value, 0), 'Allocated payment total');
   if (requestedAllocatedAmount > amount + 0.005) throw new Error('Invoice allocations exceed the received payment amount.');
   const unallocatedAmount = money(amount - requestedAllocatedAmount);
 
@@ -158,16 +171,15 @@ export async function recordAtomicAccountingPayment(
     reservationId: input.reservationId || '',
     allocations: [...consolidated.entries()].sort(([a], [b]) => a.localeCompare(b)),
     settlementAccountCode: input.settlementAccountCode,
-    proofDocumentId: input.proofDocumentId || ''
+    proofDocumentId: input.proofDocumentId || '',
+    trustedVerification: Boolean(input.trustedVerification),
+    gatewayPaymentIntentId: input.gatewayPaymentIntentId || ''
   });
 
   const outcome = await runIdempotent<SafeCustomerPaymentResult>(
     'accounting-payment-create',
     idempotencyKey,
     async tx => {
-      // Firestore requires every read before every write. Queries are also
-      // transaction reads, so notes are captured in the same consistency
-      // boundary as each invoice balance.
       const customerSnap = await tx.get(customerRef);
       if (!customerSnap.exists) throw new Error('Customer not found.');
       const invoiceSnaps: FirebaseFirestore.DocumentSnapshot[] = [];
@@ -182,6 +194,8 @@ export async function recordAtomicAccountingPayment(
       if (existingJournalSnap.exists) throw new Error('Duplicate payment journal detected.');
 
       const customer = customerSnap.data() as any;
+      const currentOutstanding = Number(customer.outstandingBalance || 0);
+      if (!Number.isFinite(currentOutstanding)) throw new Error('Customer outstanding balance is invalid and requires accounting review.');
       const customerName = customer.fullName || input.customerName || input.customerId;
       const validatedAllocations: Array<{ invoiceId: string; amount: number }> = [];
       for (let i = 0; i < invoiceRefs.length; i += 1) {
@@ -189,9 +203,16 @@ export async function recordAtomicAccountingPayment(
         if (!snap.exists) throw new Error(`Invoice ${invoiceRefs[i].id} not found.`);
         const invoice = snap.data() as Invoice;
         if (invoice.customerId !== input.customerId) throw new Error(`Invoice ${invoice.id} belongs to a different customer.`);
+        if (input.contractId && invoice.contractId && invoice.contractId !== input.contractId) {
+          throw new Error(`Invoice ${invoice.id} belongs to a different contract.`);
+        }
         if (invoice.status === 'cancelled' || invoice.status === 'draft') throw new Error(`Invoice ${invoice.id} cannot receive a payment in status ${invoice.status}.`);
+        const invoiceTotal = finiteMoney(invoice.totalAmount, `Invoice ${invoice.id} total`);
+        const invoicePaid = finiteMoney(invoice.paidAmount || 0, `Invoice ${invoice.id} paid amount`);
+        if (invoiceTotal < 0 || invoicePaid < 0) throw new Error(`Invoice ${invoice.id} has invalid financial balances.`);
         const notes = noteSnaps[i].docs.map(doc => doc.data() as FinancialNote);
         const availableBalance = adjustedInvoiceBalance(invoice, notes);
+        if (!Number.isFinite(availableBalance) || availableBalance < -0.005) throw new Error(`Invoice ${invoice.id} has an invalid accounting-adjusted balance.`);
         const requested = consolidated.get(invoice.id)!;
         if (requested > availableBalance + 0.005) {
           throw new Error(`Allocation to invoice ${invoice.id} exceeds its accounting-adjusted outstanding balance.`);
@@ -215,6 +236,7 @@ export async function recordAtomicAccountingPayment(
       );
       assertJournalAccounts(journal.lines, accounts, false);
 
+      const verified = input.trustedVerification === true;
       const paymentDoc = {
         id: paymentId,
         customerId: input.customerId,
@@ -233,7 +255,9 @@ export async function recordAtomicAccountingPayment(
         receiptNumber,
         notes: input.notes || '',
         proofDocumentId: input.proofDocumentId,
-        verificationStatus: 'pending_review',
+        gatewayPaymentIntentId: input.gatewayPaymentIntentId,
+        verificationStatus: verified ? 'verified' : 'pending_review',
+        ...(verified ? { verifiedBy: actor.uid, verifiedByName: actor.name, verifiedAt: receivedAt } : {}),
         accountingPostingStatus: 'posted',
         accountingJournalId: journal.id,
         accountingAccountCode: input.settlementAccountCode,
@@ -244,11 +268,9 @@ export async function recordAtomicAccountingPayment(
       for (let i = 0; i < invoiceRefs.length; i += 1) {
         const invoice = invoiceSnaps[i].data() as Invoice;
         const allocation = consolidated.get(invoice.id)!;
-        const paidAmount = money((invoice.paidAmount || 0) + allocation);
-        // Keep the legacy operational balance field tied to the immutable
-        // original invoice. Accounting reports separately incorporate
-        // credit/debit notes, so the original invoice itself is not rewritten.
-        const balanceDue = Math.max(0, money((invoice.totalAmount || 0) - paidAmount));
+        const paidAmount = money(finiteMoney(invoice.paidAmount || 0, `Invoice ${invoice.id} paid amount`) + allocation);
+        const totalAmount = finiteMoney(invoice.totalAmount || 0, `Invoice ${invoice.id} total`);
+        const balanceDue = Math.max(0, money(totalAmount - paidAmount));
         tx.set(invoiceRefs[i], {
           paidAmount,
           balanceDue,
@@ -257,9 +279,8 @@ export async function recordAtomicAccountingPayment(
         }, { merge: true });
       }
       if (requestedAllocatedAmount > 0) {
-        const outstanding = Number(customer.outstandingBalance || 0);
         tx.set(customerRef, {
-          outstandingBalance: Math.max(0, money(outstanding - requestedAllocatedAmount)),
+          outstandingBalance: Math.max(0, money(currentOutstanding - requestedAllocatedAmount)),
           updatedAt: receivedAt
         }, { merge: true });
       }
@@ -287,15 +308,11 @@ export async function recordAtomicAccountingPayment(
       entityType: 'Payment',
       entityId: outcome.result.paymentId,
       action: 'create' as const,
-      newValue: `Payment ${outcome.result.paymentId} recorded atomically: ${amount.toFixed(2)} AED; allocated ${requestedAllocatedAmount.toFixed(2)}; unallocated customer credit ${unallocatedAmount.toFixed(2)}; journal ${outcome.result.accountingJournalId}.`
+      newValue: `Payment ${outcome.result.paymentId} recorded atomically: ${amount.toFixed(2)} AED; allocated ${requestedAllocatedAmount.toFixed(2)}; unallocated customer credit ${unallocatedAmount.toFixed(2)}; journal ${outcome.result.accountingJournalId}; verification ${input.trustedVerification ? 'trusted/verified' : 'pending review'}.`
     };
     try {
       await recordAudit(auditPayload);
     } catch (auditError: any) {
-      // A financial transaction must never be reported as failed after its
-      // durable atomic commit merely because the secondary tamper-evident
-      // audit writer was temporarily unavailable. Persist an explicit
-      // recovery item instead of silently losing the audit obligation.
       console.error('[accounting] payment committed but audit write failed:', auditError);
       await db.collection(AUDIT_RECOVERY_COLLECTION).doc(`Payment_${outcome.result.paymentId}`).set({
         id: `Payment_${outcome.result.paymentId}`,
