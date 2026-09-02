@@ -16,6 +16,7 @@
     { "source": "/api/telematics/live", "destination": "/api/telematics-provider" },
     { "source": "/api/corporate-accounts/:accountId", "destination": "/api/corporate-accounts-safe?accountId=:accountId" },
     { "source": "/api/corporate-accounts", "destination": "/api/corporate-accounts-safe" },
+    { "source": "/api/tax-compliance", "destination": "/api/tax-compliance" },
     { "source": "/api/reservations/:reservationId/create-contract", "destination": "/api/reservation-contract?reservationId=:reservationId" },
     { "source": "/api/contracts/:contractId/review", "destination": "/api/contract-lifecycle?action=review&contractId=:contractId" },
     { "source": "/api/contracts/:contractId/approve", "destination": "/api/contract-lifecycle?action=approve&contractId=:contractId" },
