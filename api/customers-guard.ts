@@ -17,9 +17,8 @@ function addCandidate(target: Candidate[], type: ExtendedBlocklistIdentifierType
 }
 
 /**
- * Build exact, reliable identifiers from the customer payload. Name is
- * intentionally absent: names are display context, never an automatic
- * security match key because names are not unique.
+ * Build exact, reliable identifiers from the customer payload. Name is intentionally absent:
+ * names are display context, never an automatic security match key because names are not unique.
  */
 export function blocklistCandidatesFromCustomerPayload(body: any): Candidate[] {
   const candidates: Candidate[] = [];
