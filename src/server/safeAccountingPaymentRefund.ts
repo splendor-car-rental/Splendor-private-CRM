@@ -149,7 +149,7 @@ export async function applyGatewayAccountingPaymentRefund(
         ...invoice,
         paidAmount: newPaidAmount,
         balanceDue: newBalanceDue,
-        status: adjustedDue <= 0.005 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'issued',
+        status: adjustedDue <= 0.005 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'unpaid',
         updatedAt: now
       } as Invoice;
 
