@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Building2, CheckCircle2, Phone, ShieldCheck, UserRound, X } from 'lucide-react';
+import { Building2, CheckCircle2, ShieldCheck, UserRound, X } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { getCountryOptions } from '../../config/countryOptions';
