@@ -42,6 +42,23 @@ interface NormalizedPing {
   stale: boolean;
 }
 
+function ensureFirebaseAdmin(): boolean {
+  if (admin.apps.length > 0) return true;
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  if (!raw) return false;
+  try {
+    const serviceAccount = JSON.parse(raw);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      ...(serviceAccount.project_id ? { projectId: serviceAccount.project_id } : {})
+    });
+    return true;
+  } catch (error) {
+    console.error('[telematics] Firebase Admin initialization failed');
+    return false;
+  }
+}
+
 function readConfig(): { configured: true; value: EtqanConfig } | { configured: false; missing: string[] } {
   const required: Array<[string, string]> = [
     ['ETQAN_API_BASE_URL', process.env.ETQAN_API_BASE_URL || ''],
@@ -113,9 +130,13 @@ function normalizedTimestamp(value: unknown): string | undefined {
 }
 
 async function verifiedStaff(req: Request, res: Response) {
+  if (!ensureFirebaseAdmin()) {
+    res.status(503).json({ error: 'Server identity is not configured.' });
+    return null;
+  }
   const header = String(req.headers.authorization || '');
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token || admin.apps.length === 0) {
+  if (!token) {
     res.status(401).json({ error: 'Authentication required.' });
     return null;
   }
