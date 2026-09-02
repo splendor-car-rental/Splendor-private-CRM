@@ -78,6 +78,14 @@ export class FirestoreService {
     auditLogs: AuditLog[]; customFields: CustomFieldDefinition[]; numberingConfigs: NumberingConfig[]; notifications: NotificationItem[];
     tollTransactions?: TollTransaction[]; tollImportBatches?: TollImportBatch[];
   }): Promise<{ writtenCount: number }> {
+    // This legacy bulk-sync helper is useful only for local/demo recovery. A
+    // production browser must never be able to fan out the in-memory CRM
+    // state into authoritative Firestore collections. All production writes
+    // go through authenticated server APIs and durable transactions instead.
+    if (import.meta.env.PROD) {
+      throw new Error('Bulk Firestore seed/sync is disabled in production. Use authenticated server workflows.');
+    }
+
     let written = 0;
     const commitBatchList = async (colName: string, items: any[]) => {
       if (!items?.length) return;
