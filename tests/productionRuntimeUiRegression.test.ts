@@ -16,6 +16,13 @@ describe('production serverless entrypoint', () => {
     expect(apiEntrypoint).not.toContain("api-handler.cjs");
   });
 
+  it('normalizes the Node/Vercel pathname before pre-Express route dispatch', () => {
+    expect(apiEntrypoint).toContain('function ensureRequestPath(req: Request)');
+    expect(apiEntrypoint).toContain("new URL(rawUrl, 'http://splendor.internal').pathname");
+    expect(apiEntrypoint).toContain("Object.defineProperty(target, 'path'");
+    expect(apiEntrypoint).toContain('dispatch(ensureRequestPath(req), res)');
+  });
+
   it('builds the complete API handler as Node 22 ESM to support ESM-only runtime dependencies', () => {
     expect(packageJson).toContain('esbuild api/handler.ts --bundle');
     expect(packageJson).toContain('--target=node22 --format=esm');
