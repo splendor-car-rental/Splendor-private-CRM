@@ -20,7 +20,8 @@ describe('production serverless entrypoint', () => {
     expect(apiEntrypoint).toContain('function ensureRequestPath(req: Request)');
     expect(apiEntrypoint).toContain("new URL(rawUrl, 'http://splendor.internal').pathname");
     expect(apiEntrypoint).toContain("Object.defineProperty(target, 'path'");
-    expect(apiEntrypoint).toContain('dispatch(ensureRequestPath(req), res)');
+    expect(apiEntrypoint).toContain('const normalized = ensureRequestPath(req)');
+    expect(apiEntrypoint).toContain('dispatch(enforceOwnerBusinessPolicies(normalized), res)');
   });
 
   it('builds the complete API handler as Node 22 ESM to support ESM-only runtime dependencies', () => {
