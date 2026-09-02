@@ -23,6 +23,7 @@ import {
   validateTaxPeriodDraft
 } from './taxPeriodPolicy';
 import {
+  validateOfficialSourceAuthority,
   validateProfessionalValidation,
   type TaxActor
 } from './taxCompliancePolicy';
@@ -38,6 +39,8 @@ const PERIOD_COLLECTION = 'tax_periods';
 const EXCEPTION_COLLECTION = 'tax_period_exceptions';
 const RECONCILIATION_COLLECTION = 'tax_reconciliation_snapshots';
 const AUDIT_COLLECTION = 'tax_audit_events';
+const PROFESSIONAL_REGISTRY_COLLECTION = 'tax_professional_validators';
+const ACCOUNTING_PERIOD_COLLECTION = 'accounting_periods';
 const PROFILE_ID = 'splendor';
 
 const USER_ROLES = new Set<UserRole>(['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance']);
@@ -81,7 +84,8 @@ async function authenticate(req: Request, res: Response): Promise<TaxActor | nul
     const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
     const data = profile.exists ? profile.data() as any : null;
     const role = String(data?.role || '') as UserRole;
-    if (!data || !USER_ROLES.has(role) || String(data?.status || 'active') !== 'active') {
+    // Fail closed: a missing status is not an active account.
+    if (!data || !USER_ROLES.has(role) || String(data?.status || '') !== 'active') {
       res.status(403).json({ error: 'A valid active Splendor staff role is required.' });
       return null;
     }
@@ -105,6 +109,7 @@ function requirePermission(actor: TaxActor, permission: TaxPermission, res: Resp
 
 function normalizeProfessionalValidation(body: any): TaxProfessionalValidation {
   return {
+    validatorRegistryId: optionalText(body?.validatorRegistryId, 180),
     validatorName: cleanText(body?.validatorName, 200),
     validatorOrganization: optionalText(body?.validatorOrganization, 240),
     validatorCapacity: 'UAE_TAX_PROFESSIONAL',
@@ -159,15 +164,122 @@ function validatePeriodShape(period: TaxPeriod): string | null {
   return null;
 }
 
+function nextDayIso(date: string): string {
+  const d = new Date(`${date.slice(0, 10)}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function validateLinkedRules(period: TaxPeriod, rules: TaxRuleVersion[]): string | null {
-  if (period.ruleVersionIds.length === 0) return null;
+  if (period.ruleVersionIds.length === 0) return 'A Tax Period must be bound to accepted tax rule versions; an empty rule set is not permitted.';
   if (rules.length !== period.ruleVersionIds.length) return 'Every linked tax rule version must exist.';
   const found = new Set(rules.map(rule => rule.id));
   if (period.ruleVersionIds.some(id => !found.has(id))) return 'Every linked tax rule version must exist.';
+
+  const domainIntervals: Array<{ start: string; end: string }> = [];
   for (const rule of rules) {
     if (rule.status !== 'accepted') return 'Only accepted immutable tax rule versions may be bound to a tax period.';
     if (rule.domain !== period.domain && rule.domain !== 'TAX_PROCEDURES') {
       return 'A linked tax rule version is not applicable to this tax period domain.';
+    }
+    const effectiveFrom = String(rule.effectiveFrom || '').slice(0, 10);
+    const effectiveTo = String(rule.effectiveTo || '9999-12-31').slice(0, 10);
+    if (!effectiveFrom || effectiveTo < period.periodStart || effectiveFrom > period.periodEnd) {
+      return `Tax rule ${rule.id} is outside the tax period effective dates.`;
+    }
+    if (rule.domain === period.domain) {
+      domainIntervals.push({ start: effectiveFrom, end: effectiveTo });
+    }
+  }
+
+  // Domain-specific accepted rules must cover the complete period without an
+  // ungoverned calendar gap. Multiple sequential versions are allowed.
+  const sorted = domainIntervals.sort((a, b) => a.start.localeCompare(b.start));
+  if (sorted.length === 0 || sorted[0].start > period.periodStart) {
+    return 'Accepted domain tax rules do not cover the beginning of this Tax Period.';
+  }
+  let coveredThrough = sorted[0].end;
+  for (let i = 1; i < sorted.length && coveredThrough < period.periodEnd; i += 1) {
+    const interval = sorted[i];
+    if (interval.start > nextDayIso(coveredThrough)) return 'Accepted domain tax rules contain an effective-date gap inside this Tax Period.';
+    if (interval.end > coveredThrough) coveredThrough = interval.end;
+  }
+  if (coveredThrough < period.periodEnd) return 'Accepted domain tax rules do not cover the end of this Tax Period.';
+  return null;
+}
+
+function accountingPeriodKeys(period: TaxPeriod): string[] {
+  const start = new Date(`${period.periodStart.slice(0, 7)}-01T00:00:00.000Z`);
+  const end = new Date(`${period.periodEnd.slice(0, 7)}-01T00:00:00.000Z`);
+  const keys: string[] = [];
+  for (let cursor = start; cursor <= end; cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1))) {
+    keys.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
+  }
+  return keys;
+}
+
+async function validateCurrentPeriodGovernanceEvidence(
+  tx: admin.firestore.Transaction,
+  db: admin.firestore.Firestore,
+  period: TaxPeriod
+): Promise<string | null> {
+  const sourceRef = db.collection(SOURCE_COLLECTION).doc(period.deadlineSourceId);
+  const ruleRefs = period.ruleVersionIds.map(id => db.collection(RULE_COLLECTION).doc(id));
+  const [sourceSnap, ...ruleSnaps] = await Promise.all([tx.get(sourceRef), ...ruleRefs.map(ref => tx.get(ref))]);
+  if (!sourceSnap.exists) return 'The Tax Period deadline source no longer exists.';
+  const source = { id: sourceSnap.id, ...sourceSnap.data() } as TaxOfficialSource;
+  if (!['validated', 'accepted'].includes(source.status)) return 'The Tax Period deadline source is no longer validated/accepted.';
+  if (source.updatedAt !== period.deadlineSourceVersionUpdatedAt) return 'The Tax Period deadline source version changed after the period was created.';
+  const authorityError = validateOfficialSourceAuthority(source.authority, source.officialUrl);
+  if (authorityError) return authorityError;
+  const rules = ruleSnaps.filter(snapshot => snapshot.exists).map(snapshot => ({ id: snapshot.id, ...snapshot.data() } as TaxRuleVersion));
+  return validateLinkedRules(period, rules);
+}
+
+async function validateProfessionalRegistryEvidence(
+  tx: admin.firestore.Transaction,
+  db: admin.firestore.Firestore,
+  validation: TaxProfessionalValidation,
+  domain: TaxPeriod['domain']
+): Promise<string | null> {
+  const registryId = String(validation.validatorRegistryId || '').trim();
+  const evidenceId = String(validation.validationEvidenceDocumentId || '').trim();
+  if (!registryId || !evidenceId) return 'Professional validation requires a verified validator registry id and durable evidence document id.';
+  const registryRef = db.collection(PROFESSIONAL_REGISTRY_COLLECTION).doc(registryId);
+  const evidenceRef = db.collection('documents').doc(evidenceId);
+  const issuedEvidenceRef = db.collection('issued_documents').doc(evidenceId);
+  const [registrySnap, evidenceSnap, issuedEvidenceSnap] = await Promise.all([
+    tx.get(registryRef), tx.get(evidenceRef), tx.get(issuedEvidenceRef)
+  ]);
+  if (!registrySnap.exists) return 'The referenced Tax Professional Registry record does not exist.';
+  const registry = registrySnap.data() as any;
+  if (String(registry.status || '') !== 'active' || String(registry.validatorCapacity || '') !== 'UAE_TAX_PROFESSIONAL') {
+    return 'The referenced Tax Professional Registry record is not active and eligible.';
+  }
+  if (String(registry.validatorName || '').trim().toLowerCase() !== String(validation.validatorName || '').trim().toLowerCase()) {
+    return 'Professional validator identity does not match the verified registry record.';
+  }
+  const domains = Array.isArray(registry.domains) ? registry.domains.map(String) : [];
+  if (domains.length > 0 && !domains.includes(domain) && !domains.includes('ALL_TAX')) {
+    return 'The verified professional validator registry scope does not cover this tax domain.';
+  }
+  if (!evidenceSnap.exists && !issuedEvidenceSnap.exists) return 'The professional validation evidence document does not exist.';
+  return null;
+}
+
+async function validateAccountingClosureForTaxPeriod(
+  tx: admin.firestore.Transaction,
+  db: admin.firestore.Firestore,
+  period: TaxPeriod
+): Promise<string | null> {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today <= period.periodEnd.slice(0, 10)) return 'A Tax Period cannot be closed before the tax period has fully ended.';
+  const keys = accountingPeriodKeys(period);
+  const snapshots = await Promise.all(keys.map(key => tx.get(db.collection(ACCOUNTING_PERIOD_COLLECTION).doc(key))));
+  for (let i = 0; i < keys.length; i += 1) {
+    if (!snapshots[i].exists) return `Accounting period ${keys[i]} must exist and be closed before the overlapping Tax Period can close.`;
+    if (String((snapshots[i].data() as any)?.status || '') !== 'closed') {
+      return `Accounting period ${keys[i]} must be closed before the overlapping Tax Period can close.`;
     }
   }
   return null;
@@ -311,6 +423,14 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
     let next: TaxPeriod;
     let reason: string;
 
+    // Once preparation starts, every advancement is re-bound to live source
+    // and accepted-rule state. Superseding a relied-on source/rule therefore
+    // invalidates readiness instead of leaving a stale accepted period.
+    if (action !== 'open') {
+      const governanceError = await validateCurrentPeriodGovernanceEvidence(tx, db, previous);
+      if (governanceError) throw new Error(governanceError);
+    }
+
     if (action === 'open') {
       if (!requirePermission(actor, 'tax.prepare', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const error = validateOpenTaxPeriod(previous, actor);
@@ -365,6 +485,8 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       const validation = normalizeProfessionalValidation(req.body?.professionalValidation || req.body);
       const evidenceError = validateProfessionalValidation(validation);
       if (evidenceError) throw new Error(evidenceError);
+      const registryError = await validateProfessionalRegistryEvidence(tx, db, validation, previous.domain);
+      if (registryError) throw new Error(registryError);
       const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
       if (freshnessError) throw new Error(freshnessError);
       const error = validateRecordPeriodProfessionalValidation(previous, actor, validation);
@@ -379,11 +501,13 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
         professionalValidationRecordedAt: now,
         updatedAt: now
       };
-      reason = 'External UAE tax-professional validation evidence recorded for this Tax Period.';
+      reason = 'Verified external UAE tax-professional validation evidence recorded for this Tax Period.';
     } else if (action === 'close') {
       if (!requirePermission(actor, 'tax.approve', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const closureNote = cleanText(req.body?.closureNote || req.body?.reason, 3000);
       if (!closureNote) throw new Error('A closure note is required. Closing a Tax Period does not mean it was filed.');
+      const accountingClosureError = await validateAccountingClosureForTaxPeriod(tx, db, previous);
+      if (accountingClosureError) throw new Error(accountingClosureError);
       const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
       if (freshnessError) throw new Error(freshnessError);
       const error = validateCloseTaxPeriod(previous, actor);

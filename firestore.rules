@@ -4,8 +4,8 @@ service cloud.firestore {
     // SPLENDOR PRIVATE CRM — server-authoritative Firestore boundary.
     // Critical business mutations are performed by the Express API through
     // Firebase Admin SDK. Admin SDK writes bypass these client rules.
-    // Browser access is limited to authenticated, provisioned staff reads
-    // and narrowly-scoped self-profile fields.
+    // Browser access is limited to authenticated, provisioned ACTIVE staff
+    // reads and narrowly-scoped self-profile fields.
 
     function isSignedIn() {
       return request.auth != null;
@@ -16,12 +16,17 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    function callerProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
     function callerRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return callerProfile().role;
     }
 
     function isStaff() {
       return hasProfile()
+        && callerProfile().status == 'active'
         && callerRole() in ['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'];
     }
 
@@ -29,8 +34,8 @@ service cloud.firestore {
       return isStaff() && callerRole() in roles;
     }
 
-    // Staff directory is readable by provisioned staff. Users cannot create,
-    // replace, delete, or change role/status through the client SDK.
+    // Staff directory is readable by provisioned active staff. Users cannot
+    // create, replace, delete, or change role/status through the client SDK.
     match /users/{uid} {
       allow read: if isStaff() || (isSignedIn() && request.auth.uid == uid);
       allow create: if false;
@@ -79,6 +84,18 @@ service cloud.firestore {
       allow read: if isStaff();
       allow create, update, delete: if false;
     }
+
+    // Tax Compliance collections remain server-authoritative. Explicit read
+    // rules make the active-staff boundary testable; all browser writes are denied.
+    match /tax_master_profiles/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_master_profile_versions/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_official_sources/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_rule_versions/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_periods/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_period_exceptions/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_reconciliation_snapshots/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_audit_events/{id} { allow read: if isStaff(); allow write: if false; }
+    match /tax_professional_validators/{id} { allow read: if isStaff(); allow write: if false; }
 
     // Lease-to-Own is also server-authoritative. These collections are
     // explicitly readable for CRM screens but never writable from the browser.

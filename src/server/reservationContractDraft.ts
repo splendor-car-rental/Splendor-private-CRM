@@ -1,7 +1,7 @@
 import admin from 'firebase-admin';
 import { issueNextNumber } from './idGenerator';
 import { getRuleValue } from './businessRules';
-import { vatPortion } from '../config/tax';
+import { extractVatFromGross } from '../config/tax';
 
 export class ReservationContractDraftError extends Error {
   status: number;
@@ -10,6 +10,10 @@ export class ReservationContractDraftError extends Error {
     this.name = 'ReservationContractDraftError';
     this.status = status;
   }
+}
+
+function money(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 export async function createUnsignedDraftFromReservation(reservationId: string) {
@@ -53,7 +57,10 @@ export async function createUnsignedDraftFromReservation(reservationId: string) 
     const customer = { id: customerSnap.id, ...(customerSnap.data() as any) };
     const vehicle = { id: vehicleSnap.id, ...(vehicleSnap.data() as any) };
 
-    const total = Number(reservation.totalAmount || 0);
+    // Reservation totalAmount is the customer-facing VAT-inclusive gross.
+    // Extract the included VAT mathematically; multiplying a gross amount by
+    // 5% would overstate VAT (e.g. 1,050 -> 52.50 instead of 50.00).
+    const total = money(Number(reservation.totalAmount || 0));
     if (!(total > 0)) throw new ReservationContractDraftError(409, 'Reservation total is invalid.');
     const start = new Date(reservation.pickupDateTime).getTime();
     const end = new Date(reservation.returnDateTime).getTime();
@@ -62,7 +69,8 @@ export async function createUnsignedDraftFromReservation(reservationId: string) 
     }
 
     const now = new Date().toISOString();
-    const vatAmount = vatPortion(total);
+    const vatAmount = money(extractVatFromGross(total));
+    const rentalTotal = money(total - vatAmount);
     const contract = {
       id: proposedContractId,
       contractNumber: proposedContractId,
@@ -80,7 +88,7 @@ export async function createUnsignedDraftFromReservation(reservationId: string) 
       pickupLocation: reservation.pickupLocation,
       returnLocation: reservation.returnLocation,
       dailyRate: Number(reservation.dailyRate || 0),
-      rentalTotal: total - vatAmount,
+      rentalTotal,
       vatAmount,
       grandTotal: total,
       depositAmount: Math.max(0, Number(reservation.depositAmount || 0)),

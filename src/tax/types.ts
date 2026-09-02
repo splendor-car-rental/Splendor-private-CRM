@@ -105,10 +105,13 @@ export interface TaxOfficialSource {
 }
 
 export interface TaxProfessionalValidation {
+  /** Registry id of a server-verified external validator record. */
+  validatorRegistryId?: string;
   validatorName: string;
   validatorOrganization?: string;
   validatorCapacity: 'UAE_TAX_PROFESSIONAL';
   validationReference?: string;
+  /** Required immutable/durable evidence record for period/rule validation. */
   validationEvidenceDocumentId?: string;
   scope: string;
   validatedAt: string;
@@ -208,4 +211,6 @@ export interface TaxAuditEvent {
   previousValue?: unknown;
   newValue?: unknown;
   timestamp: string;
+  contentHash?: string;
+  previousHash?: string;
 }

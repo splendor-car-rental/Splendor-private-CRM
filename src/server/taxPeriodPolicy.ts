@@ -55,6 +55,12 @@ export function validateTaxPeriodDraft(
   if (!period.deadlineSourceVersionUpdatedAt || period.deadlineSourceVersionUpdatedAt !== deadlineSource.updatedAt) {
     return 'Tax period must be bound to the exact validated official-source version used for its deadline.';
   }
+  if (deadlineSource.effectiveFrom && deadlineSource.effectiveFrom.slice(0, 10) > period.filingDeadline.slice(0, 10)) {
+    return 'The deadline source is not effective for the recorded filing deadline.';
+  }
+  if (deadlineSource.effectiveTo && deadlineSource.effectiveTo.slice(0, 10) < period.periodEnd.slice(0, 10)) {
+    return 'The deadline source expires before the tax period ends.';
+  }
   const authorityError = validateOfficialSourceAuthority(deadlineSource.authority, deadlineSource.officialUrl);
   if (authorityError) return authorityError;
   if (period.deadlineBasis === 'EMARATAX_CONFIRMED' && !period.deadlineEvidenceReference && !period.deadlineEvidenceDocumentId) {
@@ -107,7 +113,8 @@ export function validateRecordPeriodProfessionalValidation(
 ): string | null {
   if (!canTax(actor.role, 'tax.approve', actor.explicitTaxPermissions)) return 'Actor is not permitted to record professional validation for tax periods.';
   if (period.status !== 'ready_for_professional_review') return 'Tax period is not ready for professional review.';
-  if (period.preparedBy === actor.uid) return 'Four-Eyes control prevents the preparer from recording professional validation for the same tax period.';
+  if (period.preparedBy === actor.uid) return 'Segregation of duties prevents the preparer from recording professional validation for the same tax period.';
+  if (period.reviewedBy === actor.uid) return 'Segregation of duties prevents the internal reviewer from recording professional validation for the same tax period.';
   const reconciliationError = reconciliationGateError(period);
   if (reconciliationError) return reconciliationError;
   if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before professional validation can be recorded.';

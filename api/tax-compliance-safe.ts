@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
 
 let firestoreSettingsApplied = false;
+const EXPECTED_FIREBASE_PROJECT_ID = 'splendor-private-crm';
 
 function ensureTaxFirebaseAdmin(res: Response): boolean {
   try {
@@ -12,10 +13,22 @@ function ensureTaxFirebaseAdmin(res: Response): boolean {
         return false;
       }
       const serviceAccount = JSON.parse(raw);
+      if (String(serviceAccount.project_id || '') !== EXPECTED_FIREBASE_PROJECT_ID) {
+        console.error('[tax-compliance] refused Firebase credential for unexpected project');
+        res.status(503).json({ error: 'Tax Compliance runtime Firebase project binding is invalid.' });
+        return false;
+      }
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
-        ...(serviceAccount.project_id ? { projectId: serviceAccount.project_id } : {})
+        projectId: EXPECTED_FIREBASE_PROJECT_ID
       });
+    } else {
+      const activeProjectId = String(admin.app().options.projectId || process.env.GCLOUD_PROJECT || '');
+      if (activeProjectId && activeProjectId !== EXPECTED_FIREBASE_PROJECT_ID && !process.env.FIRESTORE_EMULATOR_HOST) {
+        console.error('[tax-compliance] existing Firebase Admin app is bound to an unexpected project');
+        res.status(503).json({ error: 'Tax Compliance runtime Firebase project binding is invalid.' });
+        return false;
+      }
     }
     if (!firestoreSettingsApplied) {
       admin.firestore().settings({ ignoreUndefinedProperties: true });

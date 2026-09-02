@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express';
+import crypto from 'node:crypto';
 import admin from 'firebase-admin';
 import { canTax } from '../config/taxCompliance';
 import type { TaxBlockingException, TaxBlockingExceptionCategory } from '../tax/exceptionTypes';
@@ -51,7 +51,7 @@ async function authenticate(req: Request, res: Response): Promise<TaxActor | nul
     const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
     const data = profile.exists ? profile.data() as any : null;
     const role = String(data?.role || '') as UserRole;
-    if (!data || !USER_ROLES.has(role) || String(data?.status || 'active') !== 'active') {
+    if (!data || !USER_ROLES.has(role) || String(data?.status || '') !== 'active') {
       res.status(403).json({ error: 'A valid active Splendor staff role is required.' });
       return null;
     }
@@ -103,22 +103,43 @@ function writeAuditInTransaction(
   });
 }
 
+function exceptionFingerprint(input: {
+  periodId: string;
+  category: string;
+  title: string;
+  description: string;
+  evidenceReference?: string;
+  evidenceDocumentId?: string;
+}): string {
+  return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex').slice(0, 32).toUpperCase();
+}
+
 async function createException(req: Request, res: Response, actor: TaxActor) {
   if (!canRaiseException(actor)) return res.status(403).json({ error: 'Missing required Tax Compliance prepare/review permission.' });
   const periodId = cleanText(req.body?.periodId, 180);
   const category = cleanText(req.body?.category, 80) as TaxBlockingExceptionCategory;
   const title = cleanText(req.body?.title, 240);
   const description = cleanText(req.body?.description, 4000);
+  const evidenceReference = optionalText(req.body?.evidenceReference, 500);
+  const evidenceDocumentId = optionalText(req.body?.evidenceDocumentId, 240);
   if (!periodId || !CATEGORIES.has(category)) return res.status(400).json({ error: 'periodId and a valid blocking-exception category are required.' });
 
   const db = admin.firestore();
   const periodRef = db.collection(PERIOD_COLLECTION).doc(periodId);
-  const exceptionRef = db.collection(EXCEPTION_COLLECTION).doc();
+  const exceptionId = `TAXEX-${exceptionFingerprint({ periodId, category, title, description, evidenceReference, evidenceDocumentId })}`;
+  const exceptionRef = db.collection(EXCEPTION_COLLECTION).doc(exceptionId);
   const now = new Date().toISOString();
 
   const result = await db.runTransaction(async tx => {
-    const periodSnap = await tx.get(periodRef);
+    const [periodSnap, existingExceptionSnap, existingSnap] = await Promise.all([
+      tx.get(periodRef),
+      tx.get(exceptionRef),
+      tx.get(db.collection(EXCEPTION_COLLECTION).where('periodId', '==', periodId))
+    ]);
     if (!periodSnap.exists) throw new Error('Tax period not found.');
+    if (existingExceptionSnap.exists) {
+      return { replayed: true, exception: { id: existingExceptionSnap.id, ...existingExceptionSnap.data() } as TaxBlockingException };
+    }
     const period = { id: periodSnap.id, ...periodSnap.data() } as TaxPeriod;
     const exception: TaxBlockingException = {
       id: exceptionRef.id,
@@ -128,8 +149,8 @@ async function createException(req: Request, res: Response, actor: TaxActor) {
       title,
       description,
       status: 'open',
-      evidenceReference: optionalText(req.body?.evidenceReference, 500),
-      evidenceDocumentId: optionalText(req.body?.evidenceDocumentId, 240),
+      evidenceReference,
+      evidenceDocumentId,
       openedBy: actor.uid,
       openedByName: actor.name,
       openedAt: now,
@@ -138,7 +159,6 @@ async function createException(req: Request, res: Response, actor: TaxActor) {
     const policyError = validateCreateBlockingException(period, exception);
     if (policyError) throw new Error(policyError);
 
-    const existingSnap = await tx.get(db.collection(EXCEPTION_COLLECTION).where('periodId', '==', periodId));
     const openCount = existingSnap.docs.filter(doc => (doc.data() as TaxBlockingException).status === 'open').length;
     const nextPeriod = applyBlockingExceptionToPeriod(period, openCount + 1, now);
 
@@ -146,11 +166,11 @@ async function createException(req: Request, res: Response, actor: TaxActor) {
     tx.set(periodRef, nextPeriod, { merge: false });
     writeAuditInTransaction(tx, actor, 'TaxBlockingException', exception.id, 'open', undefined, exception, description);
     writeAuditInTransaction(tx, actor, 'TaxPeriod', period.id, 'blocking_exception_added', period, nextPeriod, `Blocking exception ${exception.id} opened. Any completed internal-review readiness is invalidated until independent review passes again.`);
-    return exception;
+    return { replayed: false, exception };
   }).catch(error => ({ error: error instanceof Error ? error.message : 'Tax Blocking Exception creation failed.' }));
 
   if ('error' in result) return res.status(400).json(result);
-  return res.status(201).json(result);
+  return res.status(result.replayed ? 200 : 201).json(result.exception);
 }
 
 async function resolveException(req: Request, res: Response, actor: TaxActor) {
@@ -170,13 +190,15 @@ async function resolveException(req: Request, res: Response, actor: TaxActor) {
     if (!exceptionSnap.exists) throw new Error('Tax Blocking Exception not found.');
     const previous = { id: exceptionSnap.id, ...exceptionSnap.data() } as TaxBlockingException;
     const periodRef = db.collection(PERIOD_COLLECTION).doc(previous.periodId);
-    const periodSnap = await tx.get(periodRef);
+    const [periodSnap, exceptionsSnap] = await Promise.all([
+      tx.get(periodRef),
+      tx.get(db.collection(EXCEPTION_COLLECTION).where('periodId', '==', previous.periodId))
+    ]);
     if (!periodSnap.exists) throw new Error('Authoritative Tax Period not found for this exception.');
     const period = { id: periodSnap.id, ...periodSnap.data() } as TaxPeriod;
     const policyError = validateResolveBlockingException(period, previous, actor, resolutionNote, resolutionReference, resolutionEvidenceDocumentId);
     if (policyError) throw new Error(policyError);
 
-    const exceptionsSnap = await tx.get(db.collection(EXCEPTION_COLLECTION).where('periodId', '==', previous.periodId));
     const openCount = exceptionsSnap.docs.filter(doc => (doc.data() as TaxBlockingException).status === 'open').length;
     const nextException: TaxBlockingException = {
       ...previous,

@@ -57,12 +57,16 @@ export function validateOfficialSourceAuthority(authority: TaxSourceAuthority, u
 export function validateProfessionalValidation(value: TaxProfessionalValidation | undefined): string | null {
   if (!value) return 'Professional UAE tax validation is required before a tax rule can be accepted.';
   if (value.validatorCapacity !== 'UAE_TAX_PROFESSIONAL') return 'Professional validator capacity is invalid.';
+  if (!String(value.validatorRegistryId || '').trim()) return 'Professional validation must reference a verified Tax Professional Registry record.';
   if (!String(value.validatorName || '').trim()) return 'Professional validator name is required.';
   if (!String(value.scope || '').trim()) return 'Professional validation scope is required.';
-  if (!String(value.validationReference || '').trim() && !String(value.validationEvidenceDocumentId || '').trim()) {
-    return 'Professional validation must include a durable reference or evidence document.';
+  if (!String(value.validationEvidenceDocumentId || '').trim()) {
+    return 'Professional validation requires an immutable/durable evidence document id; free-text references alone are not sufficient.';
   }
-  if (!/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(String(value.validatedAt || ''))) return 'Professional validation date is required.';
+  if (!/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(String(value.validatedAt || '')) || Number.isNaN(new Date(value.validatedAt).getTime())) {
+    return 'Professional validation date is required.';
+  }
+  if (value.validThrough && Number.isNaN(new Date(value.validThrough).getTime())) return 'Professional validation valid-through date is invalid.';
   return null;
 }
 
@@ -92,6 +96,12 @@ export function validateRuleAcceptance(
     }
     if (source.status === 'superseded' || source.status === 'deprecated') {
       return `Official source ${sourceId} is retired and cannot support a newly accepted rule.`;
+    }
+    if (source.effectiveFrom && source.effectiveFrom.slice(0, 10) > rule.effectiveFrom.slice(0, 10)) {
+      return `Official source ${sourceId} is not effective at the start of this rule version.`;
+    }
+    if (source.effectiveTo && rule.effectiveTo && source.effectiveTo.slice(0, 10) < rule.effectiveTo.slice(0, 10)) {
+      return `Official source ${sourceId} expires before this rule version ends.`;
     }
   }
 
