@@ -202,7 +202,7 @@ async function hydrateInvoice(source: ContextualDocumentSource, kind: 'tax_invoi
     sourceSnapshot: { invoice, customer, contract, vehicle },
     input: {
       kind, serial, date: dateOnly(invoice.issueDate),
-      customer: customerPayload(customer) || { name: invoice.customerName }, vehicle: vehiclePayload(vehicle, contract),
+      customer: customer ? customerPayload(customer) : { name: invoice.customerName }, vehicle: vehiclePayload(vehicle, contract),
       fields: {
         contractNumber: contract?.contractNumber || invoice.contractId,
         supplyDate: invoice.supplyDate || invoice.issueDate,
@@ -259,9 +259,6 @@ async function hydrateCustomerDocument(source: ContextualDocumentSource, kind: '
   const contracts = contractSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
   const payments = paymentSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
   const currentContract = contracts.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
-  // These documents have no pre-existing business-record number. Preview is
-  // intentionally non-numbered; the official durable sequence is consumed
-  // only after an authorized user explicitly approves issuance.
   const serial = kind === 'account_statement' ? 'PREVIEW-STATEMENT' : 'PREVIEW-DEMAND';
   const outstanding = Number(customer.outstandingBalance || 0);
   const common = {
@@ -470,8 +467,8 @@ async function markIssuanceFailed(ref: FirebaseFirestore.DocumentReference, lock
         updatedAt: now
       }, { merge: true });
     });
-  } catch (markError) {
-    console.error('[contextual-documents] failed to persist issuance failure state:', markError);
+  } catch {
+    console.error('[contextual-documents] failed to persist issuance failure state');
   }
 }
 
@@ -486,24 +483,15 @@ export async function previewContextualDocument(kind: CorporateDocumentKind, sou
   return compose(hydrated);
 }
 
-/**
- * Issues exactly one immutable binary for a business source. A Firestore
- * reservation lock prevents two serverless instances from issuing the same
- * source concurrently. Repeated issue, print, send, and download requests
- * reuse the stored PDF instead of regenerating from mutable live data.
- */
 export async function issueContextualDocument(kind: CorporateDocumentKind, source: ContextualDocumentSource, actor: ContextualDocumentActor): Promise<ContextualDocumentResult> {
   const archiveId = archiveKey(kind, source);
   const ref = firestore().collection('issued_documents').doc(archiveId);
 
-  // Fast-path immutable replay before touching the mutable source record.
   const existing = await ref.get();
   if (existing.exists && existing.data()?.status === 'issued' && existing.data()?.storagePath) {
     return readIssuedResult(kind, archiveId, existing.data());
   }
 
-  // Hydrate from authoritative Firestore only; browser-supplied business
-  // values are never accepted as document source data.
   const hydrated = await hydrateContextualDocument(kind, source);
   const lockOwner = randomUUID();
   const reservation = await reserveIssueLock(ref, kind, source, lockOwner);
