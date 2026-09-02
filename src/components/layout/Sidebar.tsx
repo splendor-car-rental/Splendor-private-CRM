@@ -4,7 +4,7 @@ import {
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, LogOut, KeyRound, X, Camera,
   TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare, Crown, Calculator, Radio,
-  Activity, Building2, ClipboardList
+  Activity, Building2, ClipboardList, Scale
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -175,10 +175,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <Receipt className="w-4 h-4" />
         },
         {
+          id: 'tax-compliance',
+          label: language === 'ar' ? 'الامتثال الضريبي' : 'Tax Compliance',
+          icon: <Scale className="w-4 h-4 text-[#D4AF37]" />,
+          badge: language === 'ar' ? 'مقيد' : 'Controlled',
+          badgeVariant: 'gold' as const
+        },
+        {
           id: 'corporate-branches',
-          label: language === 'ar' ? 'الشركات والائتمان والفروع' : 'Corporate & Branches',
+          label: language === 'ar' ? 'دليل الشركات' : 'Corporate Companies',
           icon: <Building2 className="w-4 h-4 text-blue-400" />,
-          badge: language === 'ar' ? 'بين الشركات' : 'B2B',
+          badge: language === 'ar' ? 'بدون ائتمان' : 'No Credit',
           badgeVariant: 'sky' as const
         },
         {
@@ -263,7 +270,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
 
   return (
     <>
-      {/* Mobile backdrop */}
       {isMobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm md:hidden"
@@ -277,7 +283,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full'}
           md:sticky md:top-0 md:h-screen md:translate-x-0 md:rtl:translate-x-0 md:transform-none md:z-30 md:w-64 lg:w-72`}
       >
-        {/* Brand Header */}
         <div className="p-4 sm:p-5 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-950">
           <div className="flex items-center gap-3 min-w-0">
             <SplendorLogo size={42} className="shrink-0 hover:opacity-90 transition-opacity cursor-pointer" />
@@ -299,7 +304,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           </button>
         </div>
 
-        {/* Nav list grouped with subtle titles */}
         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
           {sections.map((section, sIdx) => {
             const visibleItems = section.items.filter(item => canAccessView(currentUser.role, item.id));
@@ -341,7 +345,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           })}
         </div>
 
-        {/* User & Role */}
         <div className="p-3.5 border-t border-zinc-800/80 bg-zinc-900/30">
           <div className="flex items-center gap-2.5 mb-2.5">
             <button
@@ -378,7 +381,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
             </div>
           </div>
 
-          {/* Change password / Sign out */}
           <div className="grid grid-cols-2 gap-1.5">
             <button
               onClick={() => setChangePasswordOpen(true)}
