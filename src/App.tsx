@@ -42,7 +42,7 @@ import { VipTierManagementView } from './components/views/VipTierManagementView'
 import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiView';
 import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
 import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
-import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
+import { CorporateAccountsDirectoryView } from './components/views/CorporateAccountsDirectoryView';
 
 const PROCUREMENT_VIEWS = new Set(['procurement', 'purchase-orders', 'lpo', 'supply-orders']);
 
@@ -98,7 +98,7 @@ const MainLayout: React.FC = () => {
       case 'operations-control-room':
       case 'control-room': return <OperationsControlRoomView />;
       case 'corporate-branches':
-      case 'corporate-portal': return <CorporateBranchPortalView />;
+      case 'corporate-portal': return <CorporateAccountsDirectoryView />;
       case 'whatsapp-inbox': return <WhatsAppInboxView />;
       case 'corporate-documents': return <CorporateDocumentsView />;
       case 'ai-studio':
@@ -122,7 +122,7 @@ const MainLayout: React.FC = () => {
         <PWAInstallBanner />
         <Header onMenuClick={() => setMobileSidebarOpen(true)} />
 
-        <main data-active-view={activeView} className="flex-1 w-full p-4 sm:p-6 lg:p-8">
+        <main data-active-view={activeView} className="flex-1 w-full min-w-0 p-4 sm:p-6 lg:p-8">
           <ErrorBoundary key={activeView}>
             <ContextualDocumentActions />
             {PROCUREMENT_VIEWS.has(activeView) && <ProcurementLpoRail />}
