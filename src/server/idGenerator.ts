@@ -59,6 +59,7 @@ const NUMBERING_DEFAULTS: Record<string, NumberingDefaults> = {
   supplier: { prefix: 'SUP-', digits: 6 },
   supplierquote: { prefix: 'QTV-', digits: 6 },
   purchaseorder: { prefix: 'PO-SCR-', digits: 3, startAt: 100 },
+  lpo: { prefix: 'LPO-SCR-', digits: 6 },
   purchaseorderamendmentrequest: { prefix: 'POAR-', digits: 6 },
   procurementoperation: { prefix: 'OPS-', digits: 6 },
   supplierpaymentrequest: { prefix: 'SPR-', digits: 6 },
@@ -150,6 +151,7 @@ export async function resetNumbering(entityName: string): Promise<void> {
   const key = entityName.toLowerCase();
   const defaults = NUMBERING_DEFAULTS[key];
   if (admin.apps.length === 0 || !defaults) return;
+  const startAt = defaults.startAt ?? 1;
   await admin
     .firestore()
     .collection('numbering_configs')
@@ -159,8 +161,8 @@ export async function resetNumbering(entityName: string): Promise<void> {
         entity: entityName,
         prefix: defaults.prefix,
         digits: defaults.digits,
-        nextNumber: 1,
-        sample: `${defaults.prefix}${'1'.padStart(defaults.digits, '0')}`,
+        nextNumber: startAt,
+        sample: `${defaults.prefix}${String(startAt).padStart(defaults.digits, '0')}`,
         updatedAt: new Date().toISOString()
       },
       { merge: true }

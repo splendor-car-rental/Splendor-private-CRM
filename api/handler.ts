@@ -112,7 +112,10 @@ async function handleContextualCorporateDocument(req: Request, res: Response, mo
       return res.status(409).json({ error: message });
     }
     const lower = message.toLowerCase();
-    const status = lower.includes('not found') ? 404 : lower.includes('must be bound') || lower.includes('required') || lower.includes('does not match') ? 400 : 500;
+    const status = lower.includes('not found') ? 404
+      : lower.includes('requires an approved purchase order') ? 409
+      : lower.includes('must be bound') || lower.includes('required') || lower.includes('does not match') ? 400
+      : 500;
     return res.status(status).json({ error: message });
   }
 }
@@ -136,6 +139,9 @@ async function handleCorporateDocuments(req: Request, res: Response) {
   const body = (req.body || {}) as CorporateDocumentInput;
   if (!body.kind || !CORPORATE_DOCUMENT_KINDS.includes(body.kind)) {
     return res.status(400).json({ error: 'Unsupported corporate document type.' });
+  }
+  if (body.kind === 'lpo') {
+    return res.status(400).json({ error: 'LPO cannot be issued from browser-supplied document values. Use the source-bound purchase-order preview/issue workflow.' });
   }
 
   const actor = await getVerifiedStaff(req, res, CORPORATE_DOCUMENT_ROLES[body.kind]);

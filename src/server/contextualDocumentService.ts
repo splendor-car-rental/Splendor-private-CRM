@@ -42,7 +42,8 @@ type HydratedDocument = {
 };
 
 const ISSUE_LOCK_MS = 10 * 60 * 1000;
-const ISSUE_TIME_SERIAL_KINDS = new Set<CorporateDocumentKind>(['account_statement', 'payment_demand']);
+const ISSUE_TIME_SERIAL_KINDS = new Set<CorporateDocumentKind>(['account_statement', 'payment_demand', 'lpo']);
+const LPO_ISSUABLE_PO_STATUSES = new Set(['approved', 'partially_fulfilled', 'fulfilled', 'partially_cancelled']);
 
 export class DocumentIssuanceInProgressError extends Error {
   constructor() {
@@ -328,25 +329,71 @@ async function hydrateFinancialNote(source: ContextualDocumentSource, kind: 'cre
   };
 }
 
-async function hydratePurchaseOrder(source: ContextualDocumentSource): Promise<HydratedDocument> {
-  if (source.type !== 'purchase_order') throw new Error('LPO must be bound to a purchase order record.');
-  const candidates = ['purchase_orders', 'purchaseOrders', 'lpo'];
-  let po: any = null;
-  for (const collection of candidates) {
-    const snap = await firestore().collection(collection).doc(source.id).get();
-    if (snap.exists) { po = { id: snap.id, ...snap.data() }; break; }
+function assertPurchaseOrderIssuableAsLpo(po: any): void {
+  if (!LPO_ISSUABLE_PO_STATUSES.has(String(po?.status || '')) || !po?.approvedBy || !po?.approvedAt) {
+    throw new Error('LPO issue requires an approved purchase order with recorded server-side approval.');
   }
-  if (!po) throw new Error('Purchase order record not found.');
-  const serial = String(po.lpoNumber || po.orderNumber || po.id);
+}
+
+function formatAed(value: unknown): string {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
+}
+
+function hydratePurchaseOrderRecord(po: any): HydratedDocument {
+  const serial = 'PREVIEW-LPO';
+  const activeLines = (Array.isArray(po.lineItems) ? po.lineItems : []).filter((line: any) => line.status !== 'cancelled');
+  const itemLines = activeLines.map((line: any, index: number) => {
+    const vehicle = line.vehicleDescription ? ` | Vehicle: ${line.vehicleDescription}` : '';
+    return `${index + 1}. ${line.description || line.operationType || 'Item'}${vehicle} | Qty: ${Number(line.quantity || 0)} | Unit: ${formatAed(line.unitPrice)} AED | Total: ${formatAed(line.lineTotal)} AED`;
+  });
+  const body = [
+    `Purchase Order / أمر الشراء: ${po.id}`,
+    `Supplier / المورد: ${po.supplierName || ''}`,
+    po.approvedByName ? `Approved by / اعتماد: ${po.approvedByName}` : `Status / الحالة: ${po.status || ''}`,
+    '',
+    ...itemLines,
+    '',
+    `Total / الإجمالي: ${formatAed(po.totalValue)} AED`,
+    po.notes || po.termsAndConditions || ''
+  ].filter((line, index, all) => line !== '' || (index > 0 && all[index - 1] !== '')).join('\n');
+
   return {
-    serial, relatedEntityType: 'purchase_order', relatedEntityId: po.id, relatedEntityName: serial,
+    serial,
+    relatedEntityType: 'purchase_order',
+    relatedEntityId: po.id,
+    relatedEntityName: String(po.id),
     sourceSnapshot: { purchaseOrder: po },
     input: {
-      kind: 'lpo', serial, date: dateOnly(po.issueDate || po.createdAt),
-      fields: { recipient: po.supplierName || po.vendorName, supplierName: po.supplierName || po.vendorName, subject: `Purchase Order ${serial}`, termsAndConditions: po.termsAndConditions || po.notes },
-      rows: po.items || [], body: po.termsAndConditions || po.notes || ''
+      kind: 'lpo',
+      serial,
+      date: dateOnly(po.approvedAt || po.createdAt),
+      fields: {
+        recipient: po.supplierName,
+        supplierName: po.supplierName,
+        subject: `Local Purchase Order — ${po.id}`,
+        purchaseOrderNumber: po.id,
+        approvalStatus: po.status,
+        approvedBy: po.approvedByName,
+        approvedAt: po.approvedAt,
+        total: po.totalValue
+      },
+      rows: activeLines.map((line: any, index: number) => ({
+        no: index + 1,
+        description: line.description || line.operationType || '',
+        quantity: Number(line.quantity || 0),
+        unitPrice: Number(line.unitPrice || 0),
+        total: Number(line.lineTotal || 0)
+      })),
+      body
     }
   };
+}
+
+async function hydratePurchaseOrder(source: ContextualDocumentSource): Promise<HydratedDocument> {
+  if (source.type !== 'purchase_order') throw new Error('LPO must be bound to a purchase order record.');
+  const po = await requiredDoc('purchase_orders', source.id);
+  return hydratePurchaseOrderRecord(po);
 }
 
 export async function hydrateContextualDocument(kind: CorporateDocumentKind, source: ContextualDocumentSource): Promise<HydratedDocument> {
@@ -411,11 +458,21 @@ async function reserveIssueLock(ref: FirebaseFirestore.DocumentReference, kind: 
   return firestore().runTransaction(async tx => {
     const snap = await tx.get(ref);
     const data = snap.exists ? (snap.data() as any) : null;
-    if (data?.status === 'issued' && data.storagePath) return { state: 'issued' as const, data };
+    if (data?.status === 'issued' && data.storagePath) return { state: 'issued' as const, data, lpoPurchaseOrder: undefined };
+
+    let lpoPurchaseOrder: any = undefined;
+    if (kind === 'lpo') {
+      if (source.type !== 'purchase_order') throw new Error('LPO must be bound to a purchase order record.');
+      const poRef = firestore().collection('purchase_orders').doc(source.id);
+      const poSnap = await tx.get(poRef);
+      if (!poSnap.exists) throw new Error('Purchase order record not found.');
+      lpoPurchaseOrder = { id: poSnap.id, ...poSnap.data() };
+      assertPurchaseOrderIssuableAsLpo(lpoPurchaseOrder);
+    }
 
     const lockExpiresAt = data?.lockExpiresAt ? Date.parse(String(data.lockExpiresAt)) : 0;
     if (data?.status === 'issuing' && data.lockOwner !== lockOwner && Number.isFinite(lockExpiresAt) && lockExpiresAt > now) {
-      return { state: 'busy' as const };
+      return { state: 'busy' as const, lpoPurchaseOrder: undefined };
     }
 
     tx.set(ref, {
@@ -429,7 +486,7 @@ async function reserveIssueLock(ref: FirebaseFirestore.DocumentReference, kind: 
       createdAt: data?.createdAt || new Date(now).toISOString(),
       updatedAt: new Date(now).toISOString()
     }, { merge: true });
-    return { state: 'acquired' as const, serial: data?.serial as string | undefined };
+    return { state: 'acquired' as const, serial: data?.serial as string | undefined, lpoPurchaseOrder };
   });
 }
 
@@ -475,6 +532,7 @@ async function markIssuanceFailed(ref: FirebaseFirestore.DocumentReference, lock
 async function resolveIssueSerial(kind: CorporateDocumentKind, hydrated: HydratedDocument, previouslyReserved?: string): Promise<string> {
   if (!ISSUE_TIME_SERIAL_KINDS.has(kind)) return hydrated.serial;
   if (previouslyReserved) return previouslyReserved;
+  if (kind === 'lpo') return issueNextNumber('LPO');
   return issueNextNumber(getCorporateDocumentMeta(kind).numbering);
 }
 
@@ -499,13 +557,20 @@ export async function issueContextualDocument(kind: CorporateDocumentKind, sourc
   if (reservation.state === 'busy') throw new DocumentIssuanceInProgressError();
 
   try {
-    const serial = await resolveIssueSerial(kind, hydrated, reservation.serial);
-    hydrated.serial = serial;
-    hydrated.input = { ...hydrated.input, serial };
+    // For LPO, use the exact purchase-order snapshot read inside the same
+    // Firestore transaction that acquired the issuance lock. This prevents
+    // a stale pre-lock preview from becoming the official archived LPO after
+    // an approval/status change racing with issuance.
+    const issuanceHydrated = kind === 'lpo' && reservation.lpoPurchaseOrder
+      ? hydratePurchaseOrderRecord(reservation.lpoPurchaseOrder)
+      : hydrated;
+    const serial = await resolveIssueSerial(kind, issuanceHydrated, reservation.serial);
+    issuanceHydrated.serial = serial;
+    issuanceHydrated.input = { ...issuanceHydrated.input, serial };
     await persistReservedSerial(ref, lockOwner, serial);
 
-    const result = await compose(hydrated);
-    const storagePath = `issued-documents/${safeSegment(hydrated.relatedEntityType)}/${safeSegment(hydrated.relatedEntityId)}/${archiveId}/${safeSegment(result.fileName)}`;
+    const result = await compose(issuanceHydrated);
+    const storagePath = `issued-documents/${safeSegment(issuanceHydrated.relatedEntityType)}/${safeSegment(issuanceHydrated.relatedEntityId)}/${archiveId}/${safeSegment(result.fileName)}`;
     const file = admin.storage().bucket().file(storagePath);
     await file.save(result.pdf, {
       resumable: false,
@@ -515,7 +580,7 @@ export async function issueContextualDocument(kind: CorporateDocumentKind, sourc
         metadata: {
           archiveId, serial: result.serial, kind,
           sourceType: source.type, sourceId: source.id,
-          sourceSnapshotSha256: snapshotHash(hydrated.sourceSnapshot),
+          sourceSnapshotSha256: snapshotHash(issuanceHydrated.sourceSnapshot),
           approvedTemplateSha256: result.audit.templateSha256
         }
       }
@@ -524,12 +589,12 @@ export async function issueContextualDocument(kind: CorporateDocumentKind, sourc
     const now = new Date().toISOString();
     const record = {
       id: archiveId, status: 'issued', kind, serial: result.serial,
-      source, relatedEntityType: hydrated.relatedEntityType, relatedEntityId: hydrated.relatedEntityId,
-      relatedEntityName: hydrated.relatedEntityName, fileName: result.fileName,
+      source, relatedEntityType: issuanceHydrated.relatedEntityType, relatedEntityId: issuanceHydrated.relatedEntityId,
+      relatedEntityName: issuanceHydrated.relatedEntityName, fileName: result.fileName,
       fileSizeBytes: result.pdf.length, fileType: 'application/pdf', storagePath,
       fileUrl: `/api/documents/file?path=${encodeURIComponent(storagePath)}`,
-      sourceSnapshotSha256: snapshotHash(hydrated.sourceSnapshot),
-      sourceSnapshot: hydrated.sourceSnapshot,
+      sourceSnapshotSha256: snapshotHash(issuanceHydrated.sourceSnapshot),
+      sourceSnapshot: issuanceHydrated.sourceSnapshot,
       compositionAudit: result.audit,
       issuedBy: actor.uid, issuedByName: actor.name, issuedByRole: actor.role,
       issuedAt: now, createdAt: now, updatedAt: now
