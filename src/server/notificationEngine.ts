@@ -19,6 +19,7 @@ import { sendWhatsAppMessage, getWhatsAppGroupRecipients } from './whatsapp';
 import { getRuleValue } from './businessRules';
 import { recordFailedJob, markAllAlerted, getDeadLetterCache, retryFailedJob } from './deadLetterQueue';
 import { checkOperationalHealth, recordBackgroundJobRun } from './operationalHealth';
+import { deriveTaxCalendarReminders, loadTaxCalendarPeriods } from './taxCalendar';
 
 /** True when the Phase 23.4 emergency kill switch for WhatsApp outbound messaging is tripped. */
 function whatsappOutboundSuspended(): boolean {
@@ -218,10 +219,9 @@ export interface NotificationCheckSummary {
  * Runs every automated check the spec calls for: document expiries
  * (customer ID/license, vehicle Mulkiya/insurance), contract deadlines
  * (overdue returns), security deposits due for refund, invoices overdue,
- * unhandled toll items, and bank reconciliation discrepancies. Each
- * category is summarized into ONE dispatched message (not one per row) so
- * a fleet with many expiring documents doesn't flood WhatsApp -- the
- * message itself lists every affected record.
+ * unhandled toll items, bank reconciliation discrepancies, and evidence-bound
+ * Tax Period deadlines. Each category is dispatched through the same event
+ * registry and cooldown controls; no parallel scheduler exists for tax.
  */
 export async function runNotificationChecks(): Promise<NotificationCheckSummary> {
   if (getRuleValue('killSwitch.backgroundJobs', false)) {
@@ -247,6 +247,24 @@ export async function runNotificationChecks(): Promise<NotificationCheckSummary>
     alertsFired++;
     details.push(`${eventKey}: ${msgEn}`);
   };
+
+  // Tax Calendar: exact documented deadline/day and overdue only. No tax
+  // lookahead or filing threshold is invented here. Failure to read the
+  // authoritative periods fails closed for tax reminders without breaking
+  // the rest of the established notification sweep.
+  try {
+    const taxPeriods = await loadTaxCalendarPeriods();
+    const taxReminders = deriveTaxCalendarReminders(taxPeriods, new Date());
+    for (const reminder of taxReminders) {
+      const cooldownHours = reminder.eventKey === 'tax_period_deadline_overdue'
+        ? overdueCooldownHours
+        : standardCooldownHours;
+      await fireIfNew(reminder.eventKey, reminder.cooldownKey, cooldownHours, reminder.messageEn, reminder.messageAr);
+    }
+  } catch (error) {
+    console.error('[notificationEngine] Tax Calendar check failed closed:', error);
+    details.push('tax_calendar: authoritative Tax Periods could not be read; no tax reminder was emitted.');
+  }
 
   // Vehicle registration (Mulkiya) & insurance expiring within 30 days
   const expiringRegistration = globalStore.vehicles.filter(v => {

@@ -44,6 +44,8 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
   { key: 'payment_received', category: 'financial', labelEn: 'Payment recorded', labelAr: 'تسجيل دفعة جديدة' },
   { key: 'invoice_overdue', category: 'financial', labelEn: 'Invoice overdue', labelAr: 'فاتورة متأخرة السداد', automated: true },
   { key: 'deposit_refund_due', category: 'financial', labelEn: 'Security deposit due for refund', labelAr: 'اقتراب استحقاق استرجاع مبلغ التأمين', automated: true },
+  { key: 'tax_period_deadline_due', category: 'financial', labelEn: 'Documented Tax Period deadline due today', labelAr: 'موعد الفترة الضريبية الموثق مستحق اليوم', automated: true },
+  { key: 'tax_period_deadline_overdue', category: 'financial', labelEn: 'Documented Tax Period deadline overdue', labelAr: 'تجاوز الموعد الموثق للفترة الضريبية', automated: true },
 
   // Tolls / Parking imports
   { key: 'toll_import_completed', category: 'tolls', labelEn: 'Salik/Darb statement imported', labelAr: 'استيراد كشف سالك/درب' },
