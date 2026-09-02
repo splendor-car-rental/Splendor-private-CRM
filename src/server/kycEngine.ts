@@ -1,10 +1,10 @@
 import crypto from 'crypto';
-import { 
-  Customer, 
-  CustomerKycProfile, 
-  CustomerKycCategory, 
-  KycDocument, 
-  KycStatus, 
+import {
+  Customer,
+  CustomerKycProfile,
+  CustomerKycCategory,
+  KycDocument,
+  KycStatus,
   DocumentCategory,
   Vehicle
 } from '../types';
@@ -34,9 +34,9 @@ export const REQUIRED_DOCUMENTS_MAP: Record<CustomerKycCategory, DocumentCategor
 
 // Countries with direct license recognition in UAE (no IDP required for tourists)
 export const DIRECT_LICENSE_RECOGNIZED_COUNTRIES = new Set([
-  'AE', 'SA', 'KW', 'QA', 'BH', 'OM', // GCC
-  'US', 'CA', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'CH', 'AT', 'SE', 'NO', 'DK', 'FI', // US/UK/EU
-  'AU', 'NZ', 'JP', 'SG', 'KR', 'CN' // Asia-Pacific
+  'AE', 'SA', 'KW', 'QA', 'BH', 'OM',
+  'US', 'CA', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'CH', 'AT', 'SE', 'NO', 'DK', 'FI',
+  'AU', 'NZ', 'JP', 'SG', 'KR', 'CN'
 ]);
 
 // ----------------------------------------------------
@@ -63,7 +63,6 @@ export class KycEngine {
     if (trimmed.length <= 4) return '****';
 
     if (category.startsWith('EMIRATES_ID')) {
-      // Emirates ID format: 784-1990-1234567-1 -> 784-****-****567-1
       const clean = trimmed.replace(/[^0-9]/g, '');
       if (clean.length === 15) {
         return `${clean.slice(0, 3)}-****-****${clean.slice(11, 14)}-${clean.slice(14)}`;
@@ -72,11 +71,9 @@ export class KycEngine {
     }
 
     if (category === 'PASSPORT') {
-      // Passport format: A12345678 -> A123****
       return `${trimmed.slice(0, 4)}****`;
     }
 
-    // Default for Driving License / Other
     const firstPart = trimmed.slice(0, Math.min(3, Math.floor(trimmed.length / 2)));
     const lastPart = trimmed.slice(-Math.min(3, Math.floor(trimmed.length / 2)));
     return `${firstPart}****${lastPart}`;
@@ -90,32 +87,29 @@ export class KycEngine {
       return { isValid: false, error: 'Empty or corrupted file payload.' };
     }
 
-    // Check Magic Bytes
-    // JPEG: FF D8 FF
     if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
       return { isValid: true, detectedMime: 'image/jpeg' };
     }
 
-    // PNG: 89 50 4E 47
     if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
       return { isValid: true, detectedMime: 'image/png' };
     }
 
-    // PDF: 25 50 44 46 (%PDF)
     if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
       return { isValid: true, detectedMime: 'application/pdf' };
     }
 
-    // WebP: RIFF ... WEBP (52 49 46 46 ... 57 45 42 50)
-    if (buffer.length >= 12 &&
-        buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
-        buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+    if (
+      buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+    ) {
       return { isValid: true, detectedMime: 'image/webp' };
     }
 
-    return { 
-      isValid: false, 
-      error: 'Invalid file signature. Only authentic JPEG, PNG, WebP, and PDF documents are accepted.' 
+    return {
+      isValid: false,
+      error: 'Invalid file signature. Only authentic JPEG, PNG, WebP, and PDF documents are accepted.'
     };
   }
 
@@ -163,11 +157,7 @@ export class KycEngine {
       }
     }
 
-    return {
-      hasExpired: expiredCategories.length > 0,
-      expiredCategories,
-      expiringWithin30Days
-    };
+    return { hasExpired, expiredCategories, expiringWithin30Days };
   }
 
   // ----------------------------------------------------
@@ -179,7 +169,6 @@ export class KycEngine {
       return customer.kycProfile;
     }
 
-    // Deduce initial customer category based on country/nationality
     let initialCategory: CustomerKycCategory = 'TOURIST';
     const cCountry = (customer.country || '').toUpperCase();
     const cNat = (customer.nationality || '').toUpperCase();
@@ -191,20 +180,23 @@ export class KycEngine {
     }
 
     const initialStatus: KycStatus = customer.status === 'blocklisted' ? 'REJECTED' : 'UNVERIFIED';
+    const verifiedDob = customer.dateOfBirth ? String(customer.dateOfBirth) : '';
 
+    // IMPORTANT: never manufacture a DOB/age. The previous implementation
+    // silently substituted 1995-01-01 and marked isAgeVerified=true, which
+    // could make an unknown-age customer appear eligible for handover.
     const newProfile: CustomerKycProfile = {
       customerId: customer.id,
       customerCategory: initialCategory,
       status: initialStatus,
-      dateOfBirth: customer.dateOfBirth || '1995-01-01',
-      age: this.calculateAge(customer.dateOfBirth || '1995-01-01'),
-      isAgeVerified: true,
+      dateOfBirth: verifiedDob,
+      age: verifiedDob ? this.calculateAge(verifiedDob) : 0,
+      isAgeVerified: Boolean(verifiedDob),
       documents: [],
       riskScore: customer.status === 'blocklisted' ? 'BLOCKED' : customer.isVIP ? 'LOW' : 'MEDIUM',
       updatedAt: new Date().toISOString()
     };
 
-    // Pre-populate documents if customer had legacy ID/License dates
     if (customer.idNumber && customer.idExpiryDate) {
       const docCat: DocumentCategory = initialCategory === 'UAE_RESIDENT' ? 'EMIRATES_ID_FRONT' : 'PASSPORT';
       newProfile.documents.push({
@@ -265,7 +257,6 @@ export class KycEngine {
       return;
     }
 
-    // Check expiry
     const { hasExpired } = this.checkDocumentsExpiry(profile.documents);
     if (hasExpired && profile.status === 'VERIFIED') {
       profile.status = 'EXPIRED';
@@ -333,8 +324,8 @@ export class KycEngine {
   // ELIGIBILITY EVALUATION ENGINE
   // ----------------------------------------------------
   public static evaluateCustomerKycEligibility(
-    customerId: string, 
-    vehicleIdOrCategory?: string, 
+    customerId: string,
+    vehicleIdOrCategory?: string,
     targetDateIso: string = new Date().toISOString()
   ): {
     eligible: boolean;
@@ -359,7 +350,6 @@ export class KycEngine {
     const profile = this.getOrCreateKycProfile(customer);
     const reasons: string[] = [];
 
-    // 1. Blocklist check
     if (customer.status === 'blocklisted' || profile.riskScore === 'BLOCKED') {
       return {
         eligible: false,
@@ -371,18 +361,15 @@ export class KycEngine {
       };
     }
 
-    // 2. KYC Status Verification
     if (profile.status !== 'VERIFIED') {
       reasons.push(`Customer KYC status is ${profile.status}. Full verification is required before active deployment.`);
     }
 
-    // 3. Document Expiration Check against target contract date
     const { hasExpired, expiredCategories } = this.checkDocumentsExpiry(profile.documents, targetDateIso);
     if (hasExpired) {
       reasons.push(`Expired mandatory documents detected: ${expiredCategories.join(', ')}.`);
     }
 
-    // 4. Missing required documents
     const requiredCats = REQUIRED_DOCUMENTS_MAP[profile.customerCategory] || REQUIRED_DOCUMENTS_MAP.TOURIST;
     const acceptedCats = new Set(
       profile.documents
@@ -394,7 +381,6 @@ export class KycEngine {
       reasons.push(`Missing approved documents: ${missingCats.join(', ')}.`);
     }
 
-    // 5. Vehicle Category & Age Policy Evaluation
     let isSupercar = false;
     if (vehicleIdOrCategory) {
       const vehicle = globalStore.vehicles.find(v => v.id === vehicleIdOrCategory);
@@ -402,18 +388,20 @@ export class KycEngine {
       isSupercar = ['supercar', 'hypercar', 'ultra_luxury_sport'].includes(cat.toLowerCase());
     }
 
-    const age = profile.age || this.calculateAge(profile.dateOfBirth || customer.dateOfBirth || '1995-01-01', targetDateIso);
+    const dob = profile.dateOfBirth || customer.dateOfBirth || '';
+    const hasVerifiedAge = Boolean(profile.isAgeVerified && dob);
+    const age = hasVerifiedAge ? this.calculateAge(dob, targetDateIso) : 0;
     let isSupercarRestricted = false;
     let requiresCeoException = false;
 
-    if (age < 21) {
+    if (!hasVerifiedAge) {
+      reasons.push('Customer date of birth has not been verified. Age eligibility cannot be established.');
+    } else if (age < 21) {
       reasons.push(`Customer age (${age} yrs) is below the minimum legal luxury rental age (21 yrs).`);
-    } else if (isSupercar && age < 25) {
-      if (!profile.ceoExceptionGranted) {
-        isSupercarRestricted = true;
-        requiresCeoException = true;
-        reasons.push(`Supercar category requires driver age >= 25 yrs (Current age: ${age} yrs). CEO Executive Exception required.`);
-      }
+    } else if (isSupercar && age < 25 && !profile.ceoExceptionGranted) {
+      isSupercarRestricted = true;
+      requiresCeoException = true;
+      reasons.push(`Supercar category requires driver age >= 25 yrs (Current age: ${age} yrs). CEO Executive Exception required.`);
     }
 
     const eligible = reasons.length === 0;
