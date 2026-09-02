@@ -7,7 +7,7 @@ interface ModalProps {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
-  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '6xl';
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '6xl';
   actions?: React.ReactNode;
 }
 
@@ -36,23 +36,21 @@ export const Modal: React.FC<ModalProps> = ({
     lg: 'max-w-lg',
     xl: 'max-w-xl',
     '2xl': 'max-w-2xl',
+    '3xl': 'max-w-3xl',
     '4xl': 'max-w-4xl',
     '6xl': 'max-w-6xl'
   }[maxWidth];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
-      {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity duration-200"
         onClick={onClose}
       />
 
-      {/* Dialog box */}
       <div
         className={`relative w-full ${maxWidthClass} bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/90 flex flex-col max-h-[90vh] z-10 overflow-hidden transition-all duration-200`}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4.5 border-b border-zinc-800/90 bg-zinc-900/60">
           <div>
             <h3 className="text-base font-semibold text-zinc-100 font-display tracking-tight">{title}</h3>
@@ -67,12 +65,10 @@ export const Modal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        {/* Content */}
         <div className="px-6 py-5 overflow-y-auto flex-1 custom-scrollbar">
           {children}
         </div>
 
-        {/* Footer actions if any */}
         {actions && (
           <div className="px-6 py-3.5 border-t border-zinc-800/80 bg-zinc-900/40 flex items-center justify-end gap-2.5">
             {actions}
