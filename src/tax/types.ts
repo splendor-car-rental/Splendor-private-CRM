@@ -198,7 +198,7 @@ export interface TaxPeriod {
 
 export interface TaxAuditEvent {
   id: string;
-  entityType: 'TaxMasterProfile' | 'TaxOfficialSource' | 'TaxRuleVersion' | 'TaxPeriod';
+  entityType: 'TaxMasterProfile' | 'TaxOfficialSource' | 'TaxRuleVersion' | 'TaxPeriod' | 'TaxBlockingException' | 'TaxReconciliationSnapshot';
   entityId: string;
   action: string;
   actorId: string;

@@ -42,6 +42,10 @@ export default async function safeTaxComplianceHandler(req: Request, res: Respon
     const { default: exceptionHandler } = await import('../src/server/taxExceptionApi.js');
     return exceptionHandler(req, res);
   }
+  if (resource === 'reconciliations') {
+    const { default: reconciliationHandler } = await import('../src/server/taxReconciliationApi.js');
+    return reconciliationHandler(req, res);
+  }
 
   const { default: handler } = await import('./tax-compliance.js');
   return handler(req, res);

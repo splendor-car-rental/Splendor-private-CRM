@@ -19,6 +19,16 @@ function dayValue(value: string): number {
   return new Date(`${value.slice(0, 10)}T00:00:00.000Z`).getTime();
 }
 
+function reconciliationGateError(period: TaxPeriod): string | null {
+  if (!period.latestReconciliationSnapshotId || !period.latestReconciliationCapturedAt || !period.latestReconciliationLedgerEvidenceHash) {
+    return 'A server-captured Tax Reconciliation evidence snapshot is required before this Tax Period can advance.';
+  }
+  if (period.latestReconciliationPostingGapCount !== 0) {
+    return 'Tax Reconciliation posting gaps must be zero before this Tax Period can advance.';
+  }
+  return null;
+}
+
 export function validateTaxPeriodDraft(
   period: TaxPeriod,
   profile: TaxMasterProfile | null,
@@ -73,6 +83,9 @@ export function validateSubmitForReview(period: TaxPeriod, actor: TaxActor): str
   if (!period.preparationStartedBy || period.preparationStartedBy !== actor.uid) {
     return 'Only the preparer who opened this tax period may submit it for independent review.';
   }
+  const reconciliationError = reconciliationGateError(period);
+  if (reconciliationError) return reconciliationError;
+  if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before a tax period can be submitted for review.';
   return null;
 }
 
@@ -81,6 +94,8 @@ export function validateIndependentReview(period: TaxPeriod, actor: TaxActor): s
   if (period.status !== 'under_review') return 'Tax period is not awaiting internal review.';
   if (!period.preparedBy) return 'Tax period has no recorded preparer.';
   if (period.preparedBy === actor.uid) return 'Four-Eyes control prevents the preparer from reviewing the same tax period.';
+  const reconciliationError = reconciliationGateError(period);
+  if (reconciliationError) return reconciliationError;
   if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before professional review can be requested.';
   return null;
 }
@@ -93,6 +108,8 @@ export function validateRecordPeriodProfessionalValidation(
   if (!canTax(actor.role, 'tax.approve', actor.explicitTaxPermissions)) return 'Actor is not permitted to record professional validation for tax periods.';
   if (period.status !== 'ready_for_professional_review') return 'Tax period is not ready for professional review.';
   if (period.preparedBy === actor.uid) return 'Four-Eyes control prevents the preparer from recording professional validation for the same tax period.';
+  const reconciliationError = reconciliationGateError(period);
+  if (reconciliationError) return reconciliationError;
   if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before professional validation can be recorded.';
   return validateProfessionalValidation(validation);
 }
@@ -101,6 +118,8 @@ export function validateCloseTaxPeriod(period: TaxPeriod, actor: TaxActor): stri
   if (!canTax(actor.role, 'tax.approve', actor.explicitTaxPermissions)) return 'Actor is not permitted to close tax periods.';
   if (period.status !== 'professionally_validated') return 'Only a professionally validated tax period can be closed.';
   if (!period.professionalValidation) return 'Professional validation evidence is required before a tax period can be closed.';
+  const reconciliationError = reconciliationGateError(period);
+  if (reconciliationError) return reconciliationError;
   if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before a tax period can be closed.';
   return null;
 }
