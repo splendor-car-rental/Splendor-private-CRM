@@ -44,9 +44,6 @@ export async function listManufacturers(): Promise<VehicleManufacturer[]> {
     const seedIds = new Set(STATIC_MANUFACTURERS.map((m) => m.id));
     return [...STATIC_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
   } catch (error) {
-    // The source-controlled master catalog is authoritative reference data.
-    // A transient/permission failure while reading optional approved
-    // extensions must not turn the manufacturer selector into an empty list.
     console.warn('[vehicle-catalog] approved manufacturer extensions unavailable; serving static master catalog', error);
     return STATIC_MANUFACTURERS;
   }
@@ -110,7 +107,7 @@ export async function proposeCatalogUpdate(input: ProposeCatalogUpdateInput, rec
     manufacturerName: input.manufacturerName.trim(),
     ...(input.modelName ? { modelName: input.modelName.trim() } : {}),
     ...(input.year !== undefined ? { year: input.year } : {}),
-    ...(input.trim ? { trim: input.trim() } : {}),
+    ...(input.trim ? { trim: input.trim.trim() } : {}),
     ...(input.details ? { details: input.details } : {}),
     ...(input.sourceNote ? { sourceNote: input.sourceNote } : {}),
     discoverySource: input.discoverySource || 'staff_request',
