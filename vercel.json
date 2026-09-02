@@ -8,6 +8,7 @@
   "rewrites": [
     { "source": "/api/whatsapp/webhook", "destination": "/api/whatsapp-webhook" },
     { "source": "/api/issued-documents/:archiveId/whatsapp", "destination": "/api/document-whatsapp?archiveId=:archiveId" },
+    { "source": "/api/reservations/:reservationId/create-contract", "destination": "/api/reservation-contract?reservationId=:reservationId" },
     { "source": "/api/contracts/:contractId/review", "destination": "/api/contract-lifecycle?action=review&contractId=:contractId" },
     { "source": "/api/contracts/:contractId/approve", "destination": "/api/contract-lifecycle?action=approve&contractId=:contractId" },
     { "source": "/api/contracts/:contractId/sign", "destination": "/api/contract-lifecycle?action=sign&contractId=:contractId" },
