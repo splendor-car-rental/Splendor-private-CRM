@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && node scripts/copyApprovedForms.mjs && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild api/handler.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/api-handler.cjs",
+    "build": "vite build && node scripts/copyApprovedForms.mjs && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild api/handler.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=api-handler.cjs",
     "start": "node dist/server.cjs",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist server.js api-handler.cjs api-handler.cjs.map",
     "lint": "tsc --noEmit",
     "test": "firebase emulators:exec --project=demo-splendor-crm-rules-test --only firestore \"vitest run --testTimeout=15000\"",
     "dr:drill": "tsx scripts/drDrill.ts"
