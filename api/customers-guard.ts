@@ -32,6 +32,12 @@ export function blocklistCandidatesFromCustomerPayload(body: any): Candidate[] {
   }
 
   addCandidate(candidates, 'driving_license', body?.licenseNumber, body?.licenseCountry);
+  addCandidate(
+    candidates,
+    'driving_license',
+    custom.homeCountryDrivingLicenseNumber,
+    custom.homeCountryDrivingLicenseCountryCode || custom.homeCountryDrivingLicenseCountry
+  );
   addCandidate(candidates, 'email', body?.email);
   addCandidate(candidates, 'phone', body?.phone);
   if (String(body?.whatsapp || '').trim() !== String(body?.phone || '').trim()) addCandidate(candidates, 'phone', body?.whatsapp);
