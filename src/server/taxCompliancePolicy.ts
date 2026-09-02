@@ -84,6 +84,9 @@ export function validateRuleAcceptance(
     if (!isOfficialUaeTaxSourceUrl(source.officialUrl)) return `Official source ${sourceId} is not on an approved UAE government host.`;
     const authorityError = validateOfficialSourceAuthority(source.authority, source.officialUrl);
     if (authorityError) return `Official source ${sourceId}: ${authorityError}`;
+    if (source.status === 'proposed') {
+      return `Official source ${sourceId} must be validated before it can support an accepted tax rule.`;
+    }
     if (source.status === 'superseded' || source.status === 'deprecated') {
       return `Official source ${sourceId} is retired and cannot support a newly accepted rule.`;
     }
