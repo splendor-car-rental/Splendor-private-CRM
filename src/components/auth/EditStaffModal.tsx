@@ -4,6 +4,7 @@ import { Modal } from '../common/Modal';
 import { AuthenticatedImage } from '../common/AuthenticatedImage';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
+import { useCRM } from '../../context/CRMContext';
 import { apiFetch } from '../../lib/apiFetch';
 import { uploadFile } from '../../lib/upload';
 import { User, UserRole } from '../../types';
@@ -25,6 +26,7 @@ interface EditStaffModalProps {
 export const EditStaffModal: React.FC<EditStaffModalProps> = ({ isOpen, onClose, onUpdated, staffMember }) => {
   const { language, t } = useLanguage();
   const { currentUser } = useAuth();
+  const { showToast } = useCRM();
   const ROLES: UserRole[] = assignableRoles(currentUser.role);
 
   const [name, setName] = useState(staffMember?.name || '');
@@ -85,6 +87,11 @@ export const EditStaffModal: React.FC<EditStaffModalProps> = ({ isOpen, onClose,
       }
       onUpdated();
       onClose();
+      showToast(
+        language === 'ar' ? 'تم حفظ بيانات الموظف' : 'Staff changes saved',
+        language === 'ar' ? `تم تحديث بيانات ${name} بنجاح.` : `${name} was updated successfully.`,
+        'success'
+      );
     } catch (err: any) {
       setError(err?.message || (language === 'ar' ? 'تعذر تحديث بيانات الموظف.' : 'Failed to update staff account.'));
     } finally {
