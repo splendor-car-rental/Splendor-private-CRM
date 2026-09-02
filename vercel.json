@@ -3,6 +3,9 @@
   "functions": {
     "api/index.ts": {
       "includeFiles": "{api/api-handler.mjs,dist/**}"
+    },
+    "api/customers-guard.ts": {
+      "includeFiles": "{api/api-handler.mjs,dist/**}"
     }
   },
   "rewrites": [
