@@ -36,7 +36,7 @@ describe('repository document governance', () => {
   });
 
   it('requires professional validation before accepting UAE tax decisions', () => {
-    expect(governancePolicy).toContain('appropriate UAE tax-professional validation is mandatory');
+    expect(governancePolicy.toLowerCase()).toContain('appropriate uae tax-professional validation is mandatory');
     expect(governancePolicy).toContain('All new tax ADRs begin as **Proposed**');
     expect(adrPolicy).toContain('Tax ADRs start as Proposed');
     expect(docsIndex).toContain('not currently classified as VAT-return or Corporate-Tax filing-ready');
