@@ -80,9 +80,11 @@ const reconciliationEvidence = {
 } as const;
 
 const professionalValidation: TaxProfessionalValidation = {
+  validatorRegistryId: 'TP-REGISTRY-SYNTHETIC-001',
   validatorName: 'External UAE Tax Professional',
   validatorCapacity: 'UAE_TAX_PROFESSIONAL',
   validationReference: 'VALIDATION-SYNTHETIC-REF',
+  validationEvidenceDocumentId: 'TAX-EVIDENCE-PERIOD-SYNTHETIC-001',
   scope: 'Synthetic tax period review fixture',
   validatedAt: '2099-05-10T10:00:00.000Z'
 };

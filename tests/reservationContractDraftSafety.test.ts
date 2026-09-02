@@ -11,7 +11,7 @@ describe('reservation to rental-contract conversion safety', () => {
     expect(service).toContain("depositStatus: 'pending'");
     expect(service).toContain('termsAccepted: false');
     expect(service).toContain('grandTotal: total');
-    expect(service).toContain('vatPortion(total)');
+    expect(service).toContain('extractVatFromGross(total)');
     expect(service).not.toContain('termsAccepted: true');
   });
 

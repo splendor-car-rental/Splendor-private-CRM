@@ -38,9 +38,9 @@ beforeAll(async () => {
 
   await testEnv.withSecurityRulesDisabled(async (adminCtx) => {
     const db = adminCtx.firestore();
-    await setDoc(doc(db, 'users', CEO_UID), { role: 'ceo', name: 'Test CEO' });
-    await setDoc(doc(db, 'users', FINANCE_UID), { role: 'finance', name: 'Test Finance' });
-    await setDoc(doc(db, 'users', OPERATIONS_UID), { role: 'operations', name: 'Test Ops' });
+    await setDoc(doc(db, 'users', CEO_UID), { role: 'ceo', status: 'active', name: 'Test CEO' });
+    await setDoc(doc(db, 'users', FINANCE_UID), { role: 'finance', status: 'active', name: 'Test Finance' });
+    await setDoc(doc(db, 'users', OPERATIONS_UID), { role: 'operations', status: 'active', name: 'Test Ops' });
     await setDoc(doc(db, 'customers', 'CUS-SEED-01'), { name: 'Seed Customer' });
     await setDoc(doc(db, 'toll_transactions', 'TOLL-SEED-01'), { amount: 4, plate: 'DXB TEST 1' });
     await setDoc(doc(db, 'reservations', 'RES-SEED-01'), { vehicleId: 'VEH-SEED-01' });

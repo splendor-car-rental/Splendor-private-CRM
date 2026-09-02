@@ -42,9 +42,11 @@ const proposedRule: TaxRuleVersion = {
 };
 
 const professionalValidation = {
+  validatorRegistryId: 'TP-REGISTRY-2026-001',
   validatorName: 'External UAE Tax Professional',
   validatorCapacity: 'UAE_TAX_PROFESSIONAL' as const,
   validationReference: 'TP-VALIDATION-2026-001',
+  validationEvidenceDocumentId: 'TAX-EVIDENCE-RULE-2026-001',
   scope: 'Validated the exact rule version and stated effective period.',
   validatedAt: '2026-09-02T10:00:00.000Z'
 };
@@ -85,10 +87,10 @@ describe('Tax Compliance foundation', () => {
       ...proposedRule,
       professionalValidation: {
         ...professionalValidation,
-        validationReference: undefined
+        validationEvidenceDocumentId: undefined
       }
     };
-    expect(validateRuleAcceptance(noEvidenceRule, [source], actor)).toContain('durable reference');
+    expect(validateRuleAcceptance(noEvidenceRule, [source], actor)).toContain('durable evidence document id');
 
     const validatedRule: TaxRuleVersion = { ...proposedRule, professionalValidation };
     expect(validateRuleAcceptance(validatedRule, [source], actor)).toBeNull();
