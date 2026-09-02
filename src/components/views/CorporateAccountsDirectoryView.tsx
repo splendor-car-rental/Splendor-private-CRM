@@ -166,7 +166,7 @@ export const CorporateAccountsDirectoryView: React.FC = () => {
             <dl className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div><dt className="text-zinc-500">{language === 'ar' ? 'الرخصة التجارية' : 'Trade licence'}</dt><dd className="mt-0.5 text-zinc-200 break-all">{account.tradeLicenseNumber || '—'}</dd></div>
               <div><dt className="text-zinc-500">TRN</dt><dd className="mt-0.5 text-zinc-200 break-all">{account.trnVatNumber || '—'}</dd></div>
-              <div><dt className="text-zinc-500">{language === 'ar' ? 'انتهاء الرخصة' : 'Licence expiry'}</dt><dd className="mt-0.5 text-zinc-200">{account.licenseExpiry ? formatDate(account.licenseExpiry, language) : '—'}</dd></div>
+              <div><dt className="text-zinc-500">{language === 'ar' ? 'انتهاء الرخصة' : 'Licence expiry'}</dt><dd className="mt-0.5 text-zinc-200">{account.licenseExpiry ? formatDate(account.licenseExpiry) : '—'}</dd></div>
               <div><dt className="text-zinc-500">{language === 'ar' ? 'جهة الاتصال' : 'Contact'}</dt><dd className="mt-0.5 text-zinc-200 break-words">{account.primaryContact?.name || '—'}</dd></div>
               <div className="sm:col-span-2"><dt className="text-zinc-500">{language === 'ar' ? 'الهاتف والبريد' : 'Phone & email'}</dt><dd className="mt-0.5 text-zinc-200 break-all">{[account.primaryContact?.phone, account.primaryContact?.email].filter(Boolean).join(' · ') || '—'}</dd></div>
             </dl>
@@ -175,7 +175,7 @@ export const CorporateAccountsDirectoryView: React.FC = () => {
         {filtered.length === 0 && <div className="xl:col-span-2 rounded-2xl border border-dashed border-zinc-800 p-10 text-center text-sm text-zinc-500">{language === 'ar' ? 'لا توجد شركات مطابقة.' : 'No matching companies.'}</div>}
       </div>
 
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? (language === 'ar' ? 'تعديل بيانات الشركة' : 'Edit company') : (language === 'ar' ? 'تسجيل شركة جديدة' : 'Register company')} size="lg">
+      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? (language === 'ar' ? 'تعديل بيانات الشركة' : 'Edit company') : (language === 'ar' ? 'تسجيل شركة جديدة' : 'Register company')} maxWidth="lg">
         <form onSubmit={submit} className="space-y-4">
           <div className="rounded-xl border border-emerald-900/40 bg-emerald-950/15 p-3 text-[11px] leading-5 text-emerald-300">
             {language === 'ar' ? 'لا يوجد حد ائتماني أو آجال سداد. أي فاتورة أو دفعة تتبع دورتها المالية الفعلية فقط.' : 'No credit limit or payment terms are granted. Invoices and receipts follow the actual accounting workflow only.'}
