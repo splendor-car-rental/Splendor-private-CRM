@@ -93,6 +93,10 @@ export interface TaxOfficialSource {
   createdBy: string;
   createdByName: string;
   createdAt: string;
+  validatedBy?: string;
+  validatedByName?: string;
+  validatedAt?: string;
+  validationReason?: string;
   updatedAt: string;
 }
 
@@ -128,6 +132,9 @@ export interface TaxRuleVersion {
   proposedByName: string;
   proposedAt: string;
   professionalValidation?: TaxProfessionalValidation;
+  professionalValidationRecordedBy?: string;
+  professionalValidationRecordedByName?: string;
+  professionalValidationRecordedAt?: string;
   acceptedBy?: string;
   acceptedByName?: string;
   acceptedAt?: string;
