@@ -89,8 +89,10 @@ async function resolveIntentLinkage(input: CreatePaymentIntentInput): Promise<Re
     return { amount: installment.remainingAmount, customerId: installment.customerId, customerName: installment.customerName, contractId: installment.contractId };
   }
   // security_deposit -- no pre-existing entity; the amount is the deposit itself being requested.
-  const amount = Number(input.amount) || 0;
-  if (amount <= 0) throw new PaymentIntentError('A positive amount is required to place a security deposit hold.');
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new PaymentIntentError('A positive finite amount is required to place a security deposit hold.');
+  }
   return { amount, customerId: input.customerId, customerName: input.customerName, contractId: input.contractId };
 }
 
@@ -208,7 +210,9 @@ async function applyConfirmedIntentEffect(intent: PaymentIntent, recordAudit: Re
   }
 
   // security_deposit: a confirmed authorization becomes the real Deposit
-  // record, tagged as a gateway-backed hold.
+  // record, tagged as a gateway-backed hold. The intent id is the durable
+  // idempotency key, so concurrent/redelivered success events can never
+  // create two deposits for the same authorization.
   const deposit = await createSecurityDeposit({
     customerId: intent.customerId,
     customerName: intent.customerName,
@@ -219,7 +223,7 @@ async function applyConfirmedIntentEffect(intent: PaymentIntent, recordAudit: Re
     gatewayPaymentIntentId: intent.id,
     actorId: 'system',
     actorName: 'Payment Gateway (webhook-confirmed)'
-  }, recordAudit);
+  }, recordAudit, `gateway-deposit:${intent.id}`);
 
   await updateDurable(PAYMENT_INTENTS, intent.id, { depositId: deposit.id, updatedAt: new Date().toISOString() });
 }
@@ -231,9 +235,6 @@ async function applyConfirmedIntentEffect(intent: PaymentIntent, recordAudit: Re
  */
 async function applyConfirmedRefundEffect(refund: PaymentRefund, intent: PaymentIntent, recordAudit: RecordAuditFn): Promise<void> {
   if (intent.purpose === 'invoice_payment') {
-    // The Payment created for this intent used the intent id as its own
-    // reference -- find it the same way any other lookup by
-    // gatewayPaymentIntentId would.
     const snap = await admin.firestore().collection('payments').where('gatewayPaymentIntentId', '==', intent.id).get();
     const paymentDoc = snap.docs[0];
     if (!paymentDoc) throw new PaymentIntentError(`No Payment record found for intent ${intent.id} to reverse.`);
@@ -243,8 +244,14 @@ async function applyConfirmedRefundEffect(refund: PaymentRefund, intent: Payment
 
   if (intent.purpose === 'security_deposit') {
     if (!intent.depositId) throw new PaymentIntentError(`PaymentIntent ${intent.id} has no linked Deposit to refund.`);
-    await refundOrReleaseDeposit(intent.depositId, refund.amount, { id: 'system', name: 'Payment Gateway (webhook-confirmed)' }, recordAudit,
-      'Card authorization captured funds reversed via gateway-confirmed refund.');
+    await refundOrReleaseDeposit(
+      intent.depositId,
+      refund.amount,
+      { id: 'system', name: 'Payment Gateway (webhook-confirmed)' },
+      recordAudit,
+      'Card authorization captured funds reversed via gateway-confirmed refund.',
+      { source: 'gateway_confirmed', idempotencyKey: `gateway-refund:${refund.id}` }
+    );
     return;
   }
 
@@ -255,10 +262,10 @@ async function applyConfirmedRefundEffect(refund: PaymentRefund, intent: Payment
 }
 
 /**
- * Processes one verified webhook delivery. Signature verification and
- * event-id dedupe both happen here, BEFORE any business effect -- a
- * redelivered event (every real gateway retries) is a durable no-op via
- * the `${provider}:${providerEventId}` document, never a second charge.
+ * Processes one verified webhook delivery. Event-id logging is an audit/
+ * replay layer; every monetary effect below also owns its own durable
+ * idempotency key, so even concurrent semantically-equivalent deliveries
+ * cannot double-apply money while the event log is racing to settle.
  */
 export async function handleGatewayWebhook(rawBody: Buffer, signatureHeader: string | undefined, recordAudit: RecordAuditFn): Promise<{ processed: boolean; reason?: string }> {
   const adapter = getActiveGatewayAdapter();
@@ -275,7 +282,7 @@ export async function handleGatewayWebhook(rawBody: Buffer, signatureHeader: str
   const eventRef = admin.firestore().collection(PAYMENT_GATEWAY_EVENTS).doc(eventDocId);
   const existing = await eventRef.get();
   if (existing.exists && (existing.data() as PaymentGatewayEvent).processedAt) {
-    return { processed: false, reason: 'duplicate_event' }; // already applied -- not an error, just a no-op
+    return { processed: false, reason: 'duplicate_event' };
   }
 
   const now = new Date().toISOString();
@@ -292,7 +299,7 @@ export async function handleGatewayWebhook(rawBody: Buffer, signatureHeader: str
 
   try {
     await applyWebhookEvent(parsed, recordAudit);
-    await eventRef.set({ processedAt: new Date().toISOString() }, { merge: true });
+    await eventRef.set({ processedAt: new Date().toISOString(), processingError: null }, { merge: true });
     return { processed: true };
   } catch (err: any) {
     await eventRef.set({ processingError: err?.message || String(err) }, { merge: true });
@@ -320,7 +327,7 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
     const found = await findRefundByProviderRefundId(event.providerRefundId);
     if (!found) throw new PaymentIntentError(`No PaymentRefund found for gateway refund ${event.providerRefundId}.`);
     if (found.refund.status !== 'pending' && found.refund.status !== 'processing') {
-      return; // already finalized -- nothing to do (defense in depth alongside the event-level dedupe)
+      return;
     }
 
     if (event.type === 'refund.failed') {
@@ -337,20 +344,13 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
     return;
   }
 
-  // Payment Intent lifecycle events. Note: 'succeeded' is NOT always
-  // terminal here -- for a security_deposit intent it means "the
-  // authorization hold was placed", and a legitimate 'canceled' (release)
-  // event can still follow it. 'failed'/'canceled' ARE always terminal.
-  // Each branch below additionally checks it isn't re-applying an event
-  // the intent already reflects -- defense in depth alongside the
-  // event-level dedupe above.
   if (!event.providerIntentId) throw new PaymentIntentError('PaymentIntent webhook event is missing providerIntentId.');
   const found = await findIntentByProviderIntentId(event.providerIntentId);
   if (!found) throw new PaymentIntentError(`No PaymentIntent found for gateway reference ${event.providerIntentId}.`);
   const intent = found.intent;
 
   if (intent.status === 'failed' || intent.status === 'canceled') {
-    return; // always terminal -- nothing can legitimately follow either state
+    return;
   }
 
   if (event.type === 'payment_intent.failed') {
@@ -358,31 +358,26 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
     return;
   }
   if (event.type === 'payment_intent.canceled') {
-    // A canceled security_deposit intent whose authorization already
-    // became a real Deposit record must release that Deposit too -- the
-    // gateway confirming the void is exactly the trusted signal to do so,
-    // reusing the same refund/release function the manual finance route
-    // uses for a full-balance release.
     if (intent.purpose === 'security_deposit' && intent.depositId) {
-      await refundOrReleaseDeposit(intent.depositId, undefined, { id: 'system', name: 'Payment Gateway (webhook-confirmed)' }, recordAudit,
-        'Card authorization hold voided/released via gateway-confirmed cancellation.');
+      await refundOrReleaseDeposit(
+        intent.depositId,
+        undefined,
+        { id: 'system', name: 'Payment Gateway (webhook-confirmed)' },
+        recordAudit,
+        'Card authorization hold voided/released via gateway-confirmed cancellation.',
+        { source: 'gateway_confirmed', idempotencyKey: `gateway-release:${intent.id}` }
+      );
     }
     await updateDurable(PAYMENT_INTENTS, found.id, { status: 'canceled', canceledAt: now, updatedAt: now });
     return;
   }
   if (event.type === 'payment_intent.requires_capture') {
-    if (intent.status !== 'requires_payment' && intent.status !== 'processing') return; // already past this point
+    if (intent.status !== 'requires_payment' && intent.status !== 'processing') return;
     await updateDurable(PAYMENT_INTENTS, found.id, { status: 'requires_capture', updatedAt: now });
     return;
   }
   if (event.type === 'payment_intent.succeeded') {
-    if (intent.status === 'succeeded') return; // already applied -- never re-run the confirmed effect
-    // Apply the real effect FIRST -- if it throws (e.g. the linked invoice
-    // was deleted between intent creation and confirmation), the intent
-    // itself is never marked succeeded, so a legitimate retry of this same
-    // webhook delivery can still apply it once the underlying issue is
-    // fixed, rather than the intent being stuck "succeeded" with no
-    // matching Payment/Deposit ever created.
+    if (intent.status === 'succeeded') return;
     await applyConfirmedIntentEffect({ ...intent, id: found.id }, recordAudit);
     await updateDurable(PAYMENT_INTENTS, found.id, { status: 'succeeded', confirmedAt: now, updatedAt: now });
   }
@@ -390,7 +385,7 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
 
 export interface RequestRefundInput {
   paymentIntentId: string;
-  amount?: number; // defaults to the intent's full amount
+  amount?: number; // defaults to the remaining refundable amount
   reason: string;
 }
 
@@ -407,9 +402,20 @@ export async function refundPaymentIntent(
   if (intent.status !== 'succeeded') {
     throw new PaymentIntentError(`Only a succeeded PaymentIntent can be refunded (current status: ${intent.status}).`);
   }
-  const amount = input.amount !== undefined ? Number(input.amount) : intent.amount;
-  if (amount <= 0 || amount > intent.amount) {
-    throw new PaymentIntentError(`Refund amount must be between 0 and the original ${intent.amount} ${intent.currency}.`);
+
+  // Reserve against all non-failed refund requests, not just succeeded
+  // ones: two staff requests must never each assume the full original
+  // amount is still refundable while another refund is already processing.
+  const priorRefunds = await admin.firestore().collection(PAYMENT_REFUNDS)
+    .where('paymentIntentId', '==', intent.id).get();
+  const alreadyReserved = priorRefunds.docs
+    .map(doc => doc.data() as PaymentRefund)
+    .filter(refund => refund.status !== 'failed')
+    .reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+  const remainingRefundable = Math.max(0, Number(intent.amount || 0) - alreadyReserved);
+  const amount = input.amount !== undefined ? Number(input.amount) : remainingRefundable;
+  if (!Number.isFinite(amount) || amount <= 0 || amount > remainingRefundable + 0.001) {
+    throw new PaymentIntentError(`Refund amount must be positive and no more than the remaining refundable ${remainingRefundable} ${intent.currency}.`);
   }
 
   const adapter = getActiveGatewayAdapter();
@@ -434,7 +440,7 @@ export async function refundPaymentIntent(
   await recordAudit({
     userId: actor.uid, userName: actor.name, userRole: 'finance',
     entityType: 'PaymentIntent', entityId: intent.id, action: 'refund',
-    newValue: `Requested a ${amount} ${intent.currency} refund (${gatewayResult.providerRefundId}) -- pending gateway confirmation.`,
+    newValue: `Requested a ${amount} ${intent.currency} refund (${gatewayResult.providerRefundId}) -- pending gateway confirmation. Remaining refundable after reservation: ${Math.max(0, remainingRefundable - amount)} ${intent.currency}.`,
     reason: input.reason
   });
 
@@ -450,7 +456,7 @@ export async function releaseSecurityDepositHold(
   const intent = await getPaymentIntent(paymentIntentId);
   if (!intent) throw new PaymentIntentError(`PaymentIntent ${paymentIntentId} not found.`);
   if (intent.purpose !== 'security_deposit') throw new PaymentIntentError('Only a security_deposit PaymentIntent can be released as a hold.');
-  if (intent.status === 'canceled') return intent; // already released
+  if (intent.status === 'canceled') return intent;
 
   const adapter = getActiveGatewayAdapter();
   await adapter.cancelIntent(intent.providerIntentId);
@@ -461,7 +467,7 @@ export async function releaseSecurityDepositHold(
     newValue: `Requested release of the ${intent.amount} ${intent.currency} security deposit hold -- pending gateway confirmation.`
   });
 
-  return intent; // status only changes once the payment_intent.canceled webhook lands
+  return intent;
 }
 
 export { PaymentError, DepositError, LtoError, IdempotencyConflictError };
