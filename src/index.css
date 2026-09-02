@@ -76,30 +76,16 @@
   }
 }
 
-/* Splendor OS 3.0 — Electric Sapphire signature accents.
-   These utilities deliberately use low-opacity glow and thin borders so
-   sapphire reads as premium instrumentation rather than a theme color. */
-.splendor-sapphire-accent {
-  color: var(--splendor-sapphire);
-}
-.splendor-sapphire-border {
-  border-color: var(--splendor-sapphire-border);
-}
-.splendor-sapphire-surface {
-  background: var(--splendor-sapphire-soft);
-}
-.splendor-sapphire-glow {
-  box-shadow: 0 0 18px -8px var(--splendor-sapphire-glow);
-}
+.splendor-sapphire-accent { color: var(--splendor-sapphire); }
+.splendor-sapphire-border { border-color: var(--splendor-sapphire-border); }
+.splendor-sapphire-surface { background: var(--splendor-sapphire-soft); }
+.splendor-sapphire-glow { box-shadow: 0 0 18px -8px var(--splendor-sapphire-glow); }
 .splendor-sapphire-focus:focus-visible {
   outline: 1px solid var(--splendor-sapphire-focus);
   outline-offset: 2px;
   box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
 }
 
-/* Premium interaction language: sapphire is consistently reserved for
-   active/hover/focus instrumentation across the CRM while black remains
-   the dominant surface and gold/red remain part of the fixed brand system. */
 button:focus-visible,
 a:focus-visible,
 [role="button"]:focus-visible {
@@ -108,9 +94,6 @@ a:focus-visible,
   box-shadow: 0 0 0 3px rgba(var(--splendor-sapphire-rgb), 0.06);
 }
 
-/* Sidebar: active navigation gets a sapphire signal without turning the
-   navigation into a blue panel. The existing gold logo/brand treatment is
-   intentionally preserved. */
 aside button[class*="bg-[#D4AF37]/10"] {
   background: var(--splendor-sapphire-soft) !important;
   color: #7dd3fc !important;
@@ -118,80 +101,42 @@ aside button[class*="bg-[#D4AF37]/10"] {
   box-shadow: 0 0 18px -10px var(--splendor-sapphire-glow) !important;
 }
 
-aside button[class*="bg-[#D4AF37]/10"] span[class*="text-[#D4AF37]"] {
-  color: var(--splendor-sapphire) !important;
-}
-
+aside button[class*="bg-[#D4AF37]/10"] span[class*="text-[#D4AF37]"] { color: var(--splendor-sapphire) !important; }
 aside button:not([class*="bg-[#D4AF37]/10"]):hover {
   color: #e0f2fe;
   background: rgba(var(--splendor-sapphire-rgb), 0.055);
   border-color: rgba(var(--splendor-sapphire-rgb), 0.12);
 }
+aside button:not([class*="bg-[#D4AF37]/10"]):hover span { color: #7dd3fc; }
 
-aside button:not([class*="bg-[#D4AF37]/10"]):hover span {
-  color: #7dd3fc;
-}
-
-/* Shared premium surfaces: preserve the black/luxury base while giving
-   interaction states a coherent sapphire signature throughout views. */
 .luxury-card-hover:hover {
   border-color: var(--splendor-sapphire-border);
   box-shadow: 0 14px 35px -10px rgba(0, 0, 0, 0.65), 0 0 18px -6px var(--splendor-sapphire-glow);
 }
-
-.table-row-hover:hover {
-  background-color: rgba(var(--splendor-sapphire-rgb), 0.045);
-}
-
+.table-row-hover:hover { background-color: rgba(var(--splendor-sapphire-rgb), 0.045); }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover,
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--splendor-sapphire-rgb), 0.55);
-}
+::-webkit-scrollbar-thumb:hover { background: rgba(var(--splendor-sapphire-rgb), 0.55); }
 
-/* Reusable sapphire primitives for views that already use the shared
-   interaction classes. */
 .splendor-sapphire-active {
   color: #7dd3fc;
   background: var(--splendor-sapphire-soft);
   border-color: var(--splendor-sapphire-border);
   box-shadow: 0 0 18px -10px var(--splendor-sapphire-glow);
 }
-
 .splendor-sapphire-hover:hover {
   color: #e0f2fe;
   border-color: var(--splendor-sapphire-border);
   background: rgba(var(--splendor-sapphire-rgb), 0.055);
 }
 
-/* Custom sleek scrollbar for luxury CRM */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
-::-webkit-scrollbar-track {
-  background: #09090b;
-}
-::-webkit-scrollbar-thumb {
-  background: #27272a;
-  border-radius: 9999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
-}
-
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #27272a;
-  border-radius: 9999px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
-}
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #09090b; }
+::-webkit-scrollbar-thumb { background: #27272a; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 9999px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #52525b; }
 
 .luxury-card {
   background: rgba(18, 18, 20, 0.85);
@@ -199,28 +144,34 @@ aside button:not([class*="bg-[#D4AF37]/10"]):hover span {
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(12px);
 }
-
-.luxury-card-hover {
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
+.luxury-card-hover { transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
 .luxury-card-hover:hover {
   border-color: rgba(212, 175, 55, 0.35);
   transform: translateY(-1px);
   box-shadow: 0 14px 35px -10px rgba(0, 0, 0, 0.65), 0 0 15px -3px rgba(212, 175, 55, 0.06);
 }
+.table-row-hover { transition: background-color 0.15s ease; }
+.table-row-hover:hover { background-color: rgba(24, 24, 27, 0.6); }
 
-.table-row-hover {
-  transition: background-color 0.15s ease;
+/* Responsive contract action safety gate.
+   The former `sm:flex-nowrap` toolbar could push the official addendum
+   button beyond the viewport in Arabic/RTL and on compact tablets.  Keep
+   contract controls inside their container at every non-desktop width and
+   let long translated labels wrap instead of disappearing off-screen. */
+main[data-active-view="contracts"] { min-width: 0; max-width: 100%; overflow-x: clip; }
+main[data-active-view="contracts"] button { max-width: 100%; }
+@media (max-width: 1279px) {
+  main[data-active-view="contracts"] .sm\:flex-nowrap { flex-wrap: wrap !important; }
+  main[data-active-view="contracts"] button span { white-space: normal; overflow-wrap: anywhere; }
 }
-.table-row-hover:hover {
-  background-color: rgba(24, 24, 27, 0.6);
+@media (max-width: 639px) {
+  main[data-active-view="contracts"] button { min-width: 0; }
+  main[data-active-view="contracts"] .grid,
+  main[data-active-view="contracts"] .flex { min-width: 0; }
 }
 
 @media print {
-  @page {
-    size: A4 portrait;
-    margin: 0;
-  }
+  @page { size: A4 portrait; margin: 0; }
   html, body {
     background: #ffffff !important;
     color: #000000 !important;
@@ -229,12 +180,8 @@ aside button:not([class*="bg-[#D4AF37]/10"]):hover span {
     width: 210mm !important;
     height: 297mm !important;
   }
-  .no-print {
-    display: none !important;
-  }
-  .print-only {
-    display: block !important;
-  }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
   .a4-document {
     width: 210mm !important;
     height: 297mm !important;
