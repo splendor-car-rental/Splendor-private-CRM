@@ -1,17 +1,56 @@
 /**
  * Centralized Date & Time Formatting Engine for Splendor Luxury CRM.
- * 
+ *
  * Mandates:
- * 1. Every date across the entire CRM must strictly display in Day/Month/Year (DD/MM/YYYY) format,
- *    never in Month/Day/Year (MM/DD/YYYY).
- * 2. Phone numbers must strictly display the country code on the left side (dir="ltr")
- *    to prevent RTL digit transposition in Arabic text.
+ * 1. Every human-facing calendar date is rendered Day/Month/Year (DD/MM/YYYY).
+ * 2. Date-only values (YYYY-MM-DD) are calendar dates, not UTC instants; they
+ *    must never shift to the previous/next day because of timezone parsing.
+ * 3. Phone numbers display the country code on the left in RTL interfaces.
  */
 
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+interface DateParts {
+  day: string;
+  month: string;
+  year: string;
+}
+
+function dateOnlyParts(value: string): DateParts | null {
+  const match = value.trim().match(DATE_ONLY_RE);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() + 1 !== month ||
+    candidate.getUTCDate() !== day
+  ) return null;
+  return { day: match[3], month: match[2], year: match[1] };
+}
+
+function toDate(input: string | number | Date): Date | null {
+  if (typeof input === 'string') {
+    const parts = dateOnlyParts(input);
+    if (parts) {
+      const d = new Date(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+  }
+  const d = input instanceof Date ? new Date(input.getTime()) : new Date(input);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function formatDate(input: string | number | Date | undefined | null): string {
-  if (!input) return '';
-  const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return '';
+  if (input === undefined || input === null || input === '') return '';
+  if (typeof input === 'string') {
+    const parts = dateOnlyParts(input);
+    if (parts) return `${parts.day}/${parts.month}/${parts.year}`;
+  }
+  const d = toDate(input);
+  if (!d) return '';
   const day = String(d.getDate()).padStart(2, '0');
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const year = d.getFullYear();
@@ -19,39 +58,35 @@ export function formatDate(input: string | number | Date | undefined | null): st
 }
 
 export function formatDateTime(input: string | number | Date | undefined | null): string {
-  if (!input) return '';
-  const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return '';
-  const datePart = formatDate(d);
+  if (input === undefined || input === null || input === '') return '';
+  const d = toDate(input);
+  if (!d) return '';
+  const datePart = formatDate(input);
   const hours = String(d.getHours()).padStart(2, '0');
   const minutes = String(d.getMinutes()).padStart(2, '0');
   return `${datePart} ${hours}:${minutes}`;
 }
 
 export function formatDateLocalized(input: string | number | Date | undefined | null, isAr = false): string {
-  if (!input) return '';
-  const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return '';
-  
-  if (isAr) {
-    const arabicMonths = [
-      'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
-    ];
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = arabicMonths[d.getMonth()];
-    const year = d.getFullYear();
-    return `${day} ${month} ${year}`;
-  }
-  
-  return formatDate(d);
+  if (input === undefined || input === null || input === '') return '';
+  const datePart = formatDate(input);
+  if (!datePart) return '';
+  if (!isAr) return datePart;
+
+  const [day, monthNumber, year] = datePart.split('/');
+  const arabicMonths = [
+    'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+  ];
+  const month = arabicMonths[Number(monthNumber) - 1];
+  return month ? `${day} ${month} ${year}` : datePart;
 }
 
 export function formatDateTimeLocalized(input: string | number | Date | undefined | null, isAr = false): string {
-  if (!input) return '';
-  const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return '';
-  const datePart = formatDate(d);
+  if (input === undefined || input === null || input === '') return '';
+  const d = toDate(input);
+  if (!d) return '';
+  const datePart = formatDateLocalized(input, isAr);
   const hours = String(d.getHours()).padStart(2, '0');
   const minutes = String(d.getMinutes()).padStart(2, '0');
   return `${datePart} - ${hours}:${minutes}`;
@@ -64,6 +99,5 @@ export function formatDateTimeLocalized(input: string | number | Date | undefine
 export function formatPhoneNumber(phone: string | undefined | null): string {
   if (!phone) return '';
   const cleaned = phone.trim();
-  // Isolate text with LTR mark so direction does not flip in Arabic
   return `\u202A${cleaned}\u202C`;
 }
