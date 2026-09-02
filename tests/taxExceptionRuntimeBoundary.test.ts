@@ -20,8 +20,9 @@ describe('Tax Blocking Exception runtime boundary', () => {
     expect(runtime).toContain("status === 'open'");
     expect(runtime).toContain('applyBlockingExceptionToPeriod(period, openCount + 1, now)');
     expect(runtime).toContain('blockingExceptionCount: Math.max(0, openCount - 1)');
-    expect(runtime).toContain("entityType: 'TaxBlockingException'");
-    expect(runtime).toContain("entityType: 'TaxPeriod'");
+    expect(runtime).toContain("entityType: 'TaxBlockingException' | 'TaxPeriod'");
+    expect(runtime).toContain("writeAuditInTransaction(tx, actor, 'TaxBlockingException'");
+    expect(runtime).toContain("writeAuditInTransaction(tx, actor, 'TaxPeriod'");
   });
 
   it('invalidates completed internal-review readiness when a new blocker appears', () => {
