@@ -338,13 +338,15 @@ describe('POST /api/deposits/:id/apply and /refund', () => {
   });
 
   it('refunds a held deposit', async () => {
-    seedDoc('deposits', 'DEP-REFUND-1', { id: 'DEP-REFUND-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
+    seedDoc('customers', 'CUS-DEP-REFUND-1', { id: 'CUS-DEP-REFUND-1', fullName: 'Deposit Refund Customer', securityDepositsHeld: 1000 });
+    seedDoc('deposits', 'DEP-REFUND-1', { id: 'DEP-REFUND-1', customerId: 'CUS-DEP-REFUND-1', customerName: 'Deposit Refund Customer', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
     const res = await request(app)
       .post('/api/deposits/DEP-REFUND-1/refund')
       .set(authAs(FINANCE_UID))
       .send({ refundAmount: 1000 });
     expect(res.status).toBe(200);
     expect(res.body.deposit.refundedAmount).toBe(1000);
+    expect(adminMock.store.get('customers')?.get('CUS-DEP-REFUND-1').securityDepositsHeld).toBe(0);
   });
 
   it('rejects applying more than the remaining deposit balance', async () => {
@@ -405,8 +407,6 @@ describe('POST /api/bank-transactions/:id/reconcile', () => {
     expect(adminMock.store.get('invoices')?.get('INV-REC-1').paidAmount).toBe(500);
   });
 
-  // FIN-002: classification is required and never guessed -- omitting it
-  // must fail loudly (400), not silently default to something.
   it('rejects reconciliation with no classification', async () => {
     seedDoc('bank_transactions', 'BTX-REC-3', { id: 'BTX-REC-3', reference: 'REF3', credit: 200, reconciled: false, status: 'pending' });
     const res = await request(app)
@@ -443,8 +443,6 @@ describe('POST /api/bank-transactions/:id/reconcile', () => {
       .set(authAs(FINANCE_UID))
       .send({ targetRecordType: 'deposit', targetRecordId: 'INV-REC-1', classification: 'security_deposit' });
     expect(res.status).toBe(200);
-    // Same id happens to collide with the invoice seeded above -- the fix
-    // means that invoice's paidAmount must stay untouched.
     expect(adminMock.store.get('invoices')?.get('INV-REC-1').paidAmount).toBe(0);
   });
 });
@@ -463,7 +461,7 @@ describe('POST /api/bank-transactions/:id/reclassify', () => {
     const txn = adminMock.store.get('bank_transactions')?.get('BTX-RCL-1');
     expect(txn.receivedAmountClassification).toBe('advance_payment');
     expect(txn.classificationHistory).toHaveLength(2);
-    expect(txn.credit).toBe(700); // unchanged
+    expect(txn.credit).toBe(700);
   });
 
   it('rejects reclassification without a reason', async () => {
@@ -524,7 +522,7 @@ describe('Firestore failure behaves as a controlled API failure, never a false s
       .send({ type: 'salik', amount: 10, customerId: 'CUS-CW-1' });
 
     expect(res.status).toBe(502);
-    expect(globalStore.charges.length).toBe(before); // never inserted on failure
+    expect(globalStore.charges.length).toBe(before);
   });
 });
 
@@ -580,7 +578,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
       .set(authAs(OPS_UID))
       .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', tier: 'full', reason: 'Fraud attempt on a prior booking' });
     expect(create.status).toBe(201);
-    expect(create.body.identifierValue).toBe('P9988776'); // normalized uppercase
+    expect(create.body.identifierValue).toBe('P9988776');
 
     const blocked = await request(app)
       .post('/api/customers')
@@ -599,7 +597,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
       .post('/api/customers')
       .set(authAs(SALES_UID))
       .send({ fullName: 'Jean Dupont', email: 'jean2@example.com', phone: '+971500000002', idType: 'passport', idNumber: 'P2222222', nationality: 'France' });
-    expect(differentPassport.status).toBe(201); // same name, different passport -- not a match
+    expect(differentPassport.status).toBe(201);
   });
 
   it('never matches a passport number alone without the correct issuing country', async () => {
@@ -612,7 +610,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
       .post('/api/customers')
       .set(authAs(SALES_UID))
       .send({ fullName: 'Someone Else', email: 'someone@example.com', phone: '+971500000003', idType: 'passport', idNumber: 'P3333333', nationality: 'Spain' });
-    expect(sameNumberDifferentCountry.status).toBe(201); // same passport number, different country -- correctly NOT a match
+    expect(sameNumberDifferentCountry.status).toBe(201);
   });
 
   it('a conditional block allows the customer through with a warning, not a rejection', async () => {
@@ -641,21 +639,18 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
       .send({ reason: 'Customer provided evidence disputing the original claim.' });
     expect(unblockReq.status).toBe(201);
 
-    // Same requester attempting to decide their own request is rejected.
     const selfDecide = await request(app)
       .post(`/api/procurement/approvals/${unblockReq.body.approvalRequestId}/decide`)
       .set(authAs(OPS_UID))
       .send({ decision: 'approved', note: 'self-approving' });
-    expect(selfDecide.status).toBe(403); // operations isn't a decider role either, blocked before the SoD check even runs
+    expect(selfDecide.status).toBe(403);
 
-    // A different, authorized decider (CEO) approves it.
     const decide = await request(app)
       .post(`/api/procurement/approvals/${unblockReq.body.approvalRequestId}/decide`)
       .set(authAs(CEO_UID))
       .send({ decision: 'approved', note: 'Evidence reviewed and accepted.' });
     expect(decide.status).toBe(200);
 
-    // The customer can now be registered -- the block was actually removed.
     const afterUnblock = await request(app)
       .post('/api/customers')
       .set(authAs(SALES_UID))
@@ -679,7 +674,7 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
       .set(authAs(SALES_UID))
       .send({
         customerName: 'Within Ceiling Client', vehicleName: 'GT3 RS', dailyRate: 2000, durationDays: 5,
-        discountAmount: 500, // 500 / 10000 = 5% exactly -- at the ceiling, not above it
+        discountAmount: 500,
         ownerId: SALES_UID, ownerName: 'Test Sales'
       });
     expect(res.status).toBe(201);
@@ -694,14 +689,14 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
       .set(authAs(SALES_UID))
       .send({
         customerName: 'Above Ceiling Client', vehicleName: 'Cullinan', dailyRate: 3000, durationDays: 4,
-        discountAmount: 2400, // 2400 / 12000 = 20% -- well above the 5% ceiling
+        discountAmount: 2400,
         ownerId: SALES_UID, ownerName: 'Test Sales'
       });
     expect(res.status).toBe(201);
     expect(res.body.discountOverridePending).toBe(true);
-    expect(res.body.discountAmount).toBe(600); // capped at 5% of 12000
+    expect(res.body.discountAmount).toBe(600);
     expect(res.body.requestedDiscountAmount).toBe(2400);
-    expect(res.body.grandTotal).toBeLessThan(12000); // the capped (safe) total, not the fully-discounted one
+    expect(res.body.grandTotal).toBeLessThan(12000);
     expect(res.body.discountApprovalId).toBeTruthy();
 
     const approvals = await request(app).get('/api/procurement/approvals').set(authAs(CEO_UID));
@@ -710,7 +705,6 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
     expect(pending.action).toBe('discount_override');
     expect(pending.status).toBe('pending');
 
-    // A different authorized decider (CEO) approves the full requested discount.
     const decide = await request(app)
       .post(`/api/procurement/approvals/${res.body.discountApprovalId}/decide`)
       .set(authAs(CEO_UID))
@@ -721,7 +715,7 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
     const updated = quotations.body.find((q: any) => q.id === res.body.id);
     expect(updated.discountAmount).toBe(2400);
     expect(updated.discountOverridePending).toBe(false);
-    expect(updated.grandTotal).toBeLessThan(res.body.grandTotal); // the full discount is now reflected
+    expect(updated.grandTotal).toBeLessThan(res.body.grandTotal);
   });
 
   it('a non-manager cannot approve their own quotation discount-override request', async () => {
@@ -735,7 +729,7 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
       .post(`/api/procurement/approvals/${create.body.discountApprovalId}/decide`)
       .set(authAs(SALES_UID))
       .send({ decision: 'approved', note: 'self-approving' });
-    expect(selfDecide.status).toBe(403); // sales isn't a decider role at all, blocked before the SoD check even runs
+    expect(selfDecide.status).toBe(403);
   });
 
   it('ceo/admin can apply any discount immediately -- they are the manager approval, not subject to the ceiling', async () => {
@@ -744,7 +738,7 @@ describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () =
       .set(authAs(CEO_UID))
       .send({ customerName: 'Manager Override Client', vehicleName: 'Phantom', dailyRate: 5000, durationDays: 2, discountAmount: 3000, ownerId: CEO_UID, ownerName: 'Test CEO' });
     expect(res.status).toBe(201);
-    expect(res.body.discountAmount).toBe(3000); // full amount, 30% of 10000, applied without a ceiling check
+    expect(res.body.discountAmount).toBe(3000);
     expect(res.body.discountOverridePending).toBeFalsy();
   });
 });
@@ -905,12 +899,6 @@ describe('Vehicle Inspection & Photo Evidence (Splendor Master Rule Set, Module 
 });
 
 describe('WhatsApp Unified Inbox (Splendor Master Rule Set, Module 13)', () => {
-  // Route-level authorization + basic behavior only -- the real state
-  // machine, customer matching, and reservation-creation flow are covered
-  // against the REAL Firestore emulator in tests/whatsappConversation.test.ts
-  // (listConversations()'s .where() queries only work correctly there; this
-  // mock's .where() is a no-op passthrough, same limitation documented for
-  // listInspections() above).
   function seedConversation(phone: string, overrides: Record<string, any> = {}) {
     const col = adminMock.store.get('whatsapp_conversations') || new Map();
     adminMock.store.set('whatsapp_conversations', col);
