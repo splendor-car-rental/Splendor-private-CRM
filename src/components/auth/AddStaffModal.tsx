@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
+import { useCRM } from '../../context/CRMContext';
 import { apiFetch } from '../../lib/apiFetch';
 import { UserRole } from '../../types';
 import { assignableRoles } from '../../config/permissions';
@@ -19,8 +20,9 @@ interface AddStaffModalProps {
  * source code.
  */
 export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, onCreated }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { currentUser } = useAuth();
+  const { showToast } = useCRM();
   // A CEO/Admin can only grant a role at their own rank or below -- never
   // more authority than they themselves hold (also enforced server-side).
   const ROLES: UserRole[] = assignableRoles(currentUser.role);
@@ -64,6 +66,11 @@ export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, o
       }
       onCreated();
       handleClose();
+      showToast(
+        language === 'ar' ? 'تم إنشاء حساب الموظف' : 'Staff account created',
+        language === 'ar' ? `تم إنشاء حساب ${name} بنجاح.` : `${name} was created successfully.`,
+        'success'
+      );
     } catch (err: any) {
       setError(err?.message || t('staffCreateError'));
     } finally {
