@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
 import { canTax } from '../config/taxCompliance';
+import type { TaxBlockingException } from '../tax/exceptionTypes';
+import type { TaxReconciliationSnapshot } from '../tax/reconciliationTypes';
 import type {
   TaxDeadlineBasis,
   TaxMasterProfile,
@@ -24,11 +26,17 @@ import {
   validateProfessionalValidation,
   type TaxActor
 } from './taxCompliancePolicy';
+import {
+  journalEvidenceHash,
+  readAuthoritativeReconciliationEvidence
+} from './taxReconciliationEvidence';
 
 const PROFILE_COLLECTION = 'tax_master_profiles';
 const SOURCE_COLLECTION = 'tax_official_sources';
 const RULE_COLLECTION = 'tax_rule_versions';
 const PERIOD_COLLECTION = 'tax_periods';
+const EXCEPTION_COLLECTION = 'tax_period_exceptions';
+const RECONCILIATION_COLLECTION = 'tax_reconciliation_snapshots';
 const AUDIT_COLLECTION = 'tax_audit_events';
 const PROFILE_ID = 'splendor';
 
@@ -165,6 +173,58 @@ function validateLinkedRules(period: TaxPeriod, rules: TaxRuleVersion[]): string
   return null;
 }
 
+export async function validateAuthoritativeReconciliationFreshness(
+  tx: admin.firestore.Transaction,
+  db: admin.firestore.Firestore,
+  period: TaxPeriod
+): Promise<string | null> {
+  if (!period.latestReconciliationSnapshotId || !period.latestReconciliationLedgerEvidenceHash) return null;
+
+  const reconciliationRef = db.collection(RECONCILIATION_COLLECTION).doc(period.latestReconciliationSnapshotId);
+  const exceptionQuery = db.collection(EXCEPTION_COLLECTION).where('periodId', '==', period.id);
+  const [reconciliationSnap, exceptionSnap] = await Promise.all([
+    tx.get(reconciliationRef),
+    tx.get(exceptionQuery)
+  ]);
+
+  if (!reconciliationSnap.exists) {
+    return 'The latest Tax Reconciliation evidence snapshot is missing. Capture a new authoritative reconciliation before this Tax Period can advance.';
+  }
+
+  const reconciliation = { id: reconciliationSnap.id, ...reconciliationSnap.data() } as TaxReconciliationSnapshot;
+  if (reconciliation.periodId !== period.id) {
+    return 'The latest Tax Reconciliation evidence snapshot is not bound to this Tax Period.';
+  }
+  if (
+    reconciliation.ledgerEvidenceHash !== period.latestReconciliationLedgerEvidenceHash ||
+    reconciliation.postingGapCount !== period.latestReconciliationPostingGapCount
+  ) {
+    return 'Tax Period reconciliation metadata does not match the immutable latest Tax Reconciliation snapshot.';
+  }
+
+  const evidence = await readAuthoritativeReconciliationEvidence(tx, db, period);
+  const currentLedgerHash = journalEvidenceHash(evidence.postedJournals);
+  if (currentLedgerHash !== reconciliation.ledgerEvidenceHash) {
+    return 'Tax Reconciliation evidence is stale because authoritative posted accounting journals changed after the latest snapshot was captured.';
+  }
+  if (evidence.postingGaps.length !== 0) {
+    return 'Tax Reconciliation evidence is stale because authoritative posting gaps changed after the latest snapshot was captured.';
+  }
+
+  const openExceptions = exceptionSnap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() } as TaxBlockingException))
+    .filter(exception => exception.status === 'open');
+  const storedBlockingCount = Number(period.blockingExceptionCount || 0);
+  if (openExceptions.length !== storedBlockingCount) {
+    return 'Tax Period blocking exception count is inconsistent with authoritative open exceptions. Reconcile blockers before advancing.';
+  }
+  if (openExceptions.length > 0) {
+    return 'Authoritative blocking exceptions must be resolved before this Tax Period can advance.';
+  }
+
+  return null;
+}
+
 function writeAuditInTransaction(
   tx: admin.firestore.Transaction,
   actor: TaxActor,
@@ -267,6 +327,8 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       reason = 'Tax Period opened for controlled preparation.';
     } else if (action === 'submit-review') {
       if (!requirePermission(actor, 'tax.prepare', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
+      const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
+      if (freshnessError) throw new Error(freshnessError);
       const error = validateSubmitForReview(previous, actor);
       if (error) throw new Error(error);
       next = {
@@ -282,6 +344,8 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       reason = 'Prepared Tax Period submitted for independent internal review.';
     } else if (action === 'complete-review') {
       if (!requirePermission(actor, 'tax.review', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
+      const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
+      if (freshnessError) throw new Error(freshnessError);
       const error = validateIndependentReview(previous, actor);
       if (error) throw new Error(error);
       next = {
@@ -301,6 +365,8 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       const validation = normalizeProfessionalValidation(req.body?.professionalValidation || req.body);
       const evidenceError = validateProfessionalValidation(validation);
       if (evidenceError) throw new Error(evidenceError);
+      const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
+      if (freshnessError) throw new Error(freshnessError);
       const error = validateRecordPeriodProfessionalValidation(previous, actor, validation);
       if (error) throw new Error(error);
       next = {
@@ -318,6 +384,8 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       if (!requirePermission(actor, 'tax.approve', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const closureNote = cleanText(req.body?.closureNote || req.body?.reason, 3000);
       if (!closureNote) throw new Error('A closure note is required. Closing a Tax Period does not mean it was filed.');
+      const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
+      if (freshnessError) throw new Error(freshnessError);
       const error = validateCloseTaxPeriod(previous, actor);
       if (error) throw new Error(error);
       next = {

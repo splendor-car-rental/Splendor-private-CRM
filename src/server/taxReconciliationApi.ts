@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
 import { canTax } from '../config/taxCompliance';
@@ -8,13 +7,17 @@ import type { TaxReconciliationPostingGapEvidence, TaxReconciliationSnapshot } f
 import type { TaxPeriod, TaxPermission } from '../tax/types';
 import type { UserRole } from '../types';
 import type { TaxActor } from './taxCompliancePolicy';
+import {
+  journalEvidenceHash,
+  readAuthoritativeReconciliationEvidence,
+  reconciliationMoney
+} from './taxReconciliationEvidence';
 import { validateCaptureTaxReconciliation, validateResolveReconciliationPostingGap } from './taxReconciliationPolicy';
 
 const PERIOD_COLLECTION = 'tax_periods';
 const EXCEPTION_COLLECTION = 'tax_period_exceptions';
 const RECONCILIATION_COLLECTION = 'tax_reconciliation_snapshots';
 const RECONCILIATION_STATE_COLLECTION = 'tax_reconciliation_states';
-const JOURNAL_COLLECTION = 'accounting_journals';
 const AUDIT_COLLECTION = 'tax_audit_events';
 const USER_ROLES = new Set<UserRole>(['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance']);
 
@@ -25,15 +28,6 @@ function cleanText(value: unknown, maxLength = 500): string {
 function normalizeExplicitPermissions(value: unknown): TaxPermission[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((permission): permission is TaxPermission => typeof permission === 'string' && permission.startsWith('tax.'));
-}
-
-function money(value: unknown): number {
-  return Math.round((Number(value) || 0) * 100) / 100;
-}
-
-function dateInPeriod(value: unknown, period: TaxPeriod): boolean {
-  const date = String(value || '').slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= period.periodStart && date <= period.periodEnd;
 }
 
 async function authenticate(req: Request, res: Response): Promise<TaxActor | null> {
@@ -74,114 +68,6 @@ function requirePermission(actor: TaxActor, permission: TaxPermission, res: Resp
   return false;
 }
 
-function journalEvidenceHash(journals: JournalEntry[]): string {
-  const normalized = [...journals]
-    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
-    .map(journal => ({
-      id: journal.id,
-      date: journal.date,
-      periodKey: journal.periodKey,
-      currency: journal.currency,
-      sourceType: journal.sourceType,
-      sourceId: journal.sourceId,
-      sourceAction: journal.sourceAction,
-      status: journal.status,
-      totalDebit: money(journal.totalDebit),
-      totalCredit: money(journal.totalCredit),
-      reversalJournalId: journal.reversalJournalId,
-      reversalOfJournalId: journal.reversalOfJournalId,
-      lines: journal.lines.map(line => ({
-        accountCode: line.accountCode,
-        debit: money(line.debit),
-        credit: money(line.credit),
-        dimensions: line.dimensions || null
-      }))
-    }));
-  return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
-}
-
-function buildPostingGaps(
-  period: TaxPeriod,
-  allPeriodJournals: JournalEntry[],
-  invoices: any[],
-  payments: any[],
-  deposits: any[],
-  supplierInvoices: any[],
-  bankTransactions: any[]
-): TaxReconciliationPostingGapEvidence[] {
-  const key = (sourceType: string, sourceId: string, sourceAction: string) => `${sourceType}:${sourceId}:${sourceAction}`;
-  // Match the accounting engine's posting-gap invariant: a historical source
-  // remains accounted for when its original journal exists even if that
-  // journal was later reversed through a controlled reversal journal.
-  const journalKeys = new Set(allPeriodJournals.map(journal => key(journal.sourceType, journal.sourceId, journal.sourceAction)));
-  const gaps: TaxReconciliationPostingGapEvidence[] = [];
-
-  for (const invoice of invoices) {
-    if (!dateInPeriod(invoice.issueDate, period)) continue;
-    if (!['draft', 'cancelled'].includes(invoice.status) && !journalKeys.has(key('Invoice', invoice.id, 'issue'))) {
-      gaps.push({ sourceType: 'Invoice', sourceId: String(invoice.id), date: String(invoice.issueDate).slice(0, 10), description: `Customer invoice ${invoice.id}`, amount: money(invoice.totalAmount), reason: 'Issued invoice has no accounting journal. Use controlled lazy posting; do not backfill production automatically.' });
-    }
-  }
-  for (const payment of payments) {
-    if (!dateInPeriod(payment.receivedAt, period)) continue;
-    if (payment.status !== 'refunded' && !journalKeys.has(key('Payment', payment.id, 'receive'))) {
-      gaps.push({ sourceType: 'Payment', sourceId: String(payment.id), date: String(payment.receivedAt).slice(0, 10), description: `Customer payment ${payment.receiptNumber || payment.id}`, amount: money(payment.amount), reason: 'Payment is recorded operationally but has not been assigned a cash/bank accounting account.' });
-    }
-  }
-  for (const deposit of deposits) {
-    if (!dateInPeriod(deposit.createdAt, period)) continue;
-    if (deposit.holdType !== 'gateway_authorization' && !journalKeys.has(key('Deposit', deposit.id, 'receive'))) {
-      gaps.push({ sourceType: 'Deposit', sourceId: String(deposit.id), date: String(deposit.createdAt).slice(0, 10), description: `Security deposit ${deposit.id}`, amount: money(deposit.amount), reason: 'Manual deposit has not been posted to the customer-deposit liability control account.' });
-    }
-  }
-  for (const supplierInvoice of supplierInvoices) {
-    if (!dateInPeriod(supplierInvoice.invoiceDate, period)) continue;
-    if (supplierInvoice.status === 'approved' && !journalKeys.has(key('SupplierInvoice', supplierInvoice.id, 'post_ap'))) {
-      gaps.push({ sourceType: 'SupplierInvoice', sourceId: String(supplierInvoice.id), date: String(supplierInvoice.invoiceDate).slice(0, 10), description: `Supplier invoice ${supplierInvoice.invoiceNumber}`, amount: money(supplierInvoice.amount), reason: 'Approved supplier invoice needs explicit net/VAT/due-date metadata before AP posting; VAT is not guessed.' });
-    }
-  }
-  for (const transaction of bankTransactions) {
-    if (!dateInPeriod(transaction.date, period)) continue;
-    if (transaction.reconciled && !transaction.accountingJournalId) {
-      gaps.push({ sourceType: 'BankTransaction', sourceId: String(transaction.id), date: String(transaction.date).slice(0, 10), description: transaction.description || `Bank transaction ${transaction.id}`, amount: money(transaction.credit || transaction.debit || 0), reason: 'Reconciliation exists but is not yet linked to an accounting journal.' });
-    }
-  }
-
-  return gaps.sort((a, b) => a.date.localeCompare(b.date) || a.sourceType.localeCompare(b.sourceType) || a.sourceId.localeCompare(b.sourceId));
-}
-
-async function readAuthoritativeEvidence(
-  tx: admin.firestore.Transaction,
-  firestore: admin.firestore.Firestore,
-  period: TaxPeriod
-): Promise<{ postedJournals: JournalEntry[]; postingGaps: TaxReconciliationPostingGapEvidence[] }> {
-  const journalQuery = firestore.collection(JOURNAL_COLLECTION)
-    .where('date', '>=', period.periodStart)
-    .where('date', '<=', period.periodEnd);
-  const [journalSnap, invoiceSnap, paymentSnap, depositSnap, supplierInvoiceSnap, bankTransactionSnap] = await Promise.all([
-    tx.get(journalQuery),
-    tx.get(firestore.collection('invoices')),
-    tx.get(firestore.collection('payments')),
-    tx.get(firestore.collection('deposits')),
-    tx.get(firestore.collection('supplier_invoices')),
-    tx.get(firestore.collection('bank_transactions'))
-  ]);
-  const allPeriodJournals = journalSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as JournalEntry));
-  const postedJournals = allPeriodJournals.filter(journal => journal.status === 'posted');
-  return {
-    postedJournals,
-    postingGaps: buildPostingGaps(
-      period,
-      allPeriodJournals,
-      invoiceSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-      paymentSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-      depositSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-      supplierInvoiceSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-      bankTransactionSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
-    )
-  };
-}
-
 function buildSnapshot(
   refId: string,
   period: TaxPeriod,
@@ -204,8 +90,8 @@ function buildSnapshot(
     accountingEvidenceSource: 'accounting_journals',
     ledgerJournalIds: sorted.map(journal => journal.id),
     ledgerJournalCount: sorted.length,
-    ledgerTotalDebit: money(sorted.reduce((sum, journal) => sum + journal.totalDebit, 0)),
-    ledgerTotalCredit: money(sorted.reduce((sum, journal) => sum + journal.totalCredit, 0)),
+    ledgerTotalDebit: reconciliationMoney(sorted.reduce((sum, journal) => sum + journal.totalDebit, 0)),
+    ledgerTotalCredit: reconciliationMoney(sorted.reduce((sum, journal) => sum + journal.totalCredit, 0)),
     ledgerEvidenceHashAlgorithm: 'SHA-256',
     ledgerEvidenceHash: journalEvidenceHash(sorted),
     postingGapCount: postingGaps.length,
@@ -263,7 +149,7 @@ async function captureReconciliation(req: Request, res: Response, actor: TaxActo
     const policyError = validateCaptureTaxReconciliation(period, actor);
     if (policyError) throw new Error(policyError);
 
-    const evidence = await readAuthoritativeEvidence(tx, firestore, period);
+    const evidence = await readAuthoritativeReconciliationEvidence(tx, firestore, period);
     const [stateSnap, exceptionsSnap] = await Promise.all([
       tx.get(stateRef),
       tx.get(firestore.collection(EXCEPTION_COLLECTION).where('periodId', '==', periodId))
@@ -335,7 +221,7 @@ async function resolvePostingGapBlocker(req: Request, res: Response, actor: TaxA
     const periodSnap = await tx.get(periodRef);
     if (!periodSnap.exists) throw new Error('Tax Period not found.');
     const period = { id: periodSnap.id, ...periodSnap.data() } as TaxPeriod;
-    const evidence = await readAuthoritativeEvidence(tx, firestore, period);
+    const evidence = await readAuthoritativeReconciliationEvidence(tx, firestore, period);
     const [stateSnap, exceptionsSnap] = await Promise.all([
       tx.get(stateRef),
       tx.get(firestore.collection(EXCEPTION_COLLECTION).where('periodId', '==', periodId))
