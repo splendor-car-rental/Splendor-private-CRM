@@ -15,6 +15,7 @@ import { ArabicInterfaceGuard } from './components/common/ArabicInterfaceGuard';
 import { DashboardPersonalizationGuard } from './components/dashboard/DashboardPersonalizationGuard';
 import { CustomerIntakePortal } from './components/customers/CustomerIntakePortal';
 import { ContextualDocumentActions } from './components/documents/ContextualDocumentActions';
+import { ProcurementLpoRail } from './components/documents/ProcurementLpoRail';
 
 import { DashboardView } from './components/views/DashboardView';
 import { Customer360View } from './components/views/Customer360View';
@@ -42,6 +43,8 @@ import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiV
 import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
 import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
 import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
+
+const PROCUREMENT_VIEWS = new Set(['procurement', 'purchase-orders', 'lpo', 'supply-orders']);
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -122,6 +125,7 @@ const MainLayout: React.FC = () => {
         <main data-active-view={activeView} className="flex-1 w-full p-4 sm:p-6 lg:p-8">
           <ErrorBoundary key={activeView}>
             <ContextualDocumentActions />
+            {PROCUREMENT_VIEWS.has(activeView) && <ProcurementLpoRail />}
             {renderActiveView()}
           </ErrorBoundary>
         </main>

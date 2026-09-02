@@ -12,9 +12,14 @@ type Props = {
   labelEn?: string;
   className?: string;
   disabled?: boolean;
+  canIssue?: boolean;
+  issueLabelAr?: string;
+  issueLabelEn?: string;
 };
 
-export const WorkflowDocumentPreviewButton: React.FC<Props> = ({ kind, source, labelAr, labelEn, className, disabled }) => {
+export const WorkflowDocumentPreviewButton: React.FC<Props> = ({
+  kind, source, labelAr, labelEn, className, disabled, canIssue = true, issueLabelAr, issueLabelEn
+}) => {
   const { language } = useLanguage();
   const [busy, setBusy] = useState(false);
   const [issuing, setIssuing] = useState(false);
@@ -69,6 +74,7 @@ export const WorkflowDocumentPreviewButton: React.FC<Props> = ({ kind, source, l
   };
 
   const issue = async () => {
+    if (!canIssue) return;
     setIssuing(true);
     setError(null);
     try {
@@ -122,10 +128,10 @@ export const WorkflowDocumentPreviewButton: React.FC<Props> = ({ kind, source, l
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {!issued && (
+                {!issued && canIssue && (
                   <button type="button" disabled={issuing} onClick={() => void issue()} className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-emerald-950 disabled:opacity-50">
                     {issuing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                    {language === 'ar' ? 'اعتماد وإصدار وأرشفة' : 'Approve, Issue & Archive'}
+                    {language === 'ar' ? (issueLabelAr || 'اعتماد وإصدار وأرشفة') : (issueLabelEn || 'Approve, Issue & Archive')}
                   </button>
                 )}
                 {issued && <a href={previewUrl} download={fileName} className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-black text-sky-200"><Download className="h-4 w-4" />{language === 'ar' ? 'حفظ PDF' : 'Save PDF'}</a>}
@@ -133,7 +139,11 @@ export const WorkflowDocumentPreviewButton: React.FC<Props> = ({ kind, source, l
                 <button type="button" onClick={close} className="rounded-xl border border-zinc-700 p-2 text-zinc-300"><X className="h-4 w-4" /></button>
               </div>
             </div>
-            {!issued && <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-[11px] font-semibold text-amber-300">{language === 'ar' ? 'هذه معاينة فقط. لا يمكن الحفظ أو الطباعة كنسخة رسمية قبل الضغط على «اعتماد وإصدار وأرشفة».' : 'Preview only. Save/print is enabled only after the immutable issued copy is archived.'}</div>}
+            {!issued && <div className={`border-b px-4 py-2 text-[11px] font-semibold ${canIssue ? 'border-amber-500/20 bg-amber-500/5 text-amber-300' : 'border-zinc-700 bg-zinc-900 text-zinc-400'}`}>
+              {canIssue
+                ? (language === 'ar' ? 'هذه معاينة فقط. لا يمكن الحفظ أو الطباعة كنسخة رسمية قبل الإصدار والأرشفة.' : 'Preview only. Save/print is enabled only after the immutable issued copy is archived.')
+                : (language === 'ar' ? 'هذه معاينة فقط. الإصدار الرسمي غير متاح حتى يكتمل اعتماد السجل على الخادم.' : 'Preview only. Official issue remains unavailable until the source record is server-approved.')}
+            </div>}
             <iframe title="Approved document preview" src={previewUrl} className="min-h-0 flex-1 bg-white" />
           </div>
         </div>
