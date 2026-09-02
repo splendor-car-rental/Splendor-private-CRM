@@ -30,6 +30,11 @@ export type TaxPeriodStatus =
   | 'filed'
   | 'filed_reconciled';
 
+export type TaxDeadlineBasis =
+  | 'EMARATAX_CONFIRMED'
+  | 'OFFICIAL_SOURCE'
+  | 'SPECIAL_OFFICIAL_NOTICE';
+
 export type TaxPermission =
   | 'tax.view'
   | 'tax.prepare'
@@ -147,12 +152,23 @@ export interface TaxPeriod {
   periodStart: string;
   periodEnd: string;
   filingDeadline: string;
+  deadlineBasis: TaxDeadlineBasis;
   deadlineSourceId: string;
+  deadlineEvidenceReference?: string;
+  deadlineEvidenceDocumentId?: string;
+  taxProfileVersionUpdatedAt: string;
   status: TaxPeriodStatus;
   ruleVersionIds: string[];
+  preparationStartedBy?: string;
+  preparationStartedByName?: string;
+  preparationStartedAt?: string;
   preparedBy?: string;
+  preparedByName?: string;
   preparedAt?: string;
+  reviewStatus?: 'pending' | 'passed' | 'changes_requested';
+  reviewNotes?: string;
   reviewedBy?: string;
+  reviewedByName?: string;
   reviewedAt?: string;
   approvedBy?: string;
   approvedAt?: string;
@@ -166,6 +182,9 @@ export interface TaxPeriod {
   paymentEvidenceDocumentIds?: string[];
   reconciliationDifferenceAed?: number;
   blockingExceptionCount: number;
+  filingReadiness: 'NOT_READY_FOR_FILING' | 'BLOCKED' | 'READY_FOR_REVIEW' | 'READY_FOR_FILING';
+  createdBy: string;
+  createdByName: string;
   createdAt: string;
   updatedAt: string;
 }
