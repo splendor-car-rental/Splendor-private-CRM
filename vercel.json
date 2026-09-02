@@ -17,6 +17,8 @@
     { "source": "/api/corporate-accounts/:accountId", "destination": "/api/corporate-accounts-safe?accountId=:accountId" },
     { "source": "/api/corporate-accounts", "destination": "/api/corporate-accounts-safe" },
     { "source": "/api/tax-compliance", "destination": "/api/tax-compliance-safe" },
+    { "source": "/api/fleet/:vehicleId", "destination": "/api/fleet-safe?vehicleId=:vehicleId" },
+    { "source": "/api/contracts/:contractId/extend", "destination": "/api/contract-extension-safe?contractId=:contractId" },
     { "source": "/api/reservations/:reservationId/create-contract", "destination": "/api/reservation-contract?reservationId=:reservationId" },
     { "source": "/api/contracts/:contractId/review", "destination": "/api/contract-lifecycle?action=review&contractId=:contractId" },
     { "source": "/api/contracts/:contractId/approve", "destination": "/api/contract-lifecycle?action=approve&contractId=:contractId" },
