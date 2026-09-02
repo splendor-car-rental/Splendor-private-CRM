@@ -22,13 +22,12 @@ export type TaxRuleStatus =
   | 'deprecated';
 
 export type TaxPeriodStatus =
+  | 'draft'
   | 'open'
-  | 'preparing'
-  | 'review'
-  | 'approved'
-  | 'locked'
-  | 'filed'
-  | 'filed_reconciled';
+  | 'under_review'
+  | 'ready_for_professional_review'
+  | 'professionally_validated'
+  | 'closed';
 
 export type TaxDeadlineBasis =
   | 'EMARATAX_CONFIRMED'
@@ -154,6 +153,7 @@ export interface TaxPeriod {
   filingDeadline: string;
   deadlineBasis: TaxDeadlineBasis;
   deadlineSourceId: string;
+  deadlineSourceVersionUpdatedAt: string;
   deadlineEvidenceReference?: string;
   deadlineEvidenceDocumentId?: string;
   taxProfileVersionUpdatedAt: string;
@@ -170,19 +170,22 @@ export interface TaxPeriod {
   reviewedBy?: string;
   reviewedByName?: string;
   reviewedAt?: string;
-  approvedBy?: string;
-  approvedAt?: string;
-  lockedBy?: string;
-  lockedAt?: string;
-  lockedSnapshotHash?: string;
-  filedAt?: string;
-  filingReference?: string;
-  filingEvidenceDocumentIds?: string[];
-  paymentReference?: string;
-  paymentEvidenceDocumentIds?: string[];
-  reconciliationDifferenceAed?: number;
+  professionalValidation?: TaxProfessionalValidation;
+  professionalValidationRecordedBy?: string;
+  professionalValidationRecordedByName?: string;
+  professionalValidationRecordedAt?: string;
+  closedBy?: string;
+  closedByName?: string;
+  closedAt?: string;
+  closureNote?: string;
   blockingExceptionCount: number;
-  filingReadiness: 'NOT_READY_FOR_FILING' | 'BLOCKED' | 'READY_FOR_REVIEW' | 'READY_FOR_FILING';
+  governanceReadiness:
+    | 'DRAFT'
+    | 'IN_PREPARATION'
+    | 'INTERNAL_REVIEW'
+    | 'AWAITING_PROFESSIONAL_VALIDATION'
+    | 'PROFESSIONALLY_VALIDATED'
+    | 'CLOSED';
   createdBy: string;
   createdByName: string;
   createdAt: string;

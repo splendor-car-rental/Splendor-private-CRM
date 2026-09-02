@@ -2,12 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   filingActionsRemainBlocked,
   periodsOverlap,
+  validateCloseTaxPeriod,
   validateIndependentReview,
-  validateStartPreparation,
+  validateOpenTaxPeriod,
+  validateRecordPeriodProfessionalValidation,
   validateSubmitForReview,
   validateTaxPeriodDraft
 } from '../src/server/taxPeriodPolicy';
-import type { TaxMasterProfile, TaxOfficialSource, TaxPeriod } from '../src/tax/types';
+import type {
+  TaxMasterProfile,
+  TaxOfficialSource,
+  TaxPeriod,
+  TaxProfessionalValidation
+} from '../src/tax/types';
 
 const profile: TaxMasterProfile = {
   id: 'splendor',
@@ -52,27 +59,37 @@ const period: TaxPeriod = {
   filingDeadline: '2026-10-28',
   deadlineBasis: 'EMARATAX_CONFIRMED',
   deadlineSourceId: source.id,
+  deadlineSourceVersionUpdatedAt: source.updatedAt,
   deadlineEvidenceReference: 'EMARATAX-PERIOD-SCREEN-2026Q3',
   taxProfileVersionUpdatedAt: profile.updatedAt,
-  status: 'open',
+  status: 'draft',
   ruleVersionIds: [],
   blockingExceptionCount: 0,
-  filingReadiness: 'NOT_READY_FOR_FILING',
+  governanceReadiness: 'DRAFT',
   createdBy: 'finance-1',
   createdByName: 'Finance',
   createdAt: '2026-09-02T12:00:00.000Z',
   updatedAt: '2026-09-02T12:00:00.000Z'
 };
 
+const professionalValidation: TaxProfessionalValidation = {
+  validatorName: 'External UAE Tax Professional',
+  validatorCapacity: 'UAE_TAX_PROFESSIONAL',
+  validationReference: 'VALIDATION-REF-1',
+  scope: 'Tax period review',
+  validatedAt: '2026-10-20T10:00:00.000Z'
+};
+
 describe('Tax period lifecycle policy', () => {
-  it('requires a verified Tax Master Profile, exact profile version, and validated official deadline source', () => {
+  it('requires verified profile evidence and the exact validated deadline-source version', () => {
     expect(validateTaxPeriodDraft(period, profile, source)).toBeNull();
     expect(validateTaxPeriodDraft(period, { ...profile, verificationStatus: 'unverified' }, source)).toContain('internally verified');
     expect(validateTaxPeriodDraft({ ...period, taxProfileVersionUpdatedAt: 'older-version' }, profile, source)).toContain('exact verified Tax Master Profile version');
     expect(validateTaxPeriodDraft(period, profile, { ...source, status: 'proposed' })).toContain('must be validated');
+    expect(validateTaxPeriodDraft({ ...period, deadlineSourceVersionUpdatedAt: 'older-source-version' }, profile, source)).toContain('exact validated official-source version');
   });
 
-  it('requires durable evidence for an EmaraTax-confirmed or special-notice deadline', () => {
+  it('requires durable evidence for portal-confirmed or special-notice deadlines', () => {
     expect(validateTaxPeriodDraft({ ...period, deadlineEvidenceReference: undefined, deadlineEvidenceDocumentId: undefined }, profile, source)).toContain('durable portal reference');
     expect(validateTaxPeriodDraft({ ...period, deadlineBasis: 'SPECIAL_OFFICIAL_NOTICE', deadlineEvidenceReference: undefined, deadlineEvidenceDocumentId: undefined }, profile, source)).toContain('specific notice reference');
   });
@@ -84,22 +101,60 @@ describe('Tax period lifecycle policy', () => {
     expect(periodsOverlap(period, { ...period, id: 'CT', domain: 'CORPORATE_TAX' })).toBe(false);
   });
 
-  it('enforces preparer ownership and independent review', () => {
+  it('enforces Draft -> Open -> Under Review with preparer ownership and Four-Eyes review', () => {
     const finance = { uid: 'finance-1', name: 'Finance', role: 'finance' as const };
     const admin = { uid: 'admin-1', name: 'Admin', role: 'admin' as const };
-    expect(validateStartPreparation(period, finance)).toBeNull();
+    expect(validateOpenTaxPeriod(period, finance)).toBeNull();
 
-    const preparing: TaxPeriod = { ...period, status: 'preparing', preparationStartedBy: finance.uid, preparationStartedByName: finance.name, preparationStartedAt: '2026-10-01T08:00:00.000Z' };
-    expect(validateSubmitForReview(preparing, finance)).toBeNull();
-    expect(validateSubmitForReview(preparing, { ...finance, uid: 'finance-2' })).toContain('Only the preparer');
+    const open: TaxPeriod = {
+      ...period,
+      status: 'open',
+      governanceReadiness: 'IN_PREPARATION',
+      preparationStartedBy: finance.uid,
+      preparationStartedByName: finance.name,
+      preparationStartedAt: '2026-10-01T08:00:00.000Z'
+    };
+    expect(validateSubmitForReview(open, finance)).toBeNull();
+    expect(validateSubmitForReview(open, { ...finance, uid: 'finance-2' })).toContain('Only the preparer');
 
-    const underReview: TaxPeriod = { ...preparing, status: 'review', preparedBy: finance.uid, preparedByName: finance.name, preparedAt: '2026-10-10T08:00:00.000Z', reviewStatus: 'pending' };
+    const underReview: TaxPeriod = {
+      ...open,
+      status: 'under_review',
+      governanceReadiness: 'INTERNAL_REVIEW',
+      preparedBy: finance.uid,
+      preparedByName: finance.name,
+      preparedAt: '2026-10-10T08:00:00.000Z',
+      reviewStatus: 'pending'
+    };
     expect(validateIndependentReview(underReview, admin)).toBeNull();
     expect(validateIndependentReview(underReview, { uid: finance.uid, name: finance.name, role: 'admin' })).toContain('Four-Eyes');
+    expect(validateIndependentReview({ ...underReview, blockingExceptionCount: 1 }, admin)).toContain('Blocking exceptions');
   });
 
-  it('keeps filing actions hard-blocked until later release gates explicitly make a period ready', () => {
-    expect(filingActionsRemainBlocked(period)).toContain('Tax filing is blocked');
-    expect(filingActionsRemainBlocked({ ...period, filingReadiness: 'READY_FOR_FILING' })).toBeNull();
+  it('requires external professional-validation evidence before closure', () => {
+    const admin = { uid: 'admin-1', name: 'Admin', role: 'admin' as const };
+    const ready: TaxPeriod = {
+      ...period,
+      status: 'ready_for_professional_review',
+      governanceReadiness: 'AWAITING_PROFESSIONAL_VALIDATION',
+      preparedBy: 'finance-1',
+      reviewedBy: 'admin-2',
+      reviewStatus: 'passed'
+    };
+    expect(validateRecordPeriodProfessionalValidation(ready, admin, professionalValidation)).toBeNull();
+
+    const validated: TaxPeriod = {
+      ...ready,
+      status: 'professionally_validated',
+      governanceReadiness: 'PROFESSIONALLY_VALIDATED',
+      professionalValidation
+    };
+    expect(validateCloseTaxPeriod(validated, admin)).toBeNull();
+    expect(validateCloseTaxPeriod({ ...validated, professionalValidation: undefined }, admin)).toContain('evidence is required');
+  });
+
+  it('never treats a professionally validated or closed period as filed', () => {
+    expect(filingActionsRemainBlocked(period)).toContain('No filing or submission API exists');
+    expect(filingActionsRemainBlocked({ ...period, status: 'closed', governanceReadiness: 'CLOSED' })).toContain('does not represent a filed return');
   });
 });
