@@ -1,97 +1,21 @@
-name: PR47 Finance Contextual Documents
+name: PR47 Finance Contextual Documents — Retired
+
+# Historical one-shot migration workflow.
+# The source changes it once applied are preserved in Git history and current source.
+# This workflow must never mutate or push repository source again.
 
 on:
-  push:
-    branches:
-      - feat/contextual-documents-customer-intake
-    paths:
-      - .github/workflows/pr47-finance-contextual-documents.yml
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
-    if: github.actor != 'github-actions[bot]'
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: feat/contextual-documents-customer-intake
-          fetch-depth: 1
-      - name: Patch finance ledger document actions
-        shell: python
+      - name: Explain retired workflow
         run: |
-          from pathlib import Path
-          p = Path('src/components/views/FinanceLedgerView.tsx')
-          s = p.read_text(encoding='utf-8')
-          s = s.replace("  FileText, Clock, RefreshCw, AlertCircle, Printer, Eye\n", "  FileText, Clock, RefreshCw, AlertCircle, Eye\n")
-          s = s.replace("import { TaxInvoicePrintModal } from '../operations/TaxInvoicePrintModal';\n", "import { WorkflowDocumentPreviewButton } from '../documents/WorkflowDocumentPreviewButton';\n")
-          s = s.replace("import { Invoice } from '../../types';\n", "")
-          s = s.replace("\n  // Invoice Print Modal\n  const [invoiceToPrint, setInvoiceToPrint] = useState<Invoice | null>(null);\n", "\n")
-
-          old_button = '''                      <button
-                        onClick={() => setInvoiceToPrint(inv)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-[#D4AF37] hover:text-zinc-950 text-zinc-300 text-xs font-semibold transition-all shadow-sm"
-                        title={language === 'ar' ? 'طباعة وحفظ الفاتورة على الهيد ليتر الرسمي' : 'Print/PDF Invoice on Official Letterhead'}
-                      >
-                        <Printer className="w-3.5 h-3.5" />
-                        <span>{language === 'ar' ? 'الهيد ليتر الرسمي' : 'Letterhead PDF'}</span>
-                      </button>'''
-          new_button = '''                      <WorkflowDocumentPreviewButton
-                        kind="tax_invoice"
-                        source={{ type: 'invoice', id: inv.id }}
-                        labelAr="معاينة الفاتورة"
-                        labelEn="Preview Invoice"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
-                      />'''
-          if old_button not in s:
-              raise SystemExit('Invoice action block not found')
-          s = s.replace(old_button, new_button)
-
-          old_payment_headers = '''                  <th className="p-4 text-end font-medium">Amount Received</th>
-                  <th className="p-4 text-center font-medium">Status</th>'''
-          new_payment_headers = '''                  <th className="p-4 text-end font-medium">Amount Received</th>
-                  <th className="p-4 text-center font-medium">Status</th>
-                  <th className="p-4 text-end font-medium">Actions</th>'''
-          if old_payment_headers not in s:
-              raise SystemExit('Payment header block not found')
-          s = s.replace(old_payment_headers, new_payment_headers)
-
-          old_payment_status = '''                    <td className="p-4 text-center">
-                      <Badge variant="emerald" size="sm">ALLOCATED</Badge>
-                    </td>
-                  </tr>'''
-          new_payment_status = '''                    <td className="p-4 text-center">
-                      <Badge variant="emerald" size="sm">ALLOCATED</Badge>
-                    </td>
-                    <td className="p-4 text-end">
-                      <WorkflowDocumentPreviewButton
-                        kind="payment_receipt"
-                        source={{ type: 'payment', id: pay.id }}
-                        labelAr="معاينة سند القبض"
-                        labelEn="Preview Receipt"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
-                      />
-                    </td>
-                  </tr>'''
-          if old_payment_status not in s:
-              raise SystemExit('Payment row status block not found')
-          s = s.replace(old_payment_status, new_payment_status)
-
-          start = s.find("      {/* Official Tax Invoice Print/PDF Modal on Letterhead */}")
-          if start != -1:
-              end = s.find("    </div>\n  );", start)
-              if end == -1:
-                  raise SystemExit('Could not locate end after legacy print modal')
-              s = s[:start] + s[end:]
-
-          p.write_text(s, encoding='utf-8')
-      - name: Commit finance document wiring
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/components/views/FinanceLedgerView.tsx
-          git commit -m 'feat(documents): bind invoice and receipt previews to authoritative records [contextual-docs]'
-          git push origin HEAD:feat/contextual-documents-customer-intake
+          echo "RETIRED: this workflow is retained only as a historical marker."
+          echo "It has read-only permissions and performs no checkout, patch, commit, or push."
