@@ -4,19 +4,22 @@ import { describe, expect, it } from 'vitest';
 const apiEntrypoint = readFileSync(new URL('../api/index.ts', import.meta.url), 'utf8');
 const apiHandler = readFileSync(new URL('../api/handler.ts', import.meta.url), 'utf8');
 const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+const vercelConfig = readFileSync(new URL('../vercel.json', import.meta.url), 'utf8');
 const premiumCss = readFileSync(new URL('../src/premium-sapphire.css', import.meta.url), 'utf8');
 
 describe('production serverless entrypoint', () => {
-  it('loads one build-time bundled API artifact instead of the TypeScript source graph', () => {
-    expect(apiEntrypoint).toContain("require('../dist/api-handler.cjs')");
+  it('statically imports one build-time bundled API artifact instead of the TypeScript source graph', () => {
+    expect(apiEntrypoint).toContain("import * as bundledModule from '../api-handler.cjs'");
+    expect(apiEntrypoint).not.toContain('createRequire');
     expect(apiEntrypoint).not.toContain("from '../server.ts'");
     expect(apiEntrypoint).not.toContain("from '../server.js'");
   });
 
-  it('builds the complete API handler with esbuild', () => {
+  it('builds the complete API handler at a Vercel-traceable root path', () => {
     expect(packageJson).toContain('esbuild api/handler.ts --bundle');
-    expect(packageJson).toContain('--outfile=dist/api-handler.cjs');
+    expect(packageJson).toContain('--outfile=api-handler.cjs');
     expect(apiHandler).toContain("import app from '../server.js';");
+    expect(vercelConfig).toContain('"includeFiles": "{api-handler.cjs,dist/**}"');
   });
 });
 
