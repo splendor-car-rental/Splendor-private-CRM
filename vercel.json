@@ -7,6 +7,7 @@
   },
   "rewrites": [
     { "source": "/api/whatsapp/webhook", "destination": "/api/whatsapp-webhook" },
+    { "source": "/api/issued-documents/:archiveId/whatsapp", "destination": "/api/document-whatsapp?archiveId=:archiveId" },
     { "source": "/api/:path*", "destination": "/api" }
   ],
   "crons": [
