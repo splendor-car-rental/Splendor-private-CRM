@@ -28,17 +28,19 @@ describe('production rental lifecycle safety invariants', () => {
     expect(matchIndex).toBeGreaterThan(-1);
     expect(delegateIndex).toBeGreaterThan(matchIndex);
 
-    expect(handler).toContain('await db.runTransaction(async tx =>');
+    // Assert the production invariants rather than implementation-local variable names.
+    expect(handler).toContain('await firestore.runTransaction(async tx =>');
     expect(handler).toContain("contract.status !== 'signed'");
     expect(handler).toContain('contract.termsAccepted !== true');
     expect(handler).toContain("profile.status !== 'VERIFIED'");
     expect(handler).toContain('!profile.isAgeVerified');
     expect(handler).toContain("dob === '1995-01-01'");
-    expect(handler).toContain("db.collection('deposits').where('contractId', '==', contract.id)");
-    expect(handler).toContain('heldDepositBalance + 0.001 < requiredDeposit');
+    expect(handler).toContain("firestore.collection('deposits').where('customerId', '==', contract.customerId)");
+    expect(handler).toContain('deposit.contractId && deposit.contractId !== contract.id');
+    expect(handler).toContain('heldDeposit + 0.005 < requiredDeposit');
     expect(handler).toContain('customerSignatureUrl');
     expect(handler).toContain('employeeSignatureUrl');
-    expect(handler).toContain("db.collection('contracts').where('vehicleId', '==', contract.vehicleId)");
+    expect(handler).toContain("firestore.collection('contracts').where('vehicleId', '==', contract.vehicleId)");
     expect(handler).toContain("status: 'rented'");
     expect(handler).toContain("status: 'active'");
   });
