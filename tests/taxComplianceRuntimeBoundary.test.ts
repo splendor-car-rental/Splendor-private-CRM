@@ -18,8 +18,10 @@ describe('Tax Compliance runtime boundary', () => {
     expect(safeApi).toContain("import('./tax-compliance.js')");
   });
 
-  it('requires authentication, independent permissions, atomic audit evidence, and has no delete path', () => {
+  it('requires authentication, active staff, independent permissions, atomic audit evidence, and has no delete path', () => {
     expect(api).toContain('verifyIdToken');
+    expect(api).toContain("String(data?.status || '') !== 'active'");
+    expect(api).not.toContain("String(data?.status || 'active')");
     expect(api).toContain("requirePermission(actor, 'tax.view'");
     expect(api).toContain('tax_audit_events');
     expect(api).toContain('runTransaction');
@@ -32,6 +34,17 @@ describe('Tax Compliance runtime boundary', () => {
     expect(api).toContain('This tax rule code/version already exists. Create a new version instead of overwriting history.');
     expect(api).toContain("action === 'record-professional-validation'");
     expect(api).toContain("action === 'accept'");
+  });
+
+  it('requires server-verified professional registry and durable evidence for rule validation and acceptance', () => {
+    expect(api).toContain("const PROFESSIONAL_REGISTRY_COLLECTION = 'tax_professional_validators'");
+    expect(api).toContain('validatorRegistryId: optionalText(body?.validatorRegistryId');
+    expect(api).toContain('validateProfessionalRegistryEvidence');
+    expect(api).toContain("db.collection('documents').doc(evidenceId)");
+    expect(api).toContain("db.collection('issued_documents').doc(evidenceId)");
+    expect(api).toContain("String(registry.status || '') !== 'active'");
+    expect(api).toContain("previous.proposedBy === actor.uid");
+    expect(api).toContain('previous.professionalValidation\n        ? await validateProfessionalRegistryEvidence');
   });
 
   it('exposes the dedicated workspace only to the intended broad roles while keeping tax actions narrower', () => {
