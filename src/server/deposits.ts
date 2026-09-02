@@ -1,19 +1,21 @@
 import { runDurableTransaction, PersistenceError } from './persistence';
+import { runIdempotent, runIdempotentCreate, fingerprintRequest } from './idempotency';
 import { issueNextNumber } from './idGenerator';
 import { globalStore } from './dataStore';
 import { RecordAuditFn } from './businessRules';
 import type { Deposit } from '../types';
 
 /**
- * Security deposit create/refund -- extracted, behavior-preserving, from
- * the bodies of `POST /api/deposits` and `POST /api/deposits/:id/refund`
- * in server.ts (which now just call these). Reused a second time by the
- * Payment Gateway layer (src/server/paymentIntents.ts): a gateway-backed
- * deposit HOLD (an uncaptured card authorization) becomes exactly this
- * same Deposit record once the gateway confirms the authorization, tagged
- * `holdType:'gateway_authorization'`; releasing that hold reuses this same
- * refund function once the gateway confirms the void/refund. One Deposit
- * lifecycle, two ways to reach it -- never a second deposit system.
+ * Security-deposit lifecycle.
+ *
+ * Financial invariants enforced here (not in the browser):
+ *  - a newly-created deposit is always a positive, finite HELD amount;
+ *  - every deposit is bound to a real customer, and any contract/
+ *    reservation linkage must belong to that same customer;
+ *  - gateway authorization holds can only be released/refunded by the
+ *    gateway-confirmed path, never the manual refund API;
+ *  - create/refund operations can be protected by durable idempotency keys
+ *    so network retries/concurrent serverless requests never double-count.
  */
 export class DepositError extends PersistenceError {
   constructor(message: string) {
@@ -39,52 +41,123 @@ export interface CreateSecurityDepositInput {
   gatewayPaymentIntentId?: string;
 }
 
-export async function createSecurityDeposit(data: CreateSecurityDepositInput, recordAudit: RecordAuditFn): Promise<Deposit> {
-  const newId = await issueNextNumber('Deposit');
-  const amount = Number(data.amount) || 0;
-  const now = new Date().toISOString();
-  const deposit: Deposit = {
-    ...data,
-    id: newId,
+export interface DepositRefundOptions {
+  source?: 'manual' | 'gateway_confirmed';
+  idempotencyKey?: string | null;
+}
+
+export async function createSecurityDeposit(
+  data: CreateSecurityDepositInput,
+  recordAudit: RecordAuditFn,
+  idempotencyKey?: string | null
+): Promise<Deposit> {
+  const amount = Number(data.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new DepositError('A positive finite deposit amount is required.');
+  }
+  if (!data.paymentMethod) {
+    throw new DepositError('A paymentMethod is required for a security deposit.');
+  }
+
+  const holdType = data.holdType === 'gateway_authorization' ? 'gateway_authorization' : 'manual';
+  if (holdType === 'gateway_authorization' && !data.gatewayPaymentIntentId) {
+    throw new DepositError('A gateway authorization deposit must be bound to its PaymentIntent.');
+  }
+
+  const fingerprint = fingerprintRequest({
+    customerId: data.customerId || null,
+    contractId: data.contractId || null,
+    reservationId: data.reservationId || null,
     amount,
-    appliedAmount: 0,
-    refundedAmount: 0,
-    balance: amount,
-    status: data.status || 'held',
-    holdType: data.holdType || 'manual',
-    holdReleaseDueDate: data.holdReleaseDueDate || now,
-    notes: data.notes || '',
-    createdAt: now,
-    updatedAt: now
-  } as unknown as Deposit;
-
-  await runDurableTransaction(async (tx, db) => {
-    // Read before write -- see the same ordering note on every other
-    // transaction in this codebase (real Firestore rejects a read that
-    // follows a write in the same transaction).
-    const customerRef = data.customerId ? db.collection('customers').doc(data.customerId) : null;
-    const snap = customerRef ? await tx.get(customerRef) : null;
-    tx.create(db.collection('deposits').doc(newId), deposit as unknown as Record<string, unknown>);
-    if (customerRef && snap?.exists) {
-      tx.set(customerRef, { securityDepositsHeld: ((snap.data() as any).securityDepositsHeld || 0) + amount, updatedAt: now }, { merge: true });
-    }
+    paymentMethod: data.paymentMethod,
+    holdType,
+    gatewayPaymentIntentId: data.gatewayPaymentIntentId || null
   });
 
-  globalStore.deposits.unshift(deposit as any);
-  const customer = globalStore.customers.find(c => c.id === deposit.customerId);
-  if (customer) customer.securityDepositsHeld += amount;
+  const outcome = await runIdempotentCreate('deposit-create', idempotencyKey, fingerprint, async () => {
+    const newId = await issueNextNumber('Deposit');
+    const now = new Date().toISOString();
 
-  await recordAudit({
-    userId: data.actorId || 'USR-004',
-    userName: data.actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: newId,
-    action: 'create',
-    newValue: `Took a ${amount.toLocaleString()} AED security deposit${deposit.customerId ? ` from customer ${deposit.customerId}` : ''}${data.holdType === 'gateway_authorization' ? ' via a card authorization hold (gateway-confirmed)' : ''}.`
+    const deposit = await runDurableTransaction(async (tx, db) => {
+      let resolvedCustomerId = data.customerId ? String(data.customerId) : '';
+      let resolvedCustomerName = data.customerName ? String(data.customerName) : '';
+
+      if (data.contractId) {
+        const contractSnap = await tx.get(db.collection('contracts').doc(String(data.contractId)));
+        if (!contractSnap.exists) throw new DepositError('Linked contract not found.');
+        const contract = contractSnap.data() as any;
+        if (resolvedCustomerId && contract.customerId !== resolvedCustomerId) {
+          throw new DepositError('Linked contract does not belong to the deposit customer.');
+        }
+        resolvedCustomerId = resolvedCustomerId || String(contract.customerId || '');
+        resolvedCustomerName = resolvedCustomerName || String(contract.customerName || '');
+      }
+
+      if (data.reservationId) {
+        const reservationSnap = await tx.get(db.collection('reservations').doc(String(data.reservationId)));
+        if (!reservationSnap.exists) throw new DepositError('Linked reservation not found.');
+        const reservation = reservationSnap.data() as any;
+        if (resolvedCustomerId && reservation.customerId !== resolvedCustomerId) {
+          throw new DepositError('Linked reservation does not belong to the deposit customer.');
+        }
+        resolvedCustomerId = resolvedCustomerId || String(reservation.customerId || '');
+        resolvedCustomerName = resolvedCustomerName || String(reservation.customerName || '');
+      }
+
+      if (!resolvedCustomerId) throw new DepositError('A real customer binding is required for a security deposit.');
+      const customerRef = db.collection('customers').doc(resolvedCustomerId);
+      const customerSnap = await tx.get(customerRef);
+      if (!customerSnap.exists) throw new DepositError('Deposit customer not found.');
+      const customer = customerSnap.data() as any;
+      resolvedCustomerName = resolvedCustomerName || String(customer.fullName || customer.name || '');
+
+      const created: Deposit = {
+        ...data,
+        id: newId,
+        customerId: resolvedCustomerId,
+        customerName: resolvedCustomerName,
+        amount,
+        appliedAmount: 0,
+        refundedAmount: 0,
+        balance: amount,
+        // A newly accepted security deposit is never born refunded/applied
+        // just because a browser supplied a status field.
+        status: 'held',
+        holdType,
+        ...(holdType === 'gateway_authorization' ? { gatewayPaymentIntentId: data.gatewayPaymentIntentId } : { gatewayPaymentIntentId: undefined }),
+        holdReleaseDueDate: data.holdReleaseDueDate || now,
+        notes: data.notes || '',
+        createdAt: now,
+        updatedAt: now
+      } as unknown as Deposit;
+
+      tx.create(db.collection('deposits').doc(newId), created as unknown as Record<string, unknown>);
+      tx.set(customerRef, {
+        securityDepositsHeld: Number(customer.securityDepositsHeld || 0) + amount,
+        updatedAt: now
+      }, { merge: true });
+      return created;
+    });
+
+    globalStore.deposits.unshift(deposit as any);
+    const customer = globalStore.customers.find(c => c.id === deposit.customerId);
+    if (customer) customer.securityDepositsHeld = Number(customer.securityDepositsHeld || 0) + amount;
+    return deposit;
   });
 
-  return deposit;
+  if (!outcome.replayed) {
+    await recordAudit({
+      userId: data.actorId || 'USR-004',
+      userName: data.actorName || 'Finance Manager',
+      userRole: 'finance',
+      entityType: 'Deposit',
+      entityId: outcome.result.id,
+      action: 'create',
+      newValue: `Took a ${amount.toLocaleString()} AED security deposit from customer ${outcome.result.customerId}${holdType === 'gateway_authorization' ? ' via a gateway-confirmed card authorization hold' : ''}.`
+    });
+  }
+
+  return outcome.result;
 }
 
 export async function refundOrReleaseDeposit(
@@ -92,54 +165,80 @@ export async function refundOrReleaseDeposit(
   refundAmount: number | undefined,
   actor: { id: string; name: string },
   recordAudit: RecordAuditFn,
-  reason?: string
+  reason?: string,
+  options: DepositRefundOptions = {}
 ): Promise<Deposit> {
-  const now = new Date().toISOString();
-  let amt = 0;
+  const requestedAmount = refundAmount === undefined ? null : Number(refundAmount);
+  if (requestedAmount !== null && (!Number.isFinite(requestedAmount) || requestedAmount <= 0)) {
+    throw new DepositError('Refund amount must be a positive finite number.');
+  }
 
-  const updatedDeposit = await runDurableTransaction(async (tx, db) => {
+  const now = new Date().toISOString();
+  let appliedRefundAmount = 0;
+  const fingerprint = fingerprintRequest({
+    depositId,
+    refundAmount: requestedAmount,
+    source: options.source || 'manual'
+  });
+
+  const outcome = await runIdempotent('deposit-refund', options.idempotencyKey, async (tx, db) => {
     const depositRef = db.collection('deposits').doc(depositId);
     const snap = await tx.get(depositRef);
     if (!snap.exists) throw new DepositError('Deposit not found');
     const deposit = snap.data() as Deposit;
-    amt = Number(refundAmount) || deposit.balance;
-    if (amt > deposit.balance) throw new DepositError('Refund amount exceeds held balance');
+
+    if (deposit.holdType === 'gateway_authorization' && options.source !== 'gateway_confirmed') {
+      throw new DepositError('Gateway authorization deposits must be released/refunded through the gateway-confirmed workflow.');
+    }
+
+    const balance = Number(deposit.balance);
+    if (!Number.isFinite(balance) || balance <= 0) {
+      throw new DepositError('Deposit has no refundable held balance.');
+    }
+
+    const amt = requestedAmount === null ? balance : requestedAmount;
+    if (amt > balance + 0.001) throw new DepositError('Refund amount exceeds held balance');
+    appliedRefundAmount = amt;
 
     const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
     const customerSnap = customerRef ? await tx.get(customerRef) : null;
+    if (!customerRef || !customerSnap?.exists) throw new DepositError('Deposit customer not found.');
 
+    const nextBalance = Math.max(0, balance - amt);
     const updated: Deposit = {
       ...deposit,
-      refundedAmount: deposit.refundedAmount + amt,
-      balance: deposit.balance - amt,
-      status: deposit.balance - amt === 0 ? 'refunded' : 'partially_refunded',
+      refundedAmount: Number(deposit.refundedAmount || 0) + amt,
+      balance: nextBalance,
+      status: nextBalance <= 0.001 ? 'refunded' : 'partially_refunded',
       refundDate: now,
       updatedAt: now
     };
     tx.set(depositRef, updated as unknown as Record<string, unknown>, { merge: true });
 
-    if (customerRef && customerSnap?.exists) {
-      const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-      tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-    }
+    const held = Number((customerSnap.data() as any).securityDepositsHeld || 0);
+    tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
     return updated;
-  });
+  }, fingerprint);
 
-  const index = globalStore.deposits.findIndex(d => d.id === depositId);
-  if (index !== -1) globalStore.deposits[index] = updatedDeposit as any;
-  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
-  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
+  if (!outcome.replayed) {
+    const index = globalStore.deposits.findIndex(d => d.id === depositId);
+    if (index !== -1) globalStore.deposits[index] = outcome.result as any;
+    const customer = globalStore.customers.find(c => c.id === outcome.result.customerId);
+    if (customer) customer.securityDepositsHeld = Math.max(0, Number(customer.securityDepositsHeld || 0) - appliedRefundAmount);
 
-  await recordAudit({
-    userId: actor.id,
-    userName: actor.name,
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: updatedDeposit.id,
-    action: 'refund',
-    newValue: `Processed deposit refund of ${amt} AED to customer ${updatedDeposit.customerName}`,
-    reason: reason || (updatedDeposit.holdType === 'gateway_authorization' ? 'Card authorization hold released/voided (gateway-confirmed)' : 'Vehicle return inspection clear with no outstanding penalties')
-  });
+    await recordAudit({
+      userId: actor.id,
+      userName: actor.name,
+      userRole: 'finance',
+      entityType: 'Deposit',
+      entityId: outcome.result.id,
+      action: 'refund',
+      newValue: `Processed deposit refund/release of ${appliedRefundAmount} AED to customer ${outcome.result.customerName}`,
+      reason: reason || (outcome.result.holdType === 'gateway_authorization'
+        ? 'Card authorization hold released/refunded after gateway confirmation'
+        : 'Authorized manual security-deposit refund')
+    });
+  }
 
-  return updatedDeposit;
+  return outcome.result;
 }
