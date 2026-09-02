@@ -1,58 +1,24 @@
-// Server-side parsers for Salik/Darb toll statement files. Pure functions
-// (buffer/text in, structured rows out) so they're easy to unit-test and
-// keep out of anything the client bundle needs to load.
-//
-// Two real Salik export formats are supported precisely, based on actual
-// sample files from the business owner's account:
-//  1. The Excel "Trips Report" export (Salik portal -> Reports -> Trips),
-//     one row per crossing with a separate VAT breakdown.
-//  2. The PDF "Monthly Statements" export, one row per crossing grouped by
-//     tag/plate, plus an account-level payment/top-up summary.
-// A generic column-header-detection fallback (parseGenericTollExcel) covers
-// Darb or any other Excel/CSV layout until a real Darb sample is available
-// to build a precise parser for it the same way.
-//
-// IMPORTANT: every parser here is best-effort. The import endpoint always
-// returns a preview for the admin to confirm before anything is written to
-// the database -- financial data should never be silently trusted from an
-// auto-parse, especially for a PDF, where text-extraction order can vary
-// between PDF libraries.
-
-// Reads untrusted staff-uploaded Excel files with read-excel-file rather
-// than `xlsx` (SheetJS) -- xlsx@0.18.5 (the last version published to npm;
-// SheetJS never published a fix there, only via their own CDN) carries a
-// Prototype Pollution advisory and a ReDoS advisory, both triggerable by a
-// crafted input file, which is exactly the kind of file this code parses.
-// read-excel-file has a materially different, much narrower codebase and
-// dependency tree (see package.json) and carries no equivalent advisory.
-// `xlsx` is kept ONLY as a devDependency, used solely to construct trusted
-// test fixtures in tests/tollFileParsers.test.ts -- it is never imported
-// by any code that runs in production or touches a real uploaded file.
+// Server-side parsers for Salik/Darb toll statement files.
+// Uploaded data is always previewed before persistence. Production parsing
+// intentionally uses read-excel-file for OOXML rather than the vulnerable
+// npm SheetJS release; CSV/TSV text is parsed by a small bounded parser here.
 import { readSheet } from 'read-excel-file/node';
 import type { Row } from 'read-excel-file/node';
 
 export interface ParsedTollRow {
-  date: string; // ISO yyyy-mm-dd
+  date: string;
   time?: string;
   locationName: string;
   direction?: string;
   tagNumber?: string;
   plateNumber?: string;
   transactionRef?: string;
-  /** The real cost as shown on the statement. For Darb this is informational only -- the fixed base cost always wins (see tollCalculations.ts). */
   actualCompanyCost: number;
 }
 
 export interface ParsedTollFile {
   rows: ParsedTollRow[];
-  meta: {
-    accountNumber?: string;
-    periodStart?: string;
-    periodEnd?: string;
-    periodLabel?: string;
-    /** Total account top-ups/payments for the period, read from the statement's own summary, if present. */
-    totalTopUps?: number;
-  };
+  meta: { accountNumber?: string; periodStart?: string; periodEnd?: string; periodLabel?: string; totalTopUps?: number };
   warnings: string[];
 }
 
@@ -61,146 +27,216 @@ const MONTHS: Record<string, string> = {
   jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
 };
 
-/** Parses "26 Aug 2026" or "31-Aug-2025" into ISO yyyy-mm-dd. Falls back to Date parsing for anything else. */
 function normalizeDate(raw: string): string {
   const cleaned = raw.trim().replace(/,/g, '');
   const m = cleaned.match(/^(\d{1,2})[\s-]([A-Za-z]{3,})[\s-](\d{4})$/);
   if (m) {
-    const day = m[1].padStart(2, '0');
     const mon = MONTHS[m[2].slice(0, 3).toLowerCase()];
-    if (mon) return `${m[3]}-${mon}-${day}`;
+    if (mon) return `${m[3]}-${mon}-${m[1].padStart(2, '0')}`;
+  }
+  // Common UAE exports may use dd/mm/yyyy or dd-mm-yyyy. Do not rely on
+  // implementation-specific US date parsing for an ambiguous day/month.
+  const numeric = cleaned.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (numeric) {
+    const day = Number(numeric[1]);
+    const month = Number(numeric[2]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) return `${numeric[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   }
   const d = new Date(cleaned);
-  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-  return cleaned; // leave as-is; the review screen will surface it as unusual
+  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return cleaned;
 }
 
-/**
- * Normalizes one read-excel-file cell value to the same kind of plain
- * string every downstream line in this file already expects (header
- * matching via .includes()/.toLowerCase(), normalizeDate(), parseFloat()).
- * This is the ONE place that has to account for the difference between
- * xlsx's `raw:false` mode (which renders a cell using its Excel number
- * format, e.g. a date cell becomes a locale date STRING) and
- * read-excel-file (which returns a typed JS Date/number/boolean/string
- * directly) -- every other line in this file is unchanged by the library
- * migration.
- */
 function cellToString(value: unknown): string {
   if (value === null || value === undefined) return '';
-  if (value instanceof Date) {
-    // ISO yyyy-mm-dd: not what a real Salik export's TEXT date cells look
-    // like ("26 Aug 2026" / "31-Aug-2025"), but normalizeDate()'s fallback
-    // branch (`new Date(cleaned)`) parses an ISO date string correctly, so
-    // a genuine Excel-date-typed cell still normalizes to the right day --
-    // see the "reads a genuine Excel date-formatted cell" regression test.
-    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
-  }
+  if (value instanceof Date) return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
   return String(value);
 }
 
-/** Reads the first sheet of an uploaded workbook as a plain string grid -- the one thing every parser below needs, isolated here so the rest of each parser's logic (header detection, column matching, row parsing) never has to know which library produced it. */
-async function readGridFromBuffer(buffer: Buffer): Promise<string[][]> {
-  const rows: Row[] = await readSheet(buffer);
-  return rows.map(row => row.map(cellToString));
+function isZip(buffer: Buffer): boolean {
+  return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && [0x03, 0x05, 0x07].includes(buffer[2]) && [0x04, 0x06, 0x08].includes(buffer[3]);
 }
 
-/**
- * Parses the Salik "Trips Report" Excel export. Column positions are
- * confirmed against a real export, but resolved by header name (not fixed
- * index) so a minor layout shuffle by Salik doesn't silently break it.
- */
+function isLegacyOleXls(buffer: Buffer): boolean {
+  return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+}
+
+function parseDelimitedLine(line: string, delimiter: string): string[] {
+  const cells: string[] = [];
+  let value = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (quoted && line[i + 1] === '"') { value += '"'; i += 1; }
+      else quoted = !quoted;
+    } else if (ch === delimiter && !quoted) {
+      cells.push(value.trim()); value = '';
+    } else value += ch;
+  }
+  cells.push(value.trim());
+  return cells;
+}
+
+function parseDelimitedGrid(buffer: Buffer): string[][] {
+  if (buffer.includes(0)) throw new Error('This text statement contains binary/null bytes and cannot be parsed safely.');
+  const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/).filter(line => line.trim()).slice(0, 200000);
+  if (!lines.length) throw new Error('The uploaded statement is empty.');
+  const sample = lines.slice(0, 8).join('\n');
+  const candidates = [',', ';', '\t'];
+  const delimiter = candidates
+    .map(char => ({ char, count: sample.split(char).length - 1 }))
+    .sort((a, b) => b.count - a.count)[0];
+  if (!delimiter || delimiter.count === 0) throw new Error('Could not detect spreadsheet/CSV columns in this statement.');
+  return lines.map(line => parseDelimitedLine(line, delimiter.char));
+}
+
+async function readGridFromBuffer(buffer: Buffer): Promise<string[][]> {
+  if (isLegacyOleXls(buffer)) {
+    // read-excel-file intentionally does not parse legacy OLE/BIFF .xls.
+    // Do not silently reintroduce the vulnerable SheetJS npm package just
+    // to claim support. Give the operator an exact conversion instruction.
+    throw new Error('Legacy .xls format is not supported by the hardened importer. Open/export the Salik statement as .xlsx (Excel Workbook) and upload it again.');
+  }
+  if (isZip(buffer)) {
+    const rows: Row[] = await readSheet(buffer);
+    return rows.map(row => row.map(cellToString));
+  }
+  return parseDelimitedGrid(buffer);
+}
+
+function parseMoney(value: unknown): number {
+  const cleaned = String(value ?? '').replace(/AED/gi, '').replace(/,/g, '').replace(/[^\d.-]/g, '').trim();
+  const parsed = Number.parseFloat(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+const normalizeHeader = (value: unknown) => String(value ?? '').replace(/\n/g, ' ').trim().toLowerCase();
+const hasAny = (header: string, words: string[]) => words.some(word => header.includes(word));
+
+function parseGenericGrid(grid: string[][], sourceLabel: string): ParsedTollFile {
+  let headerRowIndex = -1;
+  for (let i = 0; i < Math.min(grid.length, 60); i += 1) {
+    const cells = (grid[i] || []).map(normalizeHeader);
+    const hasDate = cells.some(c => hasAny(c, ['date', 'trip date', 'transaction date', 'تاريخ']));
+    const hasAmount = cells.some(c => hasAny(c, ['amount', 'total', 'toll fee', 'charge', 'المبلغ', 'القيمة', 'رسوم']));
+    if (hasDate && hasAmount) { headerRowIndex = i; break; }
+  }
+  if (headerRowIndex === -1) throw new Error('Could not detect a transaction table containing Date and Amount columns in this statement.');
+
+  const header = grid[headerRowIndex].map(normalizeHeader);
+  const findCol = (...keywords: string[]) => header.findIndex(h => hasAny(h, keywords));
+  const idxDate = findCol('trip date', 'transaction date', 'date', 'تاريخ');
+  const idxTime = findCol('trip time', 'transaction time', 'time', 'وقت');
+  const idxAmount = findCol('total amount', 'toll amount', 'trip amount', 'amount', 'total', 'charge', 'المبلغ', 'القيمة', 'رسوم');
+  const idxPlate = findCol('plate number', 'plate', 'vehicle plate', 'vehicle', 'رقم اللوحة', 'لوحة', 'مركبة');
+  const idxLocation = findCol('toll gate', 'gate', 'location', 'toll point', 'zone', 'بوابة', 'الموقع', 'موقع');
+  const idxTag = findCol('tag number', 'tag', 'رقم التاج', 'وسم');
+  const idxTxn = findCol('transaction id', 'transaction ref', 'reference', 'trip id', 'رقم المعاملة', 'مرجع');
+  const idxDirection = findCol('direction', 'اتجاه');
+
+  const warnings: string[] = [`${sourceLabel}: statement layout was parsed by flexible column detection; review the preview before confirming.`];
+  if (idxPlate === -1) warnings.push('No plate/vehicle column detected — rows will require manual assignment.');
+  if (idxLocation === -1) warnings.push('No toll-gate/location column detected.');
+
+  const rows: ParsedTollRow[] = [];
+  for (let i = headerRowIndex + 1; i < grid.length; i += 1) {
+    const r = grid[i];
+    if (!r || r.every(c => !String(c ?? '').trim())) continue;
+    const dateRaw = String(r[idxDate] ?? '').trim();
+    if (!dateRaw) continue;
+    const normalized = normalizeDate(dateRaw);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) continue; // skip totals/footers safely
+    rows.push({
+      date: normalized,
+      time: idxTime !== -1 ? String(r[idxTime] ?? '').trim() || undefined : undefined,
+      locationName: idxLocation !== -1 ? String(r[idxLocation] ?? '').trim() || 'Unknown Gate' : 'Unknown Gate',
+      direction: idxDirection !== -1 ? String(r[idxDirection] ?? '').trim() || undefined : undefined,
+      tagNumber: idxTag !== -1 ? String(r[idxTag] ?? '').trim() || undefined : undefined,
+      plateNumber: idxPlate !== -1 ? String(r[idxPlate] ?? '').trim() || undefined : undefined,
+      transactionRef: idxTxn !== -1 ? String(r[idxTxn] ?? '').trim() || undefined : undefined,
+      actualCompanyCost: parseMoney(r[idxAmount])
+    });
+  }
+  if (!rows.length) throw new Error('A transaction table was detected, but no valid dated transaction rows could be parsed.');
+  return { rows, meta: {}, warnings };
+}
+
 export async function parseSalikExcel(buffer: Buffer): Promise<ParsedTollFile> {
   const grid = await readGridFromBuffer(buffer);
-
   let accountNumber: string | undefined;
   let periodStart: string | undefined;
   let periodEnd: string | undefined;
   let headerRowIndex = -1;
 
-  for (let i = 0; i < grid.length; i++) {
+  for (let i = 0; i < grid.length; i += 1) {
     const rowText = (grid[i] || []).join(' ');
-    const acctMatch = rowText.match(/Account No:?\s*(\d+)/i);
+    const acctMatch = rowText.match(/Account (?:No|#):?\s*(\d+)/i);
     if (acctMatch) accountNumber = acctMatch[1];
     const periodMatch = rowText.match(/Trip\(s\)\s*From\s*([\d-]+)\s*To\s*([\d-]+)/i);
     if (periodMatch) {
       periodStart = normalizeDate(periodMatch[1].split('-').reverse().join(' '));
       periodEnd = normalizeDate(periodMatch[2].split('-').reverse().join(' '));
     }
-    const cellsJoined = (grid[i] || []).map(c => String(c ?? '').replace(/\n/g, ' ')).join('|');
-    if (/Transaction ID/i.test(cellsJoined) && /Trip Date/i.test(cellsJoined)) {
-      headerRowIndex = i;
-      break;
-    }
+    const cells = (grid[i] || []).map(normalizeHeader);
+    if (cells.some(c => c.includes('transaction id')) && cells.some(c => c.includes('trip date'))) { headerRowIndex = i; break; }
   }
 
+  // Salik offers/exported more than one spreadsheet layout. The previous
+  // importer rejected every valid workbook that was not exactly the Trips
+  // Report. Preserve the precise parser where possible, but fall back to a
+  // date/amount/plate/gate header detector instead of rejecting the file.
   if (headerRowIndex === -1) {
-    throw new Error('Could not find the transaction table header row -- this does not look like a Salik "Trips Report" export.');
+    const flexible = parseGenericGrid(grid, 'Salik');
+    return { ...flexible, meta: { ...flexible.meta, accountNumber, periodStart, periodEnd } };
   }
 
-  const headerRow = grid[headerRowIndex].map(c => String(c ?? '').replace(/\n/g, ' ').trim().toLowerCase());
-  const colIndex = (needle: string) => headerRow.findIndex(h => h.includes(needle));
-
-  const idxTxnId = colIndex('transaction id');
-  const idxTripDate = colIndex('trip date');
-  const idxTripTime = colIndex('trip time');
-  const idxGate = colIndex('toll gate');
-  const idxDirection = colIndex('direction');
-  const idxTag = colIndex('tag number');
-  const idxPlate = headerRow.findIndex(h => h === 'plate' || h.includes('plate'));
-  const idxTotal = headerRow.findIndex(h => h.includes('total amount'));
-  const idxAmount = headerRow.findIndex(h => h.startsWith('amount'));
-
+  const header = grid[headerRowIndex].map(normalizeHeader);
+  const find = (...words: string[]) => header.findIndex(h => hasAny(h, words));
+  const idxTxn = find('transaction id');
+  const idxDate = find('trip date');
+  const idxTime = find('trip time');
+  const idxGate = find('toll gate', 'gate');
+  const idxDirection = find('direction');
+  const idxTag = find('tag number', 'tag');
+  const idxPlate = find('plate');
+  const idxAmount = find('total amount', 'amount');
   const warnings: string[] = [];
-  if (idxTotal === -1 && idxAmount === -1) warnings.push('Could not find an Amount column -- costs will default to 0, please review.');
+  if (idxAmount === -1) warnings.push('Could not find an Amount column — costs default to 0; review before confirming.');
 
   const rows: ParsedTollRow[] = [];
-  for (let i = headerRowIndex + 1; i < grid.length; i++) {
+  for (let i = headerRowIndex + 1; i < grid.length; i += 1) {
     const r = grid[i];
-    if (!r || r.every((c: any) => c === '' || c === undefined || c === null)) continue;
-    const tripDateRaw = String(r[idxTripDate] ?? '').trim();
-    if (!tripDateRaw) continue;
-
-    const costIdx = idxTotal !== -1 ? idxTotal : idxAmount;
-    const actualCompanyCost = costIdx !== -1 ? parseFloat(String(r[costIdx] ?? '0')) || 0 : 0;
-    const directionRaw = idxDirection !== -1 ? String(r[idxDirection] ?? '').trim() : '';
-
+    if (!r || r.every(c => !String(c ?? '').trim())) continue;
+    const rawDate = String(r[idxDate] ?? '').trim();
+    if (!rawDate) continue;
+    const date = normalizeDate(rawDate);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const direction = idxDirection !== -1 ? String(r[idxDirection] ?? '').trim() : '';
     rows.push({
-      date: normalizeDate(tripDateRaw),
-      time: idxTripTime !== -1 ? String(r[idxTripTime] ?? '').trim() || undefined : undefined,
+      date,
+      time: idxTime !== -1 ? String(r[idxTime] ?? '').trim() || undefined : undefined,
       locationName: idxGate !== -1 ? String(r[idxGate] ?? '').trim() || 'Unknown Gate' : 'Unknown Gate',
-      direction: directionRaw ? `To ${directionRaw}` : undefined,
+      direction: direction ? (direction.toLowerCase().startsWith('to ') ? direction : `To ${direction}`) : undefined,
       tagNumber: idxTag !== -1 ? String(r[idxTag] ?? '').trim() || undefined : undefined,
       plateNumber: idxPlate !== -1 ? String(r[idxPlate] ?? '').trim() || undefined : undefined,
-      transactionRef: idxTxnId !== -1 ? String(r[idxTxnId] ?? '').trim() || undefined : undefined,
-      actualCompanyCost
+      transactionRef: idxTxn !== -1 ? String(r[idxTxn] ?? '').trim() || undefined : undefined,
+      actualCompanyCost: idxAmount !== -1 ? parseMoney(r[idxAmount]) : 0
     });
   }
-
-  if (rows.length === 0) warnings.push('No transaction rows were found under the detected header.');
-
+  if (!rows.length) throw new Error('Salik transaction headers were found, but no valid transaction rows were parsed.');
   return { rows, meta: { accountNumber, periodStart, periodEnd }, warnings };
 }
 
-const SALIK_PDF_ROW_REGEX =
-  /^\s*(\d{1,2}-[A-Za-z]{3}-\d{4})\s+(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s+(\S+)\s+(\S+)\s+(.+?)\s{2,}(To\s+.+?)\s+([\d.]+)\s*$/;
+const SALIK_PDF_ROW_REGEX = /^\s*(\d{1,2}-[A-Za-z]{3}-\d{4})\s+(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s+(\S+)\s+(\S+)\s+(.+?)\s{2,}(To\s+.+?)\s+([\d.]+)\s*$/;
+const SALIK_PDF_IGNORE_REGEX = /^(Monthly Statements|Statement (Date|Filter)|Account #|Total transactions|Run Date|Page \d|Transaction Date\/Time|Transactions for Tag|Name|Email|Statements generated)/i;
 
-const SALIK_PDF_IGNORE_REGEX =
-  /^(Monthly Statements|Statement (Date|Filter)|Account #|Total transactions|Run Date|Page \d|Transaction Date\/Time|Transactions for Tag|Name|Email|Statements generated)/i;
-
-/**
- * Parses text already extracted from a Salik "Monthly Statements" PDF (see
- * the pdf-parse call at the endpoint). Text-extraction order for PDFs isn't
- * guaranteed to be pixel-identical across libraries, so this is
- * intentionally tolerant of extra/variable whitespace, and any line it
- * can't confidently parse is counted in `warnings` rather than guessed at.
- */
 export function parseSalikPdfText(text: string): ParsedTollFile {
   const lines = text.split('\n');
   let accountNumber: string | undefined;
   let periodLabel: string | undefined;
   let totalTopUps: number | undefined;
-
   const rows: ParsedTollRow[] = [];
   let lastRow: ParsedTollRow | null = null;
   let unparsedCount = 0;
@@ -209,106 +245,25 @@ export function parseSalikPdfText(text: string): ParsedTollFile {
     const line = rawLine.replace(/\r/g, '');
     const trimmed = line.trim();
     if (!trimmed) continue;
-
-    const acctMatch = trimmed.match(/Account #\s*(\d+)/i);
-    if (acctMatch) accountNumber = acctMatch[1];
-
-    const filterMatch = trimmed.match(/Year:\s*([A-Za-z]+),\s*(\d{4})/i);
-    if (filterMatch) periodLabel = `${filterMatch[1]} ${filterMatch[2]}`;
-
-    const topUpMatch = trimmed.match(/Total Payments Amount\s*\(AED\)\s+([\d,.]+)/i);
-    if (topUpMatch) totalTopUps = parseFloat(topUpMatch[1].replace(/,/g, ''));
-
+    const acctMatch = trimmed.match(/Account #\s*(\d+)/i); if (acctMatch) accountNumber = acctMatch[1];
+    const filterMatch = trimmed.match(/Year:\s*([A-Za-z]+),\s*(\d{4})/i); if (filterMatch) periodLabel = `${filterMatch[1]} ${filterMatch[2]}`;
+    const topUpMatch = trimmed.match(/Total Payments Amount\s*\(AED\)\s+([\d,.]+)/i); if (topUpMatch) totalTopUps = parseMoney(topUpMatch[1]);
     const m = line.match(SALIK_PDF_ROW_REGEX);
     if (m) {
       const [, dateStr, timeStr, plate, tag, location, direction, amountStr] = m;
-      const row: ParsedTollRow = {
-        date: normalizeDate(dateStr),
-        time: timeStr.trim(),
-        locationName: location.trim(),
-        direction: direction.trim(),
-        tagNumber: tag,
-        plateNumber: plate,
-        actualCompanyCost: parseFloat(amountStr) || 0
-      };
-      rows.push(row);
-      lastRow = row;
-      continue;
+      const row: ParsedTollRow = { date: normalizeDate(dateStr), time: timeStr.trim(), locationName: location.trim(), direction: direction.trim(), tagNumber: tag, plateNumber: plate, actualCompanyCost: parseMoney(amountStr) };
+      rows.push(row); lastRow = row; continue;
     }
-
-    // A short, letters-only line right after a row is almost always a
-    // wrapped continuation of that row's Location cell (e.g. "Bridge" on
-    // its own line, from "Al Garhoud New Bridge").
-    if (lastRow && /^[A-Za-z][A-Za-z\s]*$/.test(trimmed) && trimmed.length < 40) {
-      lastRow.locationName = `${lastRow.locationName} ${trimmed}`.trim();
-      continue;
-    }
-
-    if (SALIK_PDF_IGNORE_REGEX.test(trimmed) || /^Total transactions for/i.test(trimmed)) {
-      continue;
-    }
-
-    unparsedCount++;
+    if (lastRow && /^[A-Za-z][A-Za-z\s]*$/.test(trimmed) && trimmed.length < 40) { lastRow.locationName = `${lastRow.locationName} ${trimmed}`.trim(); continue; }
+    if (SALIK_PDF_IGNORE_REGEX.test(trimmed) || /^Total transactions for/i.test(trimmed)) continue;
+    unparsedCount += 1;
   }
-
   const warnings: string[] = [];
-  if (rows.length === 0) warnings.push('No transaction rows could be parsed from this PDF -- an Excel export from the Salik portal is more reliable.');
-  if (unparsedCount > 5) warnings.push(`${unparsedCount} lines in the PDF could not be matched to a transaction row and were skipped.`);
-
+  if (!rows.length) warnings.push('No transaction rows could be parsed from this PDF — an XLSX export is more reliable.');
+  if (unparsedCount > 5) warnings.push(`${unparsedCount} PDF lines could not be confidently matched and were skipped.`);
   return { rows, meta: { accountNumber, periodLabel, totalTopUps }, warnings };
 }
 
-/**
- * Generic fallback for any Excel/CSV toll file whose exact layout isn't
- * known yet (used for Darb until a real sample is available). Detects the
- * header row by looking for Date/Amount columns, then best-effort matches
- * Plate/Location/Tag by keyword. Always flags what it couldn't find rather
- * than guessing silently.
- */
 export async function parseGenericTollExcel(buffer: Buffer): Promise<ParsedTollFile> {
-  const grid = await readGridFromBuffer(buffer);
-
-  let headerRowIndex = -1;
-  for (let i = 0; i < Math.min(grid.length, 30); i++) {
-    const cells = (grid[i] || []).map(c => String(c ?? '').toLowerCase());
-    if (cells.some(c => c.includes('date')) && cells.some(c => c.includes('amount'))) {
-      headerRowIndex = i;
-      break;
-    }
-  }
-  if (headerRowIndex === -1) {
-    throw new Error('Could not detect a header row with Date and Amount columns in this file.');
-  }
-
-  const header = grid[headerRowIndex].map(c => String(c ?? '').toLowerCase().trim());
-  const findCol = (...keywords: string[]) => header.findIndex(h => keywords.some(k => h.includes(k)));
-  const idxDate = findCol('date');
-  const idxAmount = findCol('amount', 'total');
-  const idxPlate = findCol('plate', 'vehicle');
-  const idxLocation = findCol('location', 'gate', 'toll', 'zone');
-  const idxTag = findCol('tag');
-
-  const warnings: string[] = [];
-  if (idxPlate === -1) warnings.push('No plate/vehicle column detected -- rows will need manual customer assignment.');
-  if (idxLocation === -1) warnings.push('No location/gate column detected.');
-
-  const rows: ParsedTollRow[] = [];
-  for (let i = headerRowIndex + 1; i < grid.length; i++) {
-    const r = grid[i];
-    if (!r || r.every((c: any) => c === '' || c === undefined || c === null)) continue;
-    const dateRaw = String(r[idxDate] ?? '').trim();
-    if (!dateRaw) continue;
-
-    rows.push({
-      date: normalizeDate(dateRaw),
-      locationName: idxLocation !== -1 ? String(r[idxLocation] ?? '').trim() || 'Unknown' : 'Unknown',
-      plateNumber: idxPlate !== -1 ? String(r[idxPlate] ?? '').trim() || undefined : undefined,
-      tagNumber: idxTag !== -1 ? String(r[idxTag] ?? '').trim() || undefined : undefined,
-      actualCompanyCost: idxAmount !== -1 ? parseFloat(String(r[idxAmount] ?? '0')) || 0 : 0
-    });
-  }
-
-  if (rows.length === 0) warnings.push('No transaction rows were found under the detected header.');
-
-  return { rows, meta: {}, warnings };
+  return parseGenericGrid(await readGridFromBuffer(buffer), 'Toll');
 }
