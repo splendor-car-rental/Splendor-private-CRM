@@ -105,7 +105,7 @@ async function handleContextualCorporateDocument(req: Request, res: Response, mo
       : await issueContextualDocument(kind, source, actor);
     return sendCorporatePdf(res, result);
   } catch (error) {
-    console.error(`[corporate-documents:${mode}] generation failed:`, error);
+    console.error(`[corporate-documents:${mode}] generation failed`);
     const message = error instanceof Error ? error.message : 'Document generation failed.';
     if (error instanceof DocumentIssuanceInProgressError) {
       res.setHeader('Retry-After', '2');
@@ -145,8 +145,8 @@ async function handleCorporateDocuments(req: Request, res: Response) {
     const { serial: _ignoredSerial, ...safeInput } = body as any;
     const issued = await issueAndRenderCorporateDocument(safeInput);
     return sendCorporatePdf(res, issued);
-  } catch (error) {
-    console.error('[corporate-documents] generation failed:', error);
+  } catch {
+    console.error('[corporate-documents] generation failed');
     return res.status(500).json({ error: 'Document generation failed. No document was issued.' });
   }
 }
@@ -191,8 +191,8 @@ async function handleIssuedDocumentFile(req: Request, res: Response) {
     res.setHeader('X-Document-Archive-Id', snapshot.docs[0].id);
     res.setHeader('Cache-Control', 'private, no-store');
     return res.status(200).send(pdf);
-  } catch (error) {
-    console.error('[issued-documents:file] read failed:', error);
+  } catch {
+    console.error('[issued-documents:file] read failed');
     return res.status(500).json({ error: 'Issued document could not be read.' });
   }
 }
