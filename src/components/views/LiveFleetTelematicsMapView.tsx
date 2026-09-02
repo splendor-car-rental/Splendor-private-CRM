@@ -1,297 +1,204 @@
-import React, { useState, useMemo } from 'react';
-import { 
-  Navigation, MapPin, Car, ShieldAlert, Gauge, Fuel, 
-  Layers, Filter, Eye, CheckCircle2, AlertTriangle, Radio,
-  Sparkles, ChevronRight, Activity, Zap
-} from 'lucide-react';
-import { useCRM } from '../../context/CRMContext';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Car, Gauge, Link2, Loader2, MapPin, Radio, RefreshCw, Satellite, ShieldCheck } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
-import { Badge } from '../common/Badge';
-import { formatAED } from '../../lib/currency';
-import { Vehicle } from '../../types';
+import { useCRM } from '../../context/CRMContext';
+import { apiFetch } from '../../lib/apiFetch';
+import { formatDateTime } from '../../lib/dateFormat';
 
-// Preset real coordinates around key Dubai luxury hubs
-const DUBAI_LUXURY_LOCATIONS: Record<string, { lat: number; lng: number; areaEn: string; areaAr: string }> = {
-  'DXB-DOWNTOWN': { lat: 25.1972, lng: 55.2744, areaEn: 'Downtown Dubai (Burj Khalifa / Fashion Ave)', areaAr: 'وسط مدينة دبي (برج خليفة / فاشن أفينيو)' },
-  'DXB-MARINA': { lat: 25.0805, lng: 55.1403, areaEn: 'Dubai Marina & JBR Walk', areaAr: 'دبي مارينا وممشى جي بي آر' },
-  'DXB-PALM': { lat: 25.1124, lng: 55.1390, areaEn: 'Palm Jumeirah (Atlantis The Royal)', areaAr: 'نخلة جميرا (أتلانتس ذا رويال)' },
-  'DXB-DIFC': { lat: 25.2104, lng: 55.2798, areaEn: 'DIFC Financial District', areaAr: 'مركز دبي المالي العالمي (DIFC)' },
-  'DXB-AIRPORT': { lat: 25.2532, lng: 55.3657, areaEn: 'Dubai International Airport (VIP Terminal)', areaAr: 'مطار دبي الدولي (صالة كبار الشخصيات)' },
-  'DXB-HQ': { lat: 25.2048, lng: 55.2708, areaEn: 'Splendor Luxury Flagship HQ (Business Bay)', areaAr: 'المقر الرئيسي لسبلندر (الخليج التجاري)' }
-};
+interface LivePosition {
+  provider: 'etqan';
+  providerDeviceId: string;
+  vehicleId?: string;
+  plateNumber?: string;
+  vehicleName?: string;
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+  speedKmh?: number;
+  headingDeg?: number;
+  ignitionOn?: boolean;
+  odometerKm?: number;
+  fuelLevelPercent?: number;
+  engineStatus?: string;
+  stale: boolean;
+}
+
+interface LiveFeedResponse {
+  configured: boolean;
+  provider: 'etqan';
+  fetchedAt?: string;
+  linkedCount?: number;
+  unlinkedCount?: number;
+  positions?: LivePosition[];
+  error?: string;
+  missingConfiguration?: string[];
+}
+
+const REQUIRED_PROVIDER_DELIVERABLES = [
+  ['API access', 'Server-to-server API credentials for the Splendor Etqan account (read-only live tracking scope).'],
+  ['API documentation', 'Base URL, authentication method, live-position endpoint, field definitions, paging and rate limits.'],
+  ['Vehicle/device list', 'Device ID / IMEI for every installed tracker, with the exact Splendor plate or VIN it belongs to.'],
+  ['Live fields', 'Latitude, longitude, provider/device timestamp, speed and ignition; odometer/fuel/heading if the device exposes them.'],
+  ['History & events', 'Trip-history endpoint plus geofence/overspeed/ignition/tamper event API or signed webhooks, if supported.'],
+  ['Security', 'Webhook-signature method, IP allow-list requirements, token rotation process, sandbox/test device and support contact.']
+] as const;
 
 export const LiveFleetTelematicsMapView: React.FC = () => {
   const { language } = useLanguage();
-  const { vehicles, contracts, setSelectedVehicleId, setActiveView } = useCRM();
+  const { vehicles, setSelectedVehicleId, setActiveView } = useCRM();
+  const [loading, setLoading] = useState(true);
+  const [feed, setFeed] = useState<LiveFeedResponse | null>(null);
+  const [selectedDevice, setSelectedDevice] = useState<string>('');
 
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [selectedVehicle, setSelectedVehicle] = useState<any>(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await apiFetch('/api/telematics/live', { cache: 'no-store' });
+      const body = await response.json().catch(() => ({}));
+      setFeed({
+        configured: Boolean(body.configured),
+        provider: 'etqan',
+        fetchedAt: body.fetchedAt,
+        linkedCount: Number(body.linkedCount || 0),
+        unlinkedCount: Number(body.unlinkedCount || 0),
+        positions: Array.isArray(body.positions) ? body.positions : [],
+        error: response.ok ? undefined : (body.error || `HTTP ${response.status}`),
+        missingConfiguration: Array.isArray(body.missingConfiguration) ? body.missingConfiguration : []
+      });
+    } catch (error: any) {
+      setFeed({ configured: false, provider: 'etqan', positions: [], error: error?.message || 'Tracking feed could not be loaded.' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  // Status mapping as defined in Splendor OS Specification
-  const statusColorMap: Record<string, { bg: string; text: string; dot: string; labelEn: string; labelAr: string }> = {
-    available: { bg: 'bg-emerald-950/60', text: 'text-emerald-400', dot: 'bg-emerald-400', labelEn: 'AVAILABLE', labelAr: 'متاح للإيجار' },
-    rented: { bg: 'bg-blue-950/60', text: 'text-sky-400', dot: 'bg-sky-400', labelEn: 'RENTED (ON TRIP)', labelAr: 'مؤجر حالياً' },
-    reserved: { bg: 'bg-amber-950/60', text: 'text-amber-400', dot: 'bg-amber-400', labelEn: 'RESERVED', labelAr: 'محجوز' },
-    returning: { bg: 'bg-orange-950/60', text: 'text-orange-400', dot: 'bg-orange-400', labelEn: 'RETURNING TODAY', labelAr: 'قيد الإرجاع اليوم' },
-    maintenance: { bg: 'bg-rose-950/60', text: 'text-rose-400', dot: 'bg-rose-400', labelEn: 'MAINTENANCE', labelAr: 'في الصيانة' },
-    held: { bg: 'bg-zinc-900', text: 'text-zinc-400', dot: 'bg-zinc-500', labelEn: 'HELD / VIP LOCK', labelAr: 'موقوف / حجز خاص' }
-  };
+  useEffect(() => {
+    void load();
+    const interval = window.setInterval(() => void load(), 60_000);
+    return () => window.clearInterval(interval);
+  }, [load]);
 
-  // Mock enrich vehicles with high-fidelity telemetry positions
-  const enrichedFleet = useMemo(() => {
-    const keys = Object.keys(DUBAI_LUXURY_LOCATIONS);
-    return vehicles.map((v, i) => {
-      const locKey = keys[i % keys.length];
-      const loc = DUBAI_LUXURY_LOCATIONS[locKey];
-      const currentContract = contracts.find(c => c.vehicleId === v.id && c.status === 'active');
-      const isRented = v.status === 'rented';
-
-      return {
-        ...v,
-        currentLocation: loc,
-        telemetry: {
-          currentSpeed: isRented ? Math.floor(65 + (i * 12) % 60) : 0,
-          fuelLevel: Math.floor(70 + (i * 7) % 30),
-          batteryVoltage: 13.8,
-          gpsSignal: 'STRONG 5G',
-          engineStatus: isRented ? 'RUNNING' : 'STANDBY_LOCKED',
-          lastPing: '2 mins ago'
-        },
-        activeContract: currentContract
-      };
-    });
-  }, [vehicles, contracts]);
-
-  const filteredFleet = useMemo(() => {
-    if (statusFilter === 'ALL') return enrichedFleet;
-    return enrichedFleet.filter(v => v.status === statusFilter);
-  }, [enrichedFleet, statusFilter]);
+  const positions = feed?.positions || [];
+  const selected = useMemo(() => positions.find(position => position.providerDeviceId === selectedDevice) || positions[0], [positions, selectedDevice]);
+  const linkedVehicleIds = useMemo(() => new Set(positions.map(position => position.vehicleId).filter(Boolean)), [positions]);
+  const vehiclesWithoutMapping = useMemo(() => vehicles.filter(vehicle => !linkedVehicleIds.has(vehicle.id)), [vehicles, linkedVehicleIds]);
 
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
-      
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-display font-bold text-zinc-100 flex items-center gap-2.5">
-            <Radio className="w-6 h-6 text-[#f5d97f] animate-pulse" />
-            <span>{language === 'ar' ? 'رادار الأسطول وخريطة التتبع المباشرة (Live Fleet Radar)' : 'Live Fleet Telematics & GPS Command Radar'}</span>
-          </h2>
-          <p className="text-xs text-zinc-400 mt-1">
-            {language === 'ar' 
-              ? 'مراقبة لحظية لمواقع السوبركار عبر دبي والإمارات: السرعة، استهلاك الوقود، حالة المحرك، وتنبيهات السرعة' 
-              : 'Real-time telemetry streaming across Dubai & UAE sovereign envelope: speed, fuel, geofencing, and engine health'}
+    <div className="space-y-5 pb-12 min-w-0 animate-fade-in">
+      <section className="rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="flex flex-wrap items-center gap-2 text-xl sm:text-2xl font-display font-bold text-zinc-100">
+              <Satellite className="h-5 w-5 text-[#f5d97f]" />
+              {language === 'ar' ? 'التتبع المباشر للأسطول — اتقان' : 'Live Fleet Tracking — Etqan'}
+            </h2>
+            <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">
+              {language === 'ar'
+                ? 'هذه الشاشة لا تولّد أو تعرض مواقع وهمية. تظهر المركبة فقط عندما تصل إحداثيات حقيقية من حساب اتقان عبر تكامل خادم إلى خادم ويتم ربط رقم جهاز التتبع بالمركبة المسجلة.'
+                : 'This screen never fabricates vehicle locations. A vehicle appears only when a real coordinate arrives from the Etqan account through the server-side integration and its tracking device is mapped to a registered vehicle.'}
+            </p>
+          </div>
+          <button onClick={() => void load()} disabled={loading} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-xs text-zinc-200 disabled:opacity-50">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {language === 'ar' ? 'تحديث' : 'Refresh'}
+          </button>
+        </div>
+      </section>
+
+      {feed?.error && (
+        <div role="alert" className="rounded-2xl border border-amber-800/50 bg-amber-950/20 p-4 text-xs text-amber-200">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <div className="font-bold">{language === 'ar' ? 'تكامل اتقان غير جاهز للبث الحي' : 'Etqan live integration is not ready'}</div>
+              <div className="mt-1 text-amber-300/80">{feed.error}</div>
+              {!!feed.missingConfiguration?.length && <div className="mt-2 font-mono text-[10px] text-zinc-400">{feed.missingConfiguration.join(' · ')}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!feed?.configured && (
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4 sm:p-5">
+          <h3 className="flex items-center gap-2 font-bold text-zinc-100"><Link2 className="h-4 w-4 text-sky-400" />{language === 'ar' ? 'المطلوب من شركة اتقان لتشغيل الربط' : 'What Etqan must provide for activation'}</h3>
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {REQUIRED_PROVIDER_DELIVERABLES.map(([title, description]) => (
+              <div key={title} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+                <div className="text-xs font-bold text-zinc-200">{title}</div>
+                <div className="mt-1 text-[11px] leading-5 text-zinc-500">{description}</div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 text-[11px] leading-5 text-zinc-500">
+            {language === 'ar'
+              ? 'مفاتيح اتقان تحفظ في أسرار الخادم فقط ولا تُرسل للمتصفح أو Firestore. بعد استلام مستندات الـAPI يتم ضبط أسماء الحقول كما يعرّفها اتقان بالضبط وربط كل Device ID بالسيارة من ملف المركبة.'
+              : 'Etqan credentials stay in server secrets only and are never exposed to the browser or Firestore. Once the provider API contract is received, its exact field mapping is configured and each Device ID is linked from the vehicle master.'}
           </p>
-        </div>
+        </section>
+      )}
 
-        {/* Legend status toggles */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {['ALL', 'available', 'rented', 'reserved', 'maintenance'].map(st => (
-            <button
-              key={st}
-              onClick={() => setStatusFilter(st)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-                statusFilter === st 
-                  ? 'bg-zinc-800 text-[#f5d97f] border-[#D4AF37]' 
-                  : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200 border-zinc-800'
-              }`}
-            >
-              {st === 'ALL' ? (language === 'ar' ? 'الكل' : 'ALL') : (statusColorMap[st]?.labelEn || st)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Main Radar Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Map / Radar Canvas View (8 cols) */}
-        <div className="lg:col-span-8 rounded-3xl bg-zinc-950 border border-zinc-800 overflow-hidden shadow-2xl relative min-h-[520px] flex flex-col">
-          
-          {/* Radar Top Bar */}
-          <div className="p-4 bg-zinc-900/90 border-b border-zinc-800 flex items-center justify-between z-10">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-              <span className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
-                {language === 'ar' ? 'بث الإحداثيات اللحظي • دبي' : 'DUBAI SOVEREIGN GPS RADAR'}
-              </span>
-            </div>
-            <span className="text-[11px] font-mono text-zinc-400">
-              {filteredFleet.length} {language === 'ar' ? 'مركبة نشطة على الرادار' : 'vehicles tracked'}
-            </span>
+      {feed?.configured && !feed.error && (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Metric icon={<Radio className="h-4 w-4" />} label={language === 'ar' ? 'إشارات مستلمة' : 'Live pings'} value={String(positions.length)} />
+            <Metric icon={<ShieldCheck className="h-4 w-4" />} label={language === 'ar' ? 'مرتبطة بسيارات' : 'Linked vehicles'} value={String(feed.linkedCount || 0)} />
+            <Metric icon={<Link2 className="h-4 w-4" />} label={language === 'ar' ? 'أجهزة غير مرتبطة' : 'Unlinked devices'} value={String(feed.unlinkedCount || 0)} warning={(feed.unlinkedCount || 0) > 0} />
+            <Metric icon={<Car className="h-4 w-4" />} label={language === 'ar' ? 'سيارات بلا إشارة مرتبطة' : 'Vehicles without linked ping'} value={String(vehiclesWithoutMapping.length)} warning={vehiclesWithoutMapping.length > 0} />
           </div>
 
-          {/* Interactive Visual Map Simulation */}
-          <div className="flex-1 relative bg-gradient-to-br from-zinc-950 via-zinc-900 to-zinc-950 p-6 flex flex-col justify-between overflow-hidden">
-            
-            {/* Background Grid Lines to evoke high-tech Radar */}
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f2937_1px,transparent_1px),linear-gradient(to_bottom,#1f2937_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] opacity-30 pointer-events-none" />
-
-            {/* Dubai Key Landmarks overlay */}
-            <div className="relative z-10 grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {Object.entries(DUBAI_LUXURY_LOCATIONS).map(([key, loc]) => {
-                const carsAtLoc = filteredFleet.filter(f => f.currentLocation?.areaEn === loc.areaEn);
-                return (
-                  <div key={key} className="p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800/80 backdrop-blur-sm space-y-1">
-                    <div className="flex items-center gap-1.5 text-zinc-400">
-                      <MapPin className="w-3.5 h-3.5 text-[#D4AF37]" />
-                      <span className="text-[11px] font-semibold text-zinc-200 truncate">
-                        {language === 'ar' ? loc.areaAr : loc.areaEn}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-zinc-500 font-mono flex items-center justify-between">
-                      <span>{carsAtLoc.length} {language === 'ar' ? 'سيارات هنا' : 'vehicles'}</span>
-                      <span className="text-emerald-400 font-bold">{carsAtLoc.filter(c => c.status === 'available').length} Avail</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Vehicles on Radar Nodes */}
-            <div className="relative z-10 my-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-64 overflow-y-auto pr-1">
-              {filteredFleet.map(car => {
-                const st = statusColorMap[car.status] || statusColorMap.available;
-                const isSelected = selectedVehicle?.id === car.id;
-
-                return (
-                  <div
-                    key={car.id}
-                    onClick={() => setSelectedVehicle(car)}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                      isSelected 
-                        ? 'bg-zinc-800 border-[#D4AF37] ring-1 ring-[#D4AF37]/50 shadow-lg' 
-                        : 'bg-zinc-900/90 hover:bg-zinc-800/80 border-zinc-800'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className={`w-2.5 h-2.5 rounded-full ${st.dot} shrink-0`} />
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+            <section className="xl:col-span-7 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
+              <div className="border-b border-zinc-800 p-4 text-xs text-zinc-500">{language === 'ar' ? 'الإحداثيات الحقيقية المستلمة من المزود' : 'Real coordinates received from provider'}</div>
+              <div className="max-h-[560px] overflow-y-auto divide-y divide-zinc-800">
+                {positions.map(position => (
+                  <button key={position.providerDeviceId} onClick={() => setSelectedDevice(position.providerDeviceId)} className="w-full min-w-0 p-4 text-start hover:bg-zinc-900/60">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="font-semibold text-xs text-zinc-100 truncate">
-                          {car.make} {car.model}
-                        </div>
-                        <div className="text-[10px] text-zinc-400 font-mono truncate">
-                          {car.plateNumber} • {car.currentLocation?.areaEn.split('(')[0]}
-                        </div>
+                        <div className="font-semibold text-zinc-100 break-words">{position.vehicleName || (language === 'ar' ? 'جهاز غير مربوط بسيارة' : 'Unlinked tracking device')}</div>
+                        <div className="mt-0.5 font-mono text-[10px] text-zinc-500 break-all">{position.plateNumber || '—'} · {position.providerDeviceId}</div>
                       </div>
+                      <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${position.stale ? 'border-amber-800 text-amber-400' : 'border-emerald-800 text-emerald-400'}`}>{position.stale ? (language === 'ar' ? 'إشارة قديمة' : 'STALE') : (language === 'ar' ? 'مباشر' : 'LIVE')}</span>
                     </div>
-
-                    <div className="text-end shrink-0 ms-2">
-                      <span className="text-xs font-mono font-bold text-[#f5d97f]">{car.telemetry.currentSpeed} km/h</span>
-                      <div className="text-[10px] text-zinc-400 font-mono">{car.telemetry.fuelLevel}% Fuel</div>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-zinc-400">
+                      <span><MapPin className="me-1 inline h-3 w-3" />{position.latitude.toFixed(6)}, {position.longitude.toFixed(6)}</span>
+                      {position.speedKmh !== undefined && <span><Gauge className="me-1 inline h-3 w-3" />{position.speedKmh} km/h</span>}
+                      <span>{formatDateTime(position.timestamp, language)}</span>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Bottom Status Bar */}
-            <div className="relative z-10 pt-3 border-t border-zinc-800 flex items-center justify-between text-[11px] text-zinc-400">
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  {language === 'ar' ? 'الحدود الجغرافية: آمنة ومحمية' : 'Geofence Envelope: Sovereign UAE'}
-                </span>
+                  </button>
+                ))}
+                {positions.length === 0 && <div className="p-10 text-center text-sm text-zinc-500">{language === 'ar' ? 'المزود متصل لكن لم يرسل أي إحداثيات صالحة حالياً.' : 'Provider is configured but no valid live coordinates were returned.'}</div>}
               </div>
-              <span className="font-mono text-zinc-500">Live 100ms Telemetry Pipeline</span>
-            </div>
+            </section>
 
+            <section className="xl:col-span-5 rounded-2xl border border-zinc-800 bg-zinc-950 p-4 sm:p-5 min-w-0">
+              {selected ? (
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-lg font-bold text-zinc-100 break-words">{selected.vehicleName || selected.providerDeviceId}</div>
+                    <div className="text-[10px] font-mono text-zinc-500 break-all">{selected.providerDeviceId}</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <Data label={language === 'ar' ? 'خط العرض' : 'Latitude'} value={selected.latitude.toFixed(6)} />
+                    <Data label={language === 'ar' ? 'خط الطول' : 'Longitude'} value={selected.longitude.toFixed(6)} />
+                    <Data label={language === 'ar' ? 'السرعة' : 'Speed'} value={selected.speedKmh === undefined ? '—' : `${selected.speedKmh} km/h`} />
+                    <Data label={language === 'ar' ? 'الإشعال' : 'Ignition'} value={selected.ignitionOn === undefined ? '—' : selected.ignitionOn ? 'ON' : 'OFF'} />
+                    <Data label={language === 'ar' ? 'العداد' : 'Odometer'} value={selected.odometerKm === undefined ? '—' : `${selected.odometerKm} km`} />
+                    <Data label={language === 'ar' ? 'الوقود' : 'Fuel'} value={selected.fuelLevelPercent === undefined ? '—' : `${selected.fuelLevelPercent}%`} />
+                  </div>
+                  {selected.vehicleId && <button onClick={() => { setSelectedVehicleId(selected.vehicleId!); setActiveView('fleet'); }} className="w-full rounded-xl bg-[#D4AF37] px-4 py-2.5 text-xs font-black text-zinc-950">{language === 'ar' ? 'فتح ملف السيارة' : 'Open vehicle profile'}</button>}
+                </div>
+              ) : <div className="py-12 text-center text-sm text-zinc-500">{language === 'ar' ? 'اختر إشارة من القائمة.' : 'Select a live ping.'}</div>}
+            </section>
           </div>
-        </div>
-
-        {/* Selected Vehicle Telemetry Telemetry Inspector (4 cols) */}
-        <div className="lg:col-span-4 space-y-4">
-          {selectedVehicle ? (
-            <div className="p-5 rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-4 animate-fade-in">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold tracking-wider uppercase text-[#f5d97f] bg-zinc-900 px-2.5 py-1 rounded-full border border-zinc-800">
-                  {selectedVehicle.category.replace('_', ' ')}
-                </span>
-                <Badge variant={selectedVehicle.status === 'rented' ? 'sky' : 'emerald'}>
-                  {selectedVehicle.status.toUpperCase()}
-                </Badge>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-display font-bold text-zinc-100">
-                  {selectedVehicle.make} {selectedVehicle.model} {selectedVehicle.year}
-                </h3>
-                <p className="text-xs text-zinc-400 font-mono mt-0.5">
-                  Plate: {selectedVehicle.plateNumber} • VIN: {selectedVehicle.vin?.slice(-8) || 'N/A'}
-                </p>
-              </div>
-
-              {/* Telemetry Gauge Box */}
-              <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-3">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-zinc-400 flex items-center gap-1.5">
-                    <Gauge className="w-4 h-4 text-[#D4AF37]" />
-                    {language === 'ar' ? 'السرعة الآن' : 'Live Speed'}
-                  </span>
-                  <span className="font-mono font-bold text-base text-[#f5d97f]">
-                    {(selectedVehicle as any).telemetry?.currentSpeed || 0} km/h
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-zinc-400 flex items-center gap-1.5">
-                    <Fuel className="w-4 h-4 text-emerald-400" />
-                    {language === 'ar' ? 'مستوى الوقود' : 'Fuel / Battery'}
-                  </span>
-                  <span className="font-mono font-bold text-zinc-200">
-                    {(selectedVehicle as any).telemetry?.fuelLevel || 85}%
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-zinc-400 flex items-center gap-1.5">
-                    <Zap className="w-4 h-4 text-amber-400" />
-                    {language === 'ar' ? 'الموقع اللحظي' : 'Current Area'}
-                  </span>
-                  <span className="text-[11px] text-zinc-300 font-medium truncate max-w-[140px]">
-                    {(selectedVehicle as any).currentLocation?.areaEn.split('(')[0] || 'Dubai'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Active Contract Info if Rented */}
-              {(selectedVehicle as any).activeContract && (
-                <div className="p-4 rounded-2xl bg-sky-950/30 border border-sky-500/30 space-y-2">
-                  <div className="text-[10px] font-bold uppercase text-sky-400">
-                    {language === 'ar' ? 'العقد النشط المرتبط' : 'Active Contract Connected'}
-                  </div>
-                  <div className="text-xs font-semibold text-zinc-200">
-                    {(selectedVehicle as any).activeContract.customerName}
-                  </div>
-                  <div className="text-[11px] font-mono text-zinc-400">
-                    {(selectedVehicle as any).activeContract.contractNumber} • {formatAED((selectedVehicle as any).activeContract.grandTotal)}
-                  </div>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="pt-2 flex gap-2">
-                <button
-                  onClick={() => {
-                    setSelectedVehicleId(selectedVehicle.id);
-                    setActiveView('fleet');
-                  }}
-                  className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-xs font-semibold text-zinc-200 hover:text-white transition-all text-center"
-                >
-                  {language === 'ar' ? 'ملف المركبة الكامل' : 'Open Vehicle File'}
-                </button>
-              </div>
-
-            </div>
-          ) : (
-            <div className="p-8 rounded-3xl bg-zinc-950 border border-zinc-800 text-center text-zinc-500 text-xs">
-              {language === 'ar' ? 'اختر مركبة من الرادار لمعاينة بياناتها' : 'Select a vehicle from the radar to inspect telemetry'}
-            </div>
-          )}
-        </div>
-
-      </div>
-
+        </>
+      )}
     </div>
   );
 };
+
+function Metric({ icon, label, value, warning = false }: { icon: React.ReactNode; label: string; value: string; warning?: boolean }) {
+  return <div className={`rounded-2xl border p-4 ${warning ? 'border-amber-900/50 bg-amber-950/15' : 'border-zinc-800 bg-zinc-950'}`}><div className="flex items-center gap-2 text-[11px] text-zinc-500">{icon}{label}</div><div className="mt-2 text-2xl font-black text-zinc-100">{value}</div></div>;
+}
+function Data({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3"><div className="text-[10px] text-zinc-500">{label}</div><div className="mt-1 break-all font-mono text-zinc-200">{value}</div></div>;
+}
