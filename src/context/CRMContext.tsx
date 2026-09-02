@@ -196,9 +196,6 @@ interface CRMContextType {
   deleteQuotation: (id: string, reason?: string) => Promise<void>;
   deleteReservation: (id: string, reason?: string) => Promise<void>;
 
-  /** CEO/Admin only -- wipes every transactional/demo record and resets numbering back to 1. Irreversible. */
-  resetTransactionalData: (confirmText: string) => Promise<{ success: boolean; deletedDocs: number }>;
-
   createTask: (taskData: Partial<CRMTask>) => Promise<CRMTask>;
   updateTask: (id: string, data: Partial<CRMTask>) => Promise<CRMTask>;
   
@@ -1537,31 +1534,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Reservation Deleted', `Reservation ${id} removed.`);
   };
 
-  const resetTransactionalData = async (confirmText: string) => {
-    const res = await fetch('/api/admin/reset-transactional-data', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirmText })
-    });
-    let data: { success: boolean; deletedDocs: number };
-    try {
-      data = await parseApiResponse(res, 'Failed to reset transactional data.');
-    } catch (err: any) {
-      showToast('Reset Failed', err.message, 'error');
-      throw err;
-    }
-    // Every list this app renders should read empty immediately rather than
-    // waiting on the next full fetchData() poll.
-    setCustomers([]); setLeads([]); setOpportunities([]); setVehicles([]);
-    setQuotations([]); setReservations([]); setContracts([]); setCharges([]);
-    setDeposits([]); setPayments([]); setInvoices([]); setBankBatches([]);
-    setBankTransactions([]); setTollTransactions([]); setTollImportBatches([]);
-    setTasks([]); setCommunications([]); setDocuments([]); setAuditLogs([]);
-    setNotifications([]); setCustomReminders([]); setWhatsappMessageLog([]);
-    showToast('System Reset', `Cleared ${data.deletedDocs} record(s). The system is ready for real data.`);
-    return data;
-  };
-
   /**
    * Client-side wrappers for the AI endpoints server.ts already exposes
    * (/api/ai/query, /api/ai/customer-summary). AIStudioView has called
@@ -1716,7 +1688,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       previewTollImport, confirmTollImport, updateTollPricingConfig,
       updateNotificationConfig, updateCustomerNotificationConfig,
       sendCustomReminder, runNotificationChecksNow, refreshWhatsappStatus,
-      extendContract, resetTransactionalData,
+      extendContract,
       queryAI, generateCustomerAISummary,
       createTask, updateTask, addCommunication, addDocument
     }}>

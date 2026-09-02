@@ -158,6 +158,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   delete process.env.VERCEL;
+  delete process.env.VERCEL_ENV;
   delete process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 });
 
@@ -251,5 +252,31 @@ describe('GET /api/fleet — Firestore source-of-truth read', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({ id: vehicle.id, make: vehicle.make, model: vehicle.model });
     expect(globalStore.vehicles).toHaveLength(1);
+  });
+});
+
+describe('administrative execution boundaries', () => {
+  it('requires authentication for the in-app test runner', async () => {
+    const res = await request(app).post('/api/tests/run-all');
+    expect(res.status).toBe(401);
+  });
+
+  it('restricts the in-app test runner to CEO/Admin roles', async () => {
+    const res = await request(app).post('/api/tests/run-all').set(authAs(SALES_UID));
+    expect(res.status).toBe(403);
+  });
+
+  it('does not expose the bulk transactional reset outside the local Firestore emulator', async () => {
+    process.env.VERCEL_ENV = 'production';
+    const vehicles = adminMock.store.get('vehicles') || new Map<string, any>();
+    vehicles.set('VEH-RESET-GUARD', { id: 'VEH-RESET-GUARD' });
+    adminMock.store.set('vehicles', vehicles);
+    const res = await request(app)
+      .post('/api/admin/reset-transactional-data')
+      .set(authAs(CEO_UID))
+      .send({ confirmText: 'DELETE ALL DATA' });
+
+    expect(res.status).toBe(404);
+    expect(adminMock.store.get('vehicles')?.has('VEH-RESET-GUARD')).toBe(true);
   });
 });
