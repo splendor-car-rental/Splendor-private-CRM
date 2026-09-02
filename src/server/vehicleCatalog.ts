@@ -37,22 +37,35 @@ const STATIC_MODELS = [...DEFAULT_CATALOG_MODELS, ...UAE_CATALOG_EXPANSION_MODEL
 /** Static manufacturers plus approved Firestore additions. Pending/rejected proposals never appear. */
 export async function listManufacturers(): Promise<VehicleManufacturer[]> {
   if (admin.apps.length === 0) return STATIC_MANUFACTURERS;
-  const db = admin.firestore();
-  const snap = await db.collection(MANUFACTURERS_COLLECTION).get();
-  const approved = snap.docs.map((d) => d.data() as VehicleManufacturer);
-  const seedIds = new Set(STATIC_MANUFACTURERS.map((m) => m.id));
-  return [...STATIC_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
+  try {
+    const db = admin.firestore();
+    const snap = await db.collection(MANUFACTURERS_COLLECTION).get();
+    const approved = snap.docs.map((d) => d.data() as VehicleManufacturer);
+    const seedIds = new Set(STATIC_MANUFACTURERS.map((m) => m.id));
+    return [...STATIC_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
+  } catch (error) {
+    // The source-controlled master catalog is authoritative reference data.
+    // A transient/permission failure while reading optional approved
+    // extensions must not turn the manufacturer selector into an empty list.
+    console.warn('[vehicle-catalog] approved manufacturer extensions unavailable; serving static master catalog', error);
+    return STATIC_MANUFACTURERS;
+  }
 }
 
 /** Models are strictly scoped to the selected manufacturer. */
 export async function listModelsForManufacturer(manufacturerId: string): Promise<VehicleCatalogModel[]> {
   const seedModels = STATIC_MODELS.filter((m) => m.manufacturerId === manufacturerId);
   if (admin.apps.length === 0) return seedModels;
-  const db = admin.firestore();
-  const snap = await db.collection(MODELS_COLLECTION).where('manufacturerId', '==', manufacturerId).get();
-  const approved = snap.docs.map((d) => d.data() as VehicleCatalogModel);
-  const seedIds = new Set(seedModels.map((m) => m.id));
-  return [...seedModels, ...approved.filter((m) => !seedIds.has(m.id))];
+  try {
+    const db = admin.firestore();
+    const snap = await db.collection(MODELS_COLLECTION).where('manufacturerId', '==', manufacturerId).get();
+    const approved = snap.docs.map((d) => d.data() as VehicleCatalogModel);
+    const seedIds = new Set(seedModels.map((m) => m.id));
+    return [...seedModels, ...approved.filter((m) => !seedIds.has(m.id))];
+  } catch (error) {
+    console.warn(`[vehicle-catalog] approved model extensions unavailable for ${manufacturerId}; serving static master models`, error);
+    return seedModels;
+  }
 }
 
 export interface ProposeCatalogUpdateInput {
@@ -97,7 +110,7 @@ export async function proposeCatalogUpdate(input: ProposeCatalogUpdateInput, rec
     manufacturerName: input.manufacturerName.trim(),
     ...(input.modelName ? { modelName: input.modelName.trim() } : {}),
     ...(input.year !== undefined ? { year: input.year } : {}),
-    ...(input.trim ? { trim: input.trim } : {}),
+    ...(input.trim ? { trim: input.trim() } : {}),
     ...(input.details ? { details: input.details } : {}),
     ...(input.sourceNote ? { sourceNote: input.sourceNote } : {}),
     discoverySource: input.discoverySource || 'staff_request',
