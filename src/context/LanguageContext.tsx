@@ -22,7 +22,11 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     localStorage.setItem('splendor_lang', language);
     document.documentElement.dir = direction;
-    document.documentElement.lang = language;
+    // Native date/datetime controls derive their field order from the HTML
+    // document locale. Keep both supported UI languages on day-first locales
+    // so the browser never presents MM/DD/YYYY while Splendor stores ISO dates
+    // internally and displays all dates as DD/MM/YYYY.
+    document.documentElement.lang = language === 'ar' ? 'ar-AE' : 'en-GB';
   }, [language, direction]);
 
   const setLanguage = (lang: Language) => {
