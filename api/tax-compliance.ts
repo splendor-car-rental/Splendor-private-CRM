@@ -22,6 +22,7 @@ const PROFILE_HISTORY_COLLECTION = 'tax_master_profile_versions';
 const SOURCE_COLLECTION = 'tax_official_sources';
 const RULE_COLLECTION = 'tax_rule_versions';
 const AUDIT_COLLECTION = 'tax_audit_events';
+const PROFESSIONAL_REGISTRY_COLLECTION = 'tax_professional_validators';
 const PROFILE_ID = 'splendor';
 
 const USER_ROLES = new Set<UserRole>(['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance']);
@@ -87,12 +88,8 @@ async function authenticate(req: Request, res: Response): Promise<TaxActor | nul
     const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
     const data = profile.exists ? profile.data() as any : null;
     const role = String(data?.role || '') as UserRole;
-    if (!data || !USER_ROLES.has(role)) {
+    if (!data || !USER_ROLES.has(role) || String(data?.status || '') !== 'active') {
       res.status(403).json({ error: 'A valid active Splendor staff role is required.' });
-      return null;
-    }
-    if (String(data?.status || 'active') !== 'active') {
-      res.status(403).json({ error: 'Inactive staff accounts cannot access Tax Compliance.' });
       return null;
     }
 
@@ -275,6 +272,7 @@ function validateProposedRule(rule: TaxRuleVersion): string | null {
 
 function normalizeProfessionalValidation(body: any): TaxProfessionalValidation {
   return {
+    validatorRegistryId: optionalText(body?.validatorRegistryId, 180),
     validatorName: cleanText(body?.validatorName, 200),
     validatorOrganization: optionalText(body?.validatorOrganization, 240),
     validatorCapacity: 'UAE_TAX_PROFESSIONAL',
@@ -286,6 +284,41 @@ function normalizeProfessionalValidation(body: any): TaxProfessionalValidation {
     qualificationsOrLimitations: optionalText(body?.qualificationsOrLimitations, 3000),
     notes: optionalText(body?.notes, 3000)
   };
+}
+
+async function validateProfessionalRegistryEvidence(
+  tx: admin.firestore.Transaction,
+  db: admin.firestore.Firestore,
+  validation: TaxProfessionalValidation,
+  domain: TaxRuleVersion['domain']
+): Promise<string | null> {
+  const registryId = String(validation.validatorRegistryId || '').trim();
+  const evidenceId = String(validation.validationEvidenceDocumentId || '').trim();
+  if (!registryId || !evidenceId) return 'Professional validation requires a verified validator registry id and durable evidence document id.';
+
+  const registryRef = db.collection(PROFESSIONAL_REGISTRY_COLLECTION).doc(registryId);
+  const evidenceRef = db.collection('documents').doc(evidenceId);
+  const issuedEvidenceRef = db.collection('issued_documents').doc(evidenceId);
+  const [registrySnap, evidenceSnap, issuedEvidenceSnap] = await Promise.all([
+    tx.get(registryRef),
+    tx.get(evidenceRef),
+    tx.get(issuedEvidenceRef)
+  ]);
+
+  if (!registrySnap.exists) return 'The referenced Tax Professional Registry record does not exist.';
+  const registry = registrySnap.data() as any;
+  if (String(registry.status || '') !== 'active' || String(registry.validatorCapacity || '') !== 'UAE_TAX_PROFESSIONAL') {
+    return 'The referenced Tax Professional Registry record is not active and eligible.';
+  }
+  if (String(registry.validatorName || '').trim().toLowerCase() !== String(validation.validatorName || '').trim().toLowerCase()) {
+    return 'Professional validator identity does not match the verified registry record.';
+  }
+  const domains = Array.isArray(registry.domains) ? registry.domains.map(String) : [];
+  if (domains.length > 0 && !domains.includes(domain) && !domains.includes('ALL_TAX')) {
+    return 'The verified professional validator registry scope does not cover this tax rule domain.';
+  }
+  if (!evidenceSnap.exists && !issuedEvidenceSnap.exists) return 'The professional validation evidence document does not exist.';
+  return null;
 }
 
 async function getRuleSupportingSources(tx: admin.firestore.Transaction, rule: TaxRuleVersion): Promise<TaxOfficialSource[]> {
@@ -460,6 +493,11 @@ export default async function handler(req: Request, res: Response) {
       if (previous.status === 'accepted' || previous.status === 'superseded' || previous.status === 'deprecated') {
         throw new Error('Professional validation cannot rewrite an accepted or retired rule version.');
       }
+      if (previous.proposedBy === actor.uid) {
+        throw new Error('Four-Eyes control prevents the rule proposer from recording professional validation for the same rule.');
+      }
+      const registryError = await validateProfessionalRegistryEvidence(tx, db, validation, previous.domain);
+      if (registryError) throw new Error(registryError);
       const now = new Date().toISOString();
       const next: TaxRuleVersion = {
         ...previous,
@@ -490,6 +528,10 @@ export default async function handler(req: Request, res: Response) {
       if (!snapshot.exists) throw new Error('Tax rule not found.');
       const previous = { id: snapshot.id, ...snapshot.data() } as TaxRuleVersion;
       const sources = await getRuleSupportingSources(tx, previous);
+      const professionalError = previous.professionalValidation
+        ? await validateProfessionalRegistryEvidence(tx, db, previous.professionalValidation, previous.domain)
+        : 'Professional UAE tax validation is required before a tax rule can be accepted.';
+      if (professionalError) throw new Error(professionalError);
       const acceptanceError = validateRuleAcceptance(previous, sources, actor);
       if (acceptanceError) throw new Error(acceptanceError);
       const now = new Date().toISOString();
