@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const blocklist = readFileSync(new URL('../src/server/blocklist.ts', import.meta.url), 'utf8');
 const blocklistUi = readFileSync(new URL('../src/components/views/SecurityBlocklistView.tsx', import.meta.url), 'utf8');
 const auth = readFileSync(new URL('../src/components/auth/AuthScreens.tsx', import.meta.url), 'utf8');
+const scrollCss = readFileSync(new URL('../src/scroll-ownership.css', import.meta.url), 'utf8');
 const tollParser = readFileSync(new URL('../src/server/tollFileParsers.ts', import.meta.url), 'utf8');
 const vercel = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
 
@@ -43,10 +44,13 @@ describe('operator QA regressions', () => {
     expect(toastIndex).toBeGreaterThan(closeIndex);
   });
 
-  it('makes the login viewport wheel/touch-scrollable on short screens', () => {
+  it('makes the login viewport wheel/touch-scrollable on short screens without competing viewport ownership', () => {
     expect(auth).toContain('data-testid="login-scroll-viewport"');
-    expect(auth).toContain('h-[100dvh] min-h-[100dvh] overflow-y-auto overscroll-y-contain');
-    expect(auth).toContain('items-start sm:items-center');
+    expect(auth).toContain('h-full min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y');
+    expect(auth).not.toContain('my-auto');
+    expect(scrollCss).toContain('#root > [data-testid="login-scroll-viewport"]');
+    expect(scrollCss).toContain('overflow-y: auto !important');
+    expect(scrollCss).toContain('-webkit-overflow-scrolling: touch');
   });
 
   it('uses flexible Salik column detection instead of requiring one exact Trips Report layout', () => {
@@ -54,7 +58,7 @@ describe('operator QA regressions', () => {
     expect(tollParser).toContain("'transaction date'");
     expect(tollParser).toContain("'رقم اللوحة'");
     expect(tollParser).toContain("'المبلغ'");
-    expect(tollParser).toContain('parseGenericGrid(grid, \'Salik\')');
+    expect(tollParser).toContain("parseGenericGrid(grid, 'Salik')");
   });
 
   it('fails legacy XLS safely with actionable guidance rather than parsing it with vulnerable SheetJS', () => {
