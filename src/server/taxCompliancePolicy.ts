@@ -59,6 +59,9 @@ export function validateProfessionalValidation(value: TaxProfessionalValidation 
   if (value.validatorCapacity !== 'UAE_TAX_PROFESSIONAL') return 'Professional validator capacity is invalid.';
   if (!String(value.validatorName || '').trim()) return 'Professional validator name is required.';
   if (!String(value.scope || '').trim()) return 'Professional validation scope is required.';
+  if (!String(value.validationReference || '').trim() && !String(value.validationEvidenceDocumentId || '').trim()) {
+    return 'Professional validation must include a durable reference or evidence document.';
+  }
   if (!/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(String(value.validatedAt || ''))) return 'Professional validation date is required.';
   return null;
 }
