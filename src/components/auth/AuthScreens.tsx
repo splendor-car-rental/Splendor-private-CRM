@@ -7,7 +7,7 @@ import splendorLogoImage from '../../assets/splendor-logo.png';
 export const AuthLoadingScreen: React.FC = () => {
   const { t } = useLanguage();
   return (
-    <div className="min-h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center gap-4 text-zinc-400">
+    <div className="h-full min-h-0 bg-zinc-950 flex flex-col items-center justify-center gap-4 text-zinc-400">
       <SplendorLogo size="lg" />
       <div className="flex items-center gap-2 text-xs uppercase tracking-wider">
         <Loader2 className="w-4 h-4 animate-spin text-[#D4AF37]" />
@@ -54,13 +54,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, errorKey }) =
     <div
       dir={direction}
       data-testid="login-scroll-viewport"
-      className={`h-[100dvh] min-h-[100dvh] overflow-y-auto overscroll-y-contain bg-zinc-950 ${language === 'ar' ? 'font-arabic' : ''}`}
+      className={`h-full min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y bg-zinc-950 ${language === 'ar' ? 'font-arabic' : ''}`}
     >
-      {/* Separate scroll viewport from the centering shell: on short screens
-          the form starts at the top and remains reachable by wheel/touch;
-          on normal screens it is still vertically centered. */}
-      <div className="min-h-full w-full flex items-start sm:items-center justify-center p-4 py-6 sm:py-8">
-        <div className="w-full max-w-md my-auto">
+      <div className="w-full flex justify-center px-4 py-6 sm:py-10">
+        <div className="w-full max-w-md">
           <div className="flex flex-col items-center mb-6 sm:mb-8">
             <img
               src={splendorLogoImage}
@@ -113,8 +110,8 @@ interface AccessPendingScreenProps { email: string | null; onSignOut: () => void
 export const AccessPendingScreen: React.FC<AccessPendingScreenProps> = ({ email, onSignOut }) => {
   const { t, language, direction } = useLanguage();
   return (
-    <div dir={direction} className={`h-[100dvh] min-h-[100dvh] overflow-y-auto bg-zinc-950 ${language === 'ar' ? 'font-arabic' : ''}`}>
-      <div className="min-h-full flex items-center justify-center p-4 py-8">
+    <div dir={direction} className={`h-full min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y bg-zinc-950 ${language === 'ar' ? 'font-arabic' : ''}`}>
+      <div className="w-full flex justify-center p-4 py-8">
         <div className="w-full max-w-md bg-zinc-900/80 border border-zinc-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto"><AlertCircle className="w-6 h-6 text-amber-400" /></div>
           <h2 className="text-sm font-bold text-zinc-100">{t('authPendingTitle')}</h2>
