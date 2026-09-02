@@ -131,7 +131,7 @@ describe('Tax period lifecycle policy', () => {
     expect(validateIndependentReview({ ...underReview, blockingExceptionCount: 1 }, admin)).toContain('Blocking exceptions');
   });
 
-  it('requires external professional-validation evidence before closure', () => {
+  it('requires external professional-validation evidence and no blockers before closure', () => {
     const admin = { uid: 'admin-1', name: 'Admin', role: 'admin' as const };
     const ready: TaxPeriod = {
       ...period,
@@ -142,6 +142,7 @@ describe('Tax period lifecycle policy', () => {
       reviewStatus: 'passed'
     };
     expect(validateRecordPeriodProfessionalValidation(ready, admin, professionalValidation)).toBeNull();
+    expect(validateRecordPeriodProfessionalValidation({ ...ready, blockingExceptionCount: 1 }, admin, professionalValidation)).toContain('Blocking exceptions');
 
     const validated: TaxPeriod = {
       ...ready,
@@ -151,6 +152,7 @@ describe('Tax period lifecycle policy', () => {
     };
     expect(validateCloseTaxPeriod(validated, admin)).toBeNull();
     expect(validateCloseTaxPeriod({ ...validated, professionalValidation: undefined }, admin)).toContain('evidence is required');
+    expect(validateCloseTaxPeriod({ ...validated, blockingExceptionCount: 1 }, admin)).toContain('Blocking exceptions');
   });
 
   it('never treats a professionally validated or closed period as filed', () => {

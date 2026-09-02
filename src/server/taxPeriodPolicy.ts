@@ -93,6 +93,7 @@ export function validateRecordPeriodProfessionalValidation(
   if (!canTax(actor.role, 'tax.approve', actor.explicitTaxPermissions)) return 'Actor is not permitted to record professional validation for tax periods.';
   if (period.status !== 'ready_for_professional_review') return 'Tax period is not ready for professional review.';
   if (period.preparedBy === actor.uid) return 'Four-Eyes control prevents the preparer from recording professional validation for the same tax period.';
+  if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before professional validation can be recorded.';
   return validateProfessionalValidation(validation);
 }
 
@@ -100,6 +101,7 @@ export function validateCloseTaxPeriod(period: TaxPeriod, actor: TaxActor): stri
   if (!canTax(actor.role, 'tax.approve', actor.explicitTaxPermissions)) return 'Actor is not permitted to close tax periods.';
   if (period.status !== 'professionally_validated') return 'Only a professionally validated tax period can be closed.';
   if (!period.professionalValidation) return 'Professional validation evidence is required before a tax period can be closed.';
+  if (period.blockingExceptionCount > 0) return 'Blocking exceptions must be resolved before a tax period can be closed.';
   return null;
 }
 
