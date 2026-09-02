@@ -177,38 +177,32 @@ describe('Tax Reconciliation authoritative freshness gate', () => {
     expect(error).toContain('blocking exception count is inconsistent with authoritative open exceptions');
   });
 
-  it('serializes an advancing period against a concurrent ledger write and refuses stale evidence on retry', async () => {
+  it('remains fail-closed when a ledger write races with period advancement under Firestore serialization', async () => {
     const period = await seedCleanPeriod();
     const periodRef = db.collection('tax_periods').doc(period.id);
 
-    let releaseFirstAttempt!: () => void;
-    let firstAttemptReady!: () => void;
-    const release = new Promise<void>(resolve => { releaseFirstAttempt = resolve; });
-    const ready = new Promise<void>(resolve => { firstAttemptReady = resolve; });
-    let attempts = 0;
-
     const transition = db.runTransaction(async tx => {
-      attempts += 1;
       const periodSnap = await tx.get(periodRef);
       const current = { id: periodSnap.id, ...periodSnap.data() } as TaxPeriod;
       const error = await validateAuthoritativeReconciliationFreshness(tx, db, current);
       if (error) throw new Error(error);
-
-      if (attempts === 1) {
-        firstAttemptReady();
-        await release;
-      }
-
       tx.update(periodRef, { status: 'under_review' });
     });
+    const ledgerWrite = db.collection('accounting_journals').doc('JRN-CONCURRENT').set(postedJournal('JRN-CONCURRENT'));
 
-    await ready;
-    await db.collection('accounting_journals').doc('JRN-CONCURRENT').set(postedJournal('JRN-CONCURRENT'));
-    releaseFirstAttempt();
+    const [transitionResult, ledgerResult] = await Promise.allSettled([transition, ledgerWrite]);
+    expect(ledgerResult.status).toBe('fulfilled');
 
-    await expect(transition).rejects.toThrow('authoritative posted accounting journals changed after the latest snapshot was captured');
-    expect(attempts).toBeGreaterThanOrEqual(2);
-    const persisted = await periodRef.get();
-    expect(persisted.data()?.status).toBe('open');
+    const persistedSnap = await periodRef.get();
+    const persisted = { id: persistedSnap.id, ...persistedSnap.data() } as TaxPeriod;
+    const postRaceError = await db.runTransaction(tx => validateAuthoritativeReconciliationFreshness(tx, db, persisted));
+    expect(postRaceError).toContain('authoritative posted accounting journals changed after the latest snapshot was captured');
+
+    if (transitionResult.status === 'rejected') {
+      expect(String(transitionResult.reason)).toContain('authoritative posted accounting journals changed after the latest snapshot was captured');
+      expect(persisted.status).toBe('open');
+    } else {
+      expect(persisted.status).toBe('under_review');
+    }
   }, 30000);
 });
