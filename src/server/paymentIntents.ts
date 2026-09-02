@@ -6,8 +6,10 @@ import { fingerprintRequest, runIdempotentCreate, IdempotencyConflictError } fro
 import {
   getActiveGatewayAdapter, GatewayNotConfiguredError, type GatewayWebhookEvent
 } from './paymentGatewayAdapter';
-import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './payments';
+import { applyConfirmedPaymentRefund, PaymentError } from './payments';
 import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './deposits';
+import { recordAtomicAccountingPayment } from './safeAccountingPayment';
+import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
 import { recordLtoInstallmentPayment, LtoError, type LtoActor } from './leaseToOwn';
 import type {
   PaymentIntent, PaymentIntentPurpose, PaymentGatewayEvent, PaymentRefund, Invoice, LtoInstallment
@@ -15,27 +17,10 @@ import type {
 
 /**
  * Payment Gateway business logic (Production-Grade Payment & Settlement
- * Layer). Extends the existing Invoice/Payment/Deposit/LtoInstallment
- * lifecycle -- no parallel financial ledger:
- *
- *  - A PaymentIntent's `amount` is ALWAYS derived from the real linked
- *    entity's own outstanding balance (Invoice.balanceDue,
- *    LtoInstallment.remainingAmount) -- never accepted from the client.
- *    Only a `security_deposit` intent (which has no pre-existing entity to
- *    derive an amount from) takes an explicit amount.
- *  - A PaymentIntent's status ONLY ever advances in handleGatewayWebhook(),
- *    in response to a signature-verified webhook event -- never from the
- *    synchronous return of createPaymentIntent()/refundPaymentIntent(), and
- *    never from anything the frontend reports. This is the literal
- *    implementation of "the frontend's response is never success; only a
- *    trusted gateway webhook is."
- *  - The actual financial effect of a confirmed intent/refund is applied by
- *    calling straight into the SAME functions the manual (cash/bank
- *    transfer) finance-entry routes already use
- *    (createConfirmedPayment/createSecurityDeposit/refundOrReleaseDeposit/
- *    recordLtoInstallmentPayment) -- an online (gateway) payment and a
- *    manually recorded one become the exact same Payment/Deposit/
- *    LtoInstallment record, never two parallel systems.
+ * Layer). The browser can request an intent but can never declare success.
+ * Only a signature-verified gateway webhook can create the accounting effect.
+ * Confirmed invoice receipts use the same atomic double-entry accounting
+ * engine as staff receipts, with trusted verification stamped server-side.
  */
 
 const PAYMENT_INTENTS = 'payment_intents';
@@ -55,7 +40,7 @@ export interface CreatePaymentIntentInput {
   purpose: PaymentIntentPurpose;
   invoiceId?: string;
   ltoInstallmentId?: string;
-  /** Required (and only used) for `security_deposit` -- there is no pre-existing entity to derive an amount from. Ignored for invoice_payment/lto_installment: their amount always comes from the real linked record. */
+  /** Required only for a security_deposit hold. Invoice/LTO amounts are derived from authoritative records. */
   amount?: number;
   customerId?: string;
   customerName?: string;
@@ -70,25 +55,25 @@ interface ResolvedIntentLinkage {
   contractId?: string;
 }
 
-/** Never trusts a client-supplied amount for a purpose that has a real linked entity -- always re-derives it server-side from that entity's own current outstanding balance. */
 async function resolveIntentLinkage(input: CreatePaymentIntentInput): Promise<ResolvedIntentLinkage> {
   if (input.purpose === 'invoice_payment') {
     if (!input.invoiceId) throw new PaymentIntentError('invoiceId is required for an invoice_payment intent.');
     const snap = await admin.firestore().collection('invoices').doc(input.invoiceId).get();
     if (!snap.exists) throw new PaymentIntentError(`Invoice ${input.invoiceId} not found.`);
     const invoice = snap.data() as Invoice;
-    if (invoice.balanceDue <= 0) throw new PaymentIntentError('This invoice has no outstanding balance to pay.');
-    return { amount: invoice.balanceDue, customerId: invoice.customerId, customerName: invoice.customerName, contractId: invoice.contractId };
+    const balance = Number(invoice.balanceDue);
+    if (!Number.isFinite(balance) || balance <= 0) throw new PaymentIntentError('This invoice has no valid outstanding balance to pay.');
+    return { amount: balance, customerId: invoice.customerId, customerName: invoice.customerName, contractId: invoice.contractId };
   }
   if (input.purpose === 'lto_installment') {
     if (!input.ltoInstallmentId) throw new PaymentIntentError('ltoInstallmentId is required for an lto_installment intent.');
     const snap = await admin.firestore().collection('lto_installments').doc(input.ltoInstallmentId).get();
     if (!snap.exists) throw new PaymentIntentError(`Installment ${input.ltoInstallmentId} not found.`);
     const installment = snap.data() as LtoInstallment;
-    if (installment.remainingAmount <= 0) throw new PaymentIntentError('This installment has no remaining amount due.');
-    return { amount: installment.remainingAmount, customerId: installment.customerId, customerName: installment.customerName, contractId: installment.contractId };
+    const remaining = Number(installment.remainingAmount);
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new PaymentIntentError('This installment has no valid remaining amount due.');
+    return { amount: remaining, customerId: installment.customerId, customerName: installment.customerName, contractId: installment.contractId };
   }
-  // security_deposit -- no pre-existing entity; the amount is the deposit itself being requested.
   const amount = Number(input.amount);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new PaymentIntentError('A positive finite amount is required to place a security deposit hold.');
@@ -96,15 +81,6 @@ async function resolveIntentLinkage(input: CreatePaymentIntentInput): Promise<Re
   return { amount, customerId: input.customerId, customerName: input.customerName, contractId: input.contractId };
 }
 
-/**
- * Idempotency-Key protected: a double-click or network retry on "create a
- * checkout" must never open two separate PaymentIntents (and therefore two
- * separate gateway charge attempts) for the same invoice/installment/
- * deposit request. A replay with the same key returns the original
- * PaymentIntent instead of creating a second one; a reused key with a
- * genuinely different request body is refused (IdempotencyConflictError),
- * never silently applied to the wrong request.
- */
 export async function createPaymentIntent(
   input: CreatePaymentIntentInput,
   actor: { uid: string; name: string },
@@ -178,25 +154,24 @@ export async function getPaymentIntent(id: string): Promise<PaymentIntent | null
   return snap.exists ? (snap.data() as PaymentIntent) : null;
 }
 
-/**
- * Applies the real financial effect of a newly-succeeded PaymentIntent by
- * calling into the exact same functions a manually-recorded (cash/bank
- * transfer) finance entry already uses -- never a parallel effect.
- */
 async function applyConfirmedIntentEffect(intent: PaymentIntent, recordAudit: RecordAuditFn): Promise<void> {
   if (intent.purpose === 'invoice_payment') {
-    await createConfirmedPayment({
+    if (!intent.customerId || !intent.invoiceId) {
+      throw new PaymentIntentError(`Invoice PaymentIntent ${intent.id} is missing authoritative customer/invoice linkage.`);
+    }
+    await recordAtomicAccountingPayment({
       customerId: intent.customerId,
       customerName: intent.customerName,
       contractId: intent.contractId,
       invoiceId: intent.invoiceId,
       amount: intent.amount,
       method: 'online_link',
-      receivedById: 'system',
-      receivedByName: 'Payment Gateway (webhook-confirmed)',
-      notes: `Confirmed via ${intent.provider} gateway (${intent.providerIntentId}).`,
+      referenceNumber: intent.providerIntentId,
+      notes: `Signature-verified ${intent.provider} webhook for ${intent.providerIntentId}.`,
+      settlementAccountCode: ACCOUNTING_CONTROL_ACCOUNTS.cardClearing,
+      trustedVerification: true,
       gatewayPaymentIntentId: intent.id
-    }, intent.id, recordAudit); // the intent id IS the idempotency key -- a redelivered webhook can never double-credit
+    }, SYSTEM_ACTOR, `gateway-payment:${intent.id}`, recordAudit);
     return;
   }
 
@@ -209,10 +184,6 @@ async function applyConfirmedIntentEffect(intent: PaymentIntent, recordAudit: Re
     return;
   }
 
-  // security_deposit: a confirmed authorization becomes the real Deposit
-  // record, tagged as a gateway-backed hold. The intent id is the durable
-  // idempotency key, so concurrent/redelivered success events can never
-  // create two deposits for the same authorization.
   const deposit = await createSecurityDeposit({
     customerId: intent.customerId,
     customerName: intent.customerName,
@@ -228,11 +199,6 @@ async function applyConfirmedIntentEffect(intent: PaymentIntent, recordAudit: Re
   await updateDurable(PAYMENT_INTENTS, intent.id, { depositId: deposit.id, updatedAt: new Date().toISOString() });
 }
 
-/**
- * Applies the real financial reversal of a webhook-confirmed refund, by
- * calling into the same reversal logic the manual finance-entry refund
- * routes use.
- */
 async function applyConfirmedRefundEffect(refund: PaymentRefund, intent: PaymentIntent, recordAudit: RecordAuditFn): Promise<void> {
   if (intent.purpose === 'invoice_payment') {
     const snap = await admin.firestore().collection('payments').where('gatewayPaymentIntentId', '==', intent.id).get();
@@ -255,18 +221,9 @@ async function applyConfirmedRefundEffect(refund: PaymentRefund, intent: Payment
     return;
   }
 
-  // lto_installment refunds are a rare correction path (LTO's normal
-  // unwind mechanisms are Early Settlement/Termination, not raw refunds) --
-  // out of scope for this pass; fail loudly rather than silently no-op.
   throw new PaymentIntentError('Refunding an lto_installment PaymentIntent directly is not supported -- use LTO Early Settlement/Termination.');
 }
 
-/**
- * Processes one verified webhook delivery. Event-id logging is an audit/
- * replay layer; every monetary effect below also owns its own durable
- * idempotency key, so even concurrent semantically-equivalent deliveries
- * cannot double-apply money while the event log is racing to settle.
- */
 export async function handleGatewayWebhook(rawBody: Buffer, signatureHeader: string | undefined, recordAudit: RecordAuditFn): Promise<{ processed: boolean; reason?: string }> {
   const adapter = getActiveGatewayAdapter();
   if (!adapter.verifyWebhookSignature(rawBody, signatureHeader)) {
@@ -326,9 +283,7 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
     if (!event.providerRefundId) throw new PaymentIntentError('Refund webhook event is missing providerRefundId.');
     const found = await findRefundByProviderRefundId(event.providerRefundId);
     if (!found) throw new PaymentIntentError(`No PaymentRefund found for gateway refund ${event.providerRefundId}.`);
-    if (found.refund.status !== 'pending' && found.refund.status !== 'processing') {
-      return;
-    }
+    if (found.refund.status !== 'pending' && found.refund.status !== 'processing') return;
 
     if (event.type === 'refund.failed') {
       await updateDurable(PAYMENT_REFUNDS, found.id, { status: 'failed', failureReason: 'Gateway reported the refund failed.' });
@@ -349,9 +304,7 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
   if (!found) throw new PaymentIntentError(`No PaymentIntent found for gateway reference ${event.providerIntentId}.`);
   const intent = found.intent;
 
-  if (intent.status === 'failed' || intent.status === 'canceled') {
-    return;
-  }
+  if (intent.status === 'failed' || intent.status === 'canceled') return;
 
   if (event.type === 'payment_intent.failed') {
     await updateDurable(PAYMENT_INTENTS, found.id, { status: 'failed', failureReason: 'Gateway reported the payment failed.', updatedAt: now });
@@ -385,7 +338,7 @@ async function applyWebhookEvent(event: GatewayWebhookEvent, recordAudit: Record
 
 export interface RequestRefundInput {
   paymentIntentId: string;
-  amount?: number; // defaults to the remaining refundable amount
+  amount?: number;
   reason: string;
 }
 
@@ -403,16 +356,15 @@ export async function refundPaymentIntent(
     throw new PaymentIntentError(`Only a succeeded PaymentIntent can be refunded (current status: ${intent.status}).`);
   }
 
-  // Reserve against all non-failed refund requests, not just succeeded
-  // ones: two staff requests must never each assume the full original
-  // amount is still refundable while another refund is already processing.
   const priorRefunds = await admin.firestore().collection(PAYMENT_REFUNDS)
     .where('paymentIntentId', '==', intent.id).get();
   const alreadyReserved = priorRefunds.docs
     .map(doc => doc.data() as PaymentRefund)
     .filter(refund => refund.status !== 'failed')
     .reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
-  const remainingRefundable = Math.max(0, Number(intent.amount || 0) - alreadyReserved);
+  const originalAmount = Number(intent.amount);
+  if (!Number.isFinite(originalAmount) || originalAmount <= 0) throw new PaymentIntentError('PaymentIntent has an invalid original amount.');
+  const remainingRefundable = Math.max(0, originalAmount - alreadyReserved);
   const amount = input.amount !== undefined ? Number(input.amount) : remainingRefundable;
   if (!Number.isFinite(amount) || amount <= 0 || amount > remainingRefundable + 0.001) {
     throw new PaymentIntentError(`Refund amount must be positive and no more than the remaining refundable ${remainingRefundable} ${intent.currency}.`);
@@ -447,7 +399,6 @@ export async function refundPaymentIntent(
   return refund;
 }
 
-/** Voids a not-yet-captured security-deposit authorization hold -- the actual Deposit status only flips to 'refunded' once the corresponding webhook confirms the void. */
 export async function releaseSecurityDepositHold(
   paymentIntentId: string,
   actor: { uid: string; name: string },
