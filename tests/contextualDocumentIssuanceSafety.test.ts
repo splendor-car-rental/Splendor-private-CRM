@@ -23,12 +23,15 @@ describe('contextual document issuance safety', () => {
     expect(service).toContain('return readIssuedResult(kind, archiveId, existing.data())');
   });
 
-  it('consumes official numbering for derived customer documents only on issue', () => {
-    expect(service).toContain("['account_statement', 'payment_demand']");
+  it('consumes official numbering for derived customer documents only on issue and extends that issue-time rule to LPO', () => {
+    expect(service).toContain("['account_statement', 'payment_demand', 'lpo']");
     expect(service).toContain("'PREVIEW-STATEMENT'");
     expect(service).toContain("'PREVIEW-DEMAND'");
+    expect(service).toContain("'PREVIEW-LPO'");
+    expect(service).toContain("if (kind === 'lpo') return issueNextNumber('LPO')");
     expect(service).toContain('issueNextNumber(getCorporateDocumentMeta(kind).numbering)');
     expect(numbering).toContain("accountstatement: { prefix: 'STMT-', digits: 6 }");
+    expect(numbering).toContain("lpo: { prefix: 'LPO-SCR-', digits: 6 }");
   });
 
   it('retains a reserved serial across a failed attempt instead of minting another on retry', () => {
