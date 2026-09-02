@@ -13,20 +13,48 @@ describe('contract return workflow safety', () => {
     expect(service).toContain("damage?.liabilityStatus === 'pending_review'");
   });
 
-  it('requires authoritative financial closure before marking completed/available', () => {
-    expect(service).toContain("firestore.collection('invoices').where('contractId', '==', contract.id)");
-    expect(service).toContain("firestore.collection('charges').where('relatedContractId', '==', contract.id)");
-    expect(service).toContain('Contract cannot be closed until a final invoice exists.');
-    expect(service).toContain('still has an outstanding balance.');
-    expect(service).toContain('Approved charges still require settlement confirmation');
-    expect(service).toContain("status: 'completed'");
-    expect(service).toContain("status: 'available'");
+  it('reconstructs invoice settlement from posted accounting evidence instead of trusting balanceDue', () => {
+    expect(service).toContain("deterministicJournalId('Invoice', invoice.id, 'issue')");
+    expect(service).toContain("sourceType: 'Invoice', sourceId: invoice.id, sourceAction: 'issue'");
+    expect(service).toContain("payment.verificationStatus !== 'verified' && !trustedGateway");
+    expect(service).toContain("payment.accountingPostingStatus !== 'posted'");
+    expect(service).toContain("sourceType: 'Payment', sourceId: payment.id, sourceAction: 'receive'");
+    expect(service).toContain('Payment ${payment.id} allocations exceed its posted AR credit');
+    expect(service).toContain('according to posted accounting evidence');
+    expect(service).not.toContain('Number(invoice.balanceDue || 0) > 0.001');
   });
 
-  it('requires an explicit finance settlement reference instead of trusting browser totals', () => {
+  it('does not accept browser-selected charge ids as financial proof', () => {
+    expect(service).toContain('Charge ids supplied by the browser are not settlement evidence.');
+    expect(service).not.toContain('explicitlySettled.has');
+    expect(service).not.toContain("settledAt: now,\n        settledBy: actor.uid,\n        settledByName: actor.name,\n        settlementReference");
+  });
+
+  it('requires fully journal-backed deposit settlement for approved charges', () => {
+    expect(service).toContain("charge.accountingPostingStatus !== 'posted'");
+    expect(service).toContain('depositAppliedAmount');
+    expect(service).toContain('depositAllocations');
+    expect(service).toContain('!charge.deductedFromDepositId');
+    expect(service).toContain("sourceType: 'AdditionalCharge', sourceId: charge.id, sourceAction: 'approve'");
+    expect(service).toContain("sourceType: 'Deposit', sourceId: deposit.id, sourceAction: 'receive'");
+    expect(service).toContain('sourceActionPrefix: `apply:${charge.id}:`');
+    expect(service).toContain('does not support its recorded amount');
+  });
+
+  it('requires an explicit closure reference only as a memo, never as payment evidence', () => {
     expect(service).toContain('A settlementReference is required to close the contract.');
+    expect(service).toContain("policy: 'ledger_backed_v1'");
     expect(service).not.toContain('totalAdditionalCharges');
     expect(service).not.toContain('finalSettlementBalance');
+  });
+
+  it('releases vehicle only after all ledger validation and never shadow-settles charges in cache', () => {
+    const validationMarker = service.indexOf('// All reads and evidence validation are complete. Only now may the');
+    const availableWrite = service.indexOf("status: 'available'", validationMarker);
+    expect(validationMarker).toBeGreaterThan(-1);
+    expect(availableWrite).toBeGreaterThan(validationMarker);
+    expect(service).toContain("status: 'completed'");
+    expect(handler).not.toContain('Object.assign(charge as any');
   });
 
   it('intercepts both return phases at the production API boundary before legacy Express delegation', () => {
