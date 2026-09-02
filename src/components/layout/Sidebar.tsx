@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   LayoutDashboard, Users, UserPlus, Car, FileSpreadsheet,
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
@@ -41,6 +41,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
     leads, vehicles, contracts, bankTransactions, tollTransactions, tasks, showToast
   } = useCRM();
 
+  useEffect(() => {
+    if (!isMobileOpen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const previousHtmlOverflow = html.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = previousHtmlOverflow;
+      body.style.overflow = previousBodyOverflow;
+    };
+  }, [isMobileOpen]);
+
   const handleAvatarPick = () => avatarInputRef.current?.click();
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,11 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
     {
       title: language === 'ar' ? 'العمليات التنفيذية' : 'OPERATIONS',
       items: [
-        {
-          id: 'dashboard',
-          label: t('dashboard'),
-          icon: <LayoutDashboard className="w-4 h-4" />
-        },
+        { id: 'dashboard', label: t('dashboard'), icon: <LayoutDashboard className="w-4 h-4" /> },
         {
           id: 'operations-control-room',
           label: language === 'ar' ? 'غرفة العمليات المباشرة' : 'Operations Control Room',
@@ -101,11 +111,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           badge: language === 'ar' ? 'تتبع مباشر' : 'GPS Live',
           badgeVariant: 'emerald' as const
         },
-        {
-          id: 'customers',
-          label: t('customers'),
-          icon: <Users className="w-4 h-4" />
-        },
+        { id: 'customers', label: t('customers'), icon: <Users className="w-4 h-4" /> },
         {
           id: 'vip-tiers',
           label: language === 'ar' ? 'تصنيف العملاء المميزين' : 'VIP Loyalty Tiers',
@@ -130,16 +136,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
     {
       title: language === 'ar' ? 'الحجوزات والعقود' : 'RENTALS & DISPATCH',
       items: [
-        {
-          id: 'quotations',
-          label: t('quotations'),
-          icon: <FileSpreadsheet className="w-4 h-4" />
-        },
-        {
-          id: 'reservations',
-          label: t('reservations'),
-          icon: <CalendarCheck className="w-4 h-4" />
-        },
+        { id: 'quotations', label: t('quotations'), icon: <FileSpreadsheet className="w-4 h-4" /> },
+        { id: 'reservations', label: t('reservations'), icon: <CalendarCheck className="w-4 h-4" /> },
         {
           id: 'contracts',
           label: t('contracts'),
@@ -169,11 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
     {
       title: language === 'ar' ? 'الإدارة المالية' : 'FINANCIAL CONTROL',
       items: [
-        {
-          id: 'finance',
-          label: t('finance'),
-          icon: <Receipt className="w-4 h-4" />
-        },
+        { id: 'finance', label: t('finance'), icon: <Receipt className="w-4 h-4" /> },
         {
           id: 'tax-compliance',
           label: language === 'ar' ? 'الامتثال الضريبي' : 'Tax Compliance',
@@ -209,11 +203,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           badge: pendingTasksCount > 0 ? String(pendingTasksCount) : undefined,
           badgeVariant: 'zinc' as const
         },
-        {
-          id: 'procurement',
-          label: language === 'ar' ? 'المشتريات والموردون' : 'Procurement & Suppliers',
-          icon: <Truck className="w-4 h-4" />
-        },
+        { id: 'procurement', label: language === 'ar' ? 'المشتريات والموردون' : 'Procurement & Suppliers', icon: <Truck className="w-4 h-4" /> },
         {
           id: 'purchase-orders',
           label: language === 'ar' ? 'أوامر التوريد للشركات' : 'Purchase Orders (LPO)',
@@ -221,26 +211,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           badge: language === 'ar' ? 'أمر توريد' : 'B2B LPO',
           badgeVariant: 'gold' as const
         },
-        {
-          id: 'fleet-acquisition-roi',
-          label: language === 'ar' ? 'محاكي الاستثمار والعائد' : 'Fleet ROI Simulator',
-          icon: <Calculator className="w-4 h-4 text-emerald-400" />
-        },
-        {
-          id: 'security',
-          label: language === 'ar' ? 'الأمن والقائمة المحظورة' : 'Security & Blocklist',
-          icon: <ShieldAlert className="w-4 h-4" />
-        }
+        { id: 'fleet-acquisition-roi', label: language === 'ar' ? 'محاكي الاستثمار والعائد' : 'Fleet ROI Simulator', icon: <Calculator className="w-4 h-4 text-emerald-400" /> },
+        { id: 'security', label: language === 'ar' ? 'الأمن والقائمة المحظورة' : 'Security & Blocklist', icon: <ShieldAlert className="w-4 h-4" /> }
       ]
     },
     {
       title: language === 'ar' ? 'الذكاء والتحكم' : 'INTELLIGENCE & SYSTEM',
       items: [
-        {
-          id: 'notification-center',
-          label: language === 'ar' ? 'مركز الإشعارات وواتساب' : 'Notification & WhatsApp Center',
-          icon: <BellRing className="w-4 h-4 text-[#D4AF37]" />
-        },
+        { id: 'notification-center', label: language === 'ar' ? 'مركز الإشعارات وواتساب' : 'Notification & WhatsApp Center', icon: <BellRing className="w-4 h-4 text-[#D4AF37]" /> },
         {
           id: 'ai-studio',
           label: language === 'ar' ? 'استوديو الذكاء الاصطناعي' : 'AI Intelligence',
@@ -255,11 +233,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           badge: language === 'ar' ? '12/12 ناجح' : '12/12 Passed',
           badgeVariant: 'emerald' as const
         },
-        {
-          id: 'settings',
-          label: t('settings'),
-          icon: <Settings className="w-4 h-4" />
-        }
+        { id: 'settings', label: t('settings'), icon: <Settings className="w-4 h-4" /> }
       ]
     }
   ];
@@ -272,18 +246,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
     <>
       {isMobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm md:hidden"
+          data-testid="sidebar-backdrop"
+          className="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm md:hidden touch-none"
           onClick={onMobileClose}
         />
       )}
 
       <aside
-        className={`fixed inset-y-0 start-0 z-50 w-72 bg-zinc-950 border-e border-zinc-800/80 flex flex-col h-screen shrink-0 select-none
+        data-testid="sidebar-shell"
+        className={`fixed inset-y-0 start-0 z-50 w-72 bg-zinc-950 border-e border-zinc-800/80 flex flex-col h-[100dvh] max-h-[100dvh] min-h-0 overflow-hidden shrink-0 select-none
           transition-transform duration-200 ease-out
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full'}
-          md:sticky md:top-0 md:h-screen md:translate-x-0 md:rtl:translate-x-0 md:transform-none md:z-30 md:w-64 lg:w-72`}
+          md:sticky md:top-0 md:h-dvh md:max-h-dvh md:translate-x-0 md:rtl:translate-x-0 md:transform-none md:z-30 md:w-64 lg:w-72`}
       >
-        <div className="p-4 sm:p-5 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-950">
+        <div className="shrink-0 p-4 sm:p-5 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-950">
           <div className="flex items-center gap-3 min-w-0">
             <SplendorLogo size={42} className="shrink-0 hover:opacity-90 transition-opacity cursor-pointer" />
             <div className="min-w-0">
@@ -304,7 +280,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 custom-scrollbar">
+        <div
+          data-testid="sidebar-scroll-viewport"
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y px-3 py-3 space-y-4 custom-scrollbar"
+        >
           {sections.map((section, sIdx) => {
             const visibleItems = section.items.filter(item => canAccessView(currentUser.role, item.id));
             if (visibleItems.length === 0) return null;
@@ -332,11 +311,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
                         </span>
                         <span className="truncate">{item.label}</span>
                       </div>
-                      {item.badge && (
-                        <Badge variant={item.badgeVariant} size="sm">
-                          {item.badge}
-                        </Badge>
-                      )}
+                      {item.badge && <Badge variant={item.badgeVariant} size="sm">{item.badge}</Badge>}
                     </button>
                   );
                 })}
@@ -345,7 +320,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           })}
         </div>
 
-        <div className="p-3.5 border-t border-zinc-800/80 bg-zinc-900/30">
+        <div className="shrink-0 p-3.5 border-t border-zinc-800/80 bg-zinc-900/30">
           <div className="flex items-center gap-2.5 mb-2.5">
             <button
               type="button"
@@ -364,13 +339,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
                 <Camera className="w-3 h-3 text-white" />
               </span>
             </button>
-            <input
-              ref={avatarInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleAvatarChange}
-            />
+            <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-zinc-200 truncate">
                 {language === 'ar' && currentUser.nameAr ? currentUser.nameAr : (currentUser.name || currentUser.email || (language === 'ar' ? 'مستخدم' : 'User'))}
