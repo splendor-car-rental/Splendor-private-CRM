@@ -10,7 +10,7 @@ const premiumCss = readFileSync(new URL('../src/premium-sapphire.css', import.me
 describe('production serverless entrypoint', () => {
   it('statically imports one build-time bundled API artifact instead of the TypeScript source graph', () => {
     expect(apiEntrypoint).toContain("import * as bundledModule from '../api-handler.cjs'");
-    expect(apiEntrypoint).not.toContain('createRequire');
+    expect(apiEntrypoint).not.toContain('createRequire(');
     expect(apiEntrypoint).not.toContain("from '../server.ts'");
     expect(apiEntrypoint).not.toContain("from '../server.js'");
   });

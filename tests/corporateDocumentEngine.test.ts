@@ -23,11 +23,11 @@ describe('corporate document engine', () => {
     expect(html).not.toContain('Prestige Beyond Limits');
   });
 
-  it('places the approved red stamp at the existing company signature anchor', () => {
+  it('places the approved static SVG stamp at the existing company signature anchor', () => {
     const stamped = applyCorporateStamp('<div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div>');
     expect(stamped).toContain('corporate-stamp-anchor');
-    expect(stamped).toContain('data:image/webp;base64,');
-    expect(stamped).not.toContain('data:image/svg+xml;base64,');
+    expect(stamped).toContain('data:image/svg+xml;base64,');
+    expect(stamped).not.toContain('data:image/webp;base64,');
     expect(stamped).not.toContain('____________________');
   });
 
