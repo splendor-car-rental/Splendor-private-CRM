@@ -223,43 +223,39 @@ async function handleProductionContractHandover(req: Request, res: Response, con
 
   let evidence: ReturnType<typeof validateHandoverEvidence>;
   try {
-    evidence = validateHandoverEvidence((req.body || {}).handoverData || {});
+    evidence = validateHandoverEvidence((req.body || {}).handoverData || req.body || {});
   } catch (error) {
     if (error instanceof HandoverGateError) return res.status(error.status).json({ error: error.message });
     throw error;
   }
 
-  const db = admin.firestore();
+  const firestore = admin.firestore();
   const now = new Date().toISOString();
   let outcome: { contract: any; vehicle: any; customer: any };
 
   try {
-    outcome = await db.runTransaction(async tx => {
-      const contractRef = db.collection('contracts').doc(contractId);
+    outcome = await firestore.runTransaction(async tx => {
+      const contractRef = firestore.collection('contracts').doc(contractId);
       const contractSnap = await tx.get(contractRef);
       if (!contractSnap.exists) throw new HandoverGateError(404, 'Contract not found.');
       const contract = { id: contractSnap.id, ...(contractSnap.data() as any) };
 
       if (contract.status !== 'signed') {
-        throw new HandoverGateError(409, `Handover requires a signed contract; current status is ${contract.status || 'unknown'}.`);
+        throw new HandoverGateError(409, `Handover blocked: contract must be signed; current status is ${contract.status || 'unknown'}.`);
       }
       if (contract.termsAccepted !== true) {
-        throw new HandoverGateError(409, 'Handover blocked: contract terms have not been explicitly accepted.');
-      }
-      if (!contract.customerId || !contract.vehicleId) {
-        throw new HandoverGateError(409, 'Handover blocked: contract is missing its customer or vehicle binding.');
+        throw new HandoverGateError(409, 'Handover blocked: contract terms have not been accepted.');
       }
 
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-      const depositQuery = db.collection('deposits').where('contractId', '==', contract.id);
-      const vehicleContractsQuery = db.collection('contracts').where('vehicleId', '==', contract.vehicleId);
-
-      const [customerSnap, vehicleSnap, depositSnap, vehicleContractsSnap] = await Promise.all([
+      const customerRef = firestore.collection('customers').doc(contract.customerId);
+      const vehicleRef = firestore.collection('vehicles').doc(contract.vehicleId);
+      const depositsQuery = firestore.collection('deposits').where('customerId', '==', contract.customerId);
+      const conflictsQuery = firestore.collection('contracts').where('vehicleId', '==', contract.vehicleId);
+      const [customerSnap, vehicleSnap, depositsSnap, conflictsSnap] = await Promise.all([
         tx.get(customerRef),
         tx.get(vehicleRef),
-        tx.get(depositQuery),
-        tx.get(vehicleContractsQuery)
+        tx.get(depositsQuery),
+        tx.get(conflictsQuery)
       ]);
 
       if (!customerSnap.exists) throw new HandoverGateError(409, 'Handover blocked: customer record not found.');
@@ -269,24 +265,14 @@ async function handleProductionContractHandover(req: Request, res: Response, con
 
       validateKycForHandover(customer, contract, now);
 
-      const requiredDeposit = Math.max(0, Number(contract.depositAmount || 0));
-      const heldDepositBalance = depositSnap.docs.reduce((sum, doc) => {
-        const deposit = doc.data() as any;
-        if (!['held', 'collected', 'partially_refunded'].includes(String(deposit.status || ''))) return sum;
-        return sum + Math.max(0, Number(deposit.balance ?? deposit.amount ?? 0));
-      }, 0);
-      if (heldDepositBalance + 0.001 < requiredDeposit) {
-        throw new HandoverGateError(409, `Handover blocked: verified held deposit is ${heldDepositBalance} AED but ${requiredDeposit} AED is required.`);
-      }
-
       if (vehicle.lifecycleStatus && vehicle.lifecycleStatus !== 'ACTIVE') {
-        throw new HandoverGateError(409, `Handover blocked: vehicle lifecycle status is ${vehicle.lifecycleStatus}.`);
+        throw new HandoverGateError(409, `Handover blocked: vehicle lifecycle is ${vehicle.lifecycleStatus}.`);
       }
       if (['maintenance', 'unavailable'].includes(String(vehicle.status || ''))) {
         throw new HandoverGateError(409, `Handover blocked: vehicle is ${vehicle.status}.`);
       }
-      if (vehicle.status === 'rented' && vehicle.currentContractId !== contract.id) {
-        throw new HandoverGateError(409, 'Handover blocked: vehicle is already rented under another contract.');
+      if (vehicle.currentContractId && vehicle.currentContractId !== contract.id) {
+        throw new HandoverGateError(409, 'Handover blocked: vehicle is assigned to another contract.');
       }
 
       const start = new Date(contract.startDateTime).getTime();
@@ -294,58 +280,51 @@ async function handleProductionContractHandover(req: Request, res: Response, con
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
         throw new HandoverGateError(409, 'Handover blocked: contract rental window is invalid.');
       }
-      for (const doc of vehicleContractsSnap.docs) {
+      for (const doc of conflictsSnap.docs) {
         if (doc.id === contract.id) continue;
         const other = doc.data() as any;
-        if (!['approved', 'signed', 'active'].includes(String(other.status || ''))) continue;
+        if (!['signed', 'active'].includes(String(other.status || ''))) continue;
         const otherStart = new Date(other.startDateTime).getTime();
         const otherEnd = new Date(other.endDateTime).getTime();
         if (Number.isFinite(otherStart) && Number.isFinite(otherEnd) && start <= otherEnd && end >= otherStart) {
-          throw new HandoverGateError(409, `Handover blocked: vehicle has a conflicting ${other.status} contract (${doc.id}).`);
+          throw new HandoverGateError(409, `Handover blocked by overlapping ${other.status} contract ${doc.id}.`);
         }
       }
 
-      const handover = {
-        ...((req.body || {}).handoverData || {}),
+      const requiredDeposit = Math.max(0, Number(contract.depositAmount ?? vehicle.minDeposit ?? 0));
+      let heldDeposit = 0;
+      const qualifyingDeposits: string[] = [];
+      for (const doc of depositsSnap.docs) {
+        const deposit = doc.data() as any;
+        const state = String(deposit.status || '');
+        if (!['held', 'collected', 'partially_refunded'].includes(state)) continue;
+        if (deposit.contractId && deposit.contractId !== contract.id) continue;
+        if (!deposit.contractId && deposit.reservationId && contract.reservationId && deposit.reservationId !== contract.reservationId) continue;
+        const balance = Number(deposit.balance || 0);
+        if (!Number.isFinite(balance) || balance <= 0) continue;
+        heldDeposit += balance;
+        qualifyingDeposits.push(doc.id);
+      }
+      if (heldDeposit + 0.005 < requiredDeposit) {
+        throw new HandoverGateError(409, `Handover blocked: required deposit is ${requiredDeposit.toFixed(2)} AED but only ${heldDeposit.toFixed(2)} AED is actually held.`);
+      }
+
+      const handoverDetails = {
+        ...((req.body || {}).handoverData || req.body || {}),
+        ...evidence,
         handoverDateTime: now,
-        employeeId: actor.uid,
-        employeeName: actor.name,
-        startMileage: evidence.startMileage,
-        fuelLevelPercent: evidence.fuelLevelPercent,
-        customerSignatureUrl: evidence.customerSignatureUrl,
-        employeeSignatureUrl: evidence.employeeSignatureUrl
+        performedBy: actor.uid,
+        performedByName: actor.name,
+        verifiedDepositIds: qualifyingDeposits,
+        verifiedDepositAmount: heldDeposit
       };
-      const updatedContract = {
-        ...contract,
-        status: 'active',
-        handover,
-        depositStatus: requiredDeposit > 0 ? 'held' : contract.depositStatus,
-        updatedAt: now
-      };
-      const updatedVehicle = {
-        ...vehicle,
-        status: 'rented',
-        currentCustomerId: contract.customerId,
-        currentContractId: contract.id,
-        mileage: evidence.startMileage,
-        updatedAt: now
-      };
-      const updatedCustomer = {
-        ...customer,
-        totalRentals: Number(customer.totalRentals || 0) + 1,
-        updatedAt: now
-      };
+      const updatedContract = { ...contract, status: 'active', handover: handoverDetails, updatedAt: now };
+      const updatedVehicle = { ...vehicle, status: 'rented', currentCustomerId: contract.customerId, currentContractId: contract.id, mileage: evidence.startMileage, updatedAt: now };
+      const updatedCustomer = { ...customer, totalRentals: Number(customer.totalRentals || 0) + 1, updatedAt: now };
 
-      tx.set(contractRef, updatedContract, { merge: true });
-      tx.set(vehicleRef, {
-        status: 'rented',
-        currentCustomerId: contract.customerId,
-        currentContractId: contract.id,
-        mileage: evidence.startMileage,
-        updatedAt: now
-      }, { merge: true });
+      tx.set(contractRef, { status: 'active', handover: handoverDetails, updatedAt: now }, { merge: true });
+      tx.set(vehicleRef, { status: 'rented', currentCustomerId: contract.customerId, currentContractId: contract.id, mileage: evidence.startMileage, updatedAt: now }, { merge: true });
       tx.set(customerRef, { totalRentals: updatedCustomer.totalRentals, updatedAt: now }, { merge: true });
-
       return { contract: updatedContract, vehicle: updatedVehicle, customer: updatedCustomer };
     });
   } catch (error) {
@@ -423,21 +402,12 @@ async function handleProductionContractReturnSettlement(req: Request, res: Respo
       settledChargeIds: Array.isArray(body.settledChargeIds) ? body.settledChargeIds.map(String) : []
     }, actor);
     applyLifecycleResultToCache(outcome);
-    for (const chargeId of outcome.settledChargeIds) {
-      const charge = globalStore.charges.find(c => c.id === chargeId);
-      if (charge) Object.assign(charge as any, {
-        settledAt: outcome.contract.returnWorkflow?.settledAt,
-        settledBy: actor.uid,
-        settledByName: actor.name,
-        settlementReference: outcome.contract.returnWorkflow?.settlementReference
-      });
-    }
     await persistContractLifecycleAudit(
       actor,
       outcome.contract.id,
       'Return settlement pending',
       'Status: Completed; vehicle released to Available',
-      `Finance/management return settlement approved under reference ${outcome.contract.returnWorkflow?.settlementReference}`
+      `Ledger-backed finance/management return settlement verified under closure reference ${outcome.contract.returnWorkflow?.settlementReference}`
     );
     return res.status(200).json({ success: true, contract: outcome.contract, settledChargeIds: outcome.settledChargeIds });
   } catch (error) {
