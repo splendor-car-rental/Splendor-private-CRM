@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
 import admin from 'firebase-admin';
 import { canTax } from '../config/taxCompliance';
