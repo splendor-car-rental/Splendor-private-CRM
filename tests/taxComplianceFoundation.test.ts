@@ -41,6 +41,14 @@ const proposedRule: TaxRuleVersion = {
   updatedAt: '2026-09-02T00:00:00.000Z'
 };
 
+const professionalValidation = {
+  validatorName: 'External UAE Tax Professional',
+  validatorCapacity: 'UAE_TAX_PROFESSIONAL' as const,
+  validationReference: 'TP-VALIDATION-2026-001',
+  scope: 'Validated the exact rule version and stated effective period.',
+  validatedAt: '2026-09-02T10:00:00.000Z'
+};
+
 describe('Tax Compliance foundation', () => {
   it('keeps tax permissions independent from broad finance access', () => {
     expect(canTax('finance', 'tax.view')).toBe(true);
@@ -69,49 +77,35 @@ describe('Tax Compliance foundation', () => {
     expect(validateOfficialSourceAuthority('FTA', 'https://mof.gov.ae/foo')).toContain('does not match');
   });
 
-  it('blocks acceptance until independent professional validation exists', () => {
+  it('blocks acceptance until independent professional validation and durable evidence exist', () => {
     const actor = { uid: 'ceo-1', name: 'CEO', role: 'ceo' as const };
     expect(validateRuleAcceptance(proposedRule, [source], actor)).toContain('Professional UAE tax validation');
 
-    const validatedRule: TaxRuleVersion = {
+    const noEvidenceRule: TaxRuleVersion = {
       ...proposedRule,
       professionalValidation: {
-        validatorName: 'External UAE Tax Professional',
-        validatorCapacity: 'UAE_TAX_PROFESSIONAL',
-        scope: 'Validated the exact rule version and stated effective period.',
-        validatedAt: '2026-09-02T10:00:00.000Z'
+        ...professionalValidation,
+        validationReference: undefined
       }
     };
+    expect(validateRuleAcceptance(noEvidenceRule, [source], actor)).toContain('durable reference');
+
+    const validatedRule: TaxRuleVersion = { ...proposedRule, professionalValidation };
     expect(validateRuleAcceptance(validatedRule, [source], actor)).toBeNull();
   });
 
   it('enforces Four-Eyes on rule acceptance and period review', () => {
     const sameActor = { uid: 'finance-1', name: 'Finance One', role: 'ceo' as const };
-    const validatedRule: TaxRuleVersion = {
-      ...proposedRule,
-      professionalValidation: {
-        validatorName: 'External UAE Tax Professional',
-        validatorCapacity: 'UAE_TAX_PROFESSIONAL',
-        scope: 'Validated exact rule.',
-        validatedAt: '2026-09-02T10:00:00.000Z'
-      }
-    };
+    const validatedRule: TaxRuleVersion = { ...proposedRule, professionalValidation };
     expect(validateRuleAcceptance(validatedRule, [source], sameActor)).toContain('Four-Eyes');
     expect(canPrepareAndReviewSameTaxPeriod('user-1', 'user-1')).toBe(false);
     expect(canPrepareAndReviewSameTaxPeriod('user-1', 'user-2')).toBe(true);
   });
 
-  it('rejects retired or non-official sources even with professional validation', () => {
+  it('requires a validated official source and rejects retired or non-official evidence', () => {
     const actor = { uid: 'ceo-1', name: 'CEO', role: 'ceo' as const };
-    const validatedRule: TaxRuleVersion = {
-      ...proposedRule,
-      professionalValidation: {
-        validatorName: 'External UAE Tax Professional',
-        validatorCapacity: 'UAE_TAX_PROFESSIONAL',
-        scope: 'Validated exact rule.',
-        validatedAt: '2026-09-02T10:00:00.000Z'
-      }
-    };
+    const validatedRule: TaxRuleVersion = { ...proposedRule, professionalValidation };
+    expect(validateRuleAcceptance(validatedRule, [{ ...source, status: 'proposed' }], actor)).toContain('must be validated');
     expect(validateRuleAcceptance(validatedRule, [{ ...source, status: 'superseded' }], actor)).toContain('retired');
     expect(validateRuleAcceptance(validatedRule, [{ ...source, officialUrl: 'https://example.com/source' }], actor)).toContain('approved UAE government host');
   });
