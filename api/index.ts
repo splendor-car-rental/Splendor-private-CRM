@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import admin from 'firebase-admin';
 
 /**
  * Vercel compiles this function only after the project build has completed.
@@ -10,6 +11,7 @@ import type { Request, Response } from 'express';
 import bundledHandler from './api-handler.mjs';
 
 const dispatch = bundledHandler as (req: Request, res: Response) => unknown;
+const ACTIVE_STAFF_ROLES = new Set(['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance']);
 
 /**
  * Vercel invokes the generated function with a Node-style request before the
@@ -42,11 +44,54 @@ function ensureRequestPath(req: Request): Request {
   return target;
 }
 
+function usesExternalOrPublicTrustBoundary(path: string): boolean {
+  return path === '/api/health' ||
+    path.startsWith('/api/public/') ||
+    path === '/api/notifications/run-checks' ||
+    path === '/api/whatsapp/webhook' ||
+    path === '/api/payment-gateway/webhook';
+}
+
+/**
+ * Primary production boundary for normal staff APIs. Firebase token validity
+ * alone is insufficient: the current Firestore user profile must exist,
+ * carry an allowed role, and explicitly have status === "active". A missing
+ * legacy status fails closed. Externally authenticated webhooks/cron/public
+ * routes retain their separate trust boundaries.
+ */
+async function enforceActiveStaffBoundary(req: Request, res: Response): Promise<boolean> {
+  const path = String(req.path || '/');
+  if (usesExternalOrPublicTrustBoundary(path)) return true;
+  if (admin.apps.length === 0) {
+    res.status(503).json({ error: 'Server authentication is not configured safely.' });
+    return false;
+  }
+  const authorization = String(req.headers.authorization || '');
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!token) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return false;
+  }
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
+    const data = profile.exists ? profile.data() as any : null;
+    if (!data || String(data.status || '') !== 'active' || !ACTIVE_STAFF_ROLES.has(String(data.role || ''))) {
+      res.status(403).json({ error: 'An active authorized Splendor staff account is required.' });
+      return false;
+    }
+    return true;
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired session.' });
+    return false;
+  }
+}
+
 /**
  * Owner policy: Splendor is not extending customer credit to individuals or
- * corporate accounts.  Keep the legacy fields at zero for backward schema
+ * corporate accounts. Keep the legacy fields at zero for backward schema
  * compatibility, but never accept a browser-supplied credit limit, exposure,
- * payment term or credit-hold state.  Vercel has already materialized JSON
+ * payment term or credit-hold state. Vercel has already materialized JSON
  * request bodies at this boundary; the Express route remains the durable
  * writer and audit owner.
  */
@@ -67,8 +112,9 @@ function enforceOwnerBusinessPolicies(req: Request): Request {
   return req;
 }
 
-const handler = (req: Request, res: Response) => {
+const handler = async (req: Request, res: Response) => {
   const normalized = ensureRequestPath(req);
+  if (!await enforceActiveStaffBoundary(normalized, res)) return;
   return dispatch(enforceOwnerBusinessPolicies(normalized), res);
 };
 
