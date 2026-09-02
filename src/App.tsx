@@ -43,6 +43,7 @@ import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiV
 import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
 import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
 import { CorporateAccountsDirectoryView } from './components/views/CorporateAccountsDirectoryView';
+import { TaxComplianceView } from './components/views/TaxComplianceView';
 
 const PROCUREMENT_VIEWS = new Set(['procurement', 'purchase-orders', 'lpo', 'supply-orders']);
 
@@ -78,6 +79,8 @@ const MainLayout: React.FC = () => {
       case 'reservations': return <ReservationsView />;
       case 'contracts': return <ContractsOpsView />;
       case 'finance': return <FinanceControlCenterView />;
+      case 'tax-compliance':
+      case 'tax': return <TaxComplianceView />;
       case 'reconciliation':
       case 'bank-reconciliation': return <BankReconciliationView />;
       case 'tolls': return <TollsParkingView />;
