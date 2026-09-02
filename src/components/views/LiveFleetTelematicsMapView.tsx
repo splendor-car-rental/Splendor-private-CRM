@@ -162,7 +162,7 @@ export const LiveFleetTelematicsMapView: React.FC = () => {
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-zinc-400">
                       <span><MapPin className="me-1 inline h-3 w-3" />{position.latitude.toFixed(6)}, {position.longitude.toFixed(6)}</span>
                       {position.speedKmh !== undefined && <span><Gauge className="me-1 inline h-3 w-3" />{position.speedKmh} km/h</span>}
-                      <span>{formatDateTime(position.timestamp, language)}</span>
+                      <span>{formatDateTime(position.timestamp)}</span>
                     </div>
                   </button>
                 ))}
@@ -199,6 +199,7 @@ export const LiveFleetTelematicsMapView: React.FC = () => {
 function Metric({ icon, label, value, warning = false }: { icon: React.ReactNode; label: string; value: string; warning?: boolean }) {
   return <div className={`rounded-2xl border p-4 ${warning ? 'border-amber-900/50 bg-amber-950/15' : 'border-zinc-800 bg-zinc-950'}`}><div className="flex items-center gap-2 text-[11px] text-zinc-500">{icon}{label}</div><div className="mt-2 text-2xl font-black text-zinc-100">{value}</div></div>;
 }
+
 function Data({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3"><div className="text-[10px] text-zinc-500">{label}</div><div className="mt-1 break-all font-mono text-zinc-200">{value}</div></div>;
 }
