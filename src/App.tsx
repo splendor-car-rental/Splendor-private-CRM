@@ -114,18 +114,22 @@ const MainLayout: React.FC = () => {
   };
 
   return (
-    <div className={`min-h-screen bg-zinc-950 text-zinc-100 flex font-sans ${language === 'ar' ? 'font-arabic' : ''}`}>
+    <div className={`h-dvh min-h-0 overflow-hidden bg-zinc-950 text-zinc-100 flex font-sans ${language === 'ar' ? 'font-arabic' : ''}`}>
       <ArabicInterfaceGuard />
       <DashboardPersonalizationGuard />
       <CustomerIntakePortal />
       <ToastContainer />
       <Sidebar isMobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
         <PWAInstallBanner />
         <Header onMenuClick={() => setMobileSidebarOpen(true)} />
 
-        <main data-active-view={activeView} className="flex-1 w-full min-w-0 p-4 sm:p-6 lg:p-8">
+        <main
+          data-active-view={activeView}
+          data-testid="main-scroll-viewport"
+          className="flex-1 min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y p-4 sm:p-6 lg:p-8"
+        >
           <ErrorBoundary key={activeView}>
             <ContextualDocumentActions />
             {PROCUREMENT_VIEWS.has(activeView) && <ProcurementLpoRail />}
