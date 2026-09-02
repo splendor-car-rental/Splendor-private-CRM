@@ -44,7 +44,7 @@ describe('Tax Compliance runtime boundary', () => {
   });
 
   it('renders a separate workspace that cannot represent itself as filing-ready', () => {
-    expect(app).toContain("case 'tax-compliance': return <TaxComplianceView />");
+    expect(app).toMatch(/case\s+['"]tax-compliance['"]:\s*(?:case\s+['"]tax['"]:\s*)?return\s+<TaxComplianceView\s*\/>/s);
     expect(sidebar).toContain("id: 'tax-compliance'");
     expect(view).toContain('NOT READY FOR FILING');
     expect(view).toContain('Professional validation');
