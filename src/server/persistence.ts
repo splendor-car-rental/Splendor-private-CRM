@@ -32,6 +32,20 @@ function requireDb() {
 }
 
 /**
+ * Fleet vehicles are operational/financial master records. Physical deletion
+ * is permanently prohibited through shared persistence helpers. Retirement is
+ * represented by the audited Vehicle lifecycle (ARCHIVED/SOLD/etc.), never by
+ * removing the Firestore master document. This guard is intentionally below
+ * individual routes so a future route cannot accidentally reintroduce the
+ * destructive primitive.
+ */
+function assertDeleteAllowed(collection: string): void {
+  if (collection === 'vehicles') {
+    throw new PersistenceError('Physical deletion of Fleet vehicle master records is prohibited. Use the audited archive lifecycle.');
+  }
+}
+
+/**
  * Creates a new document with a guaranteed-fresh id (normally issued by
  * issueNextNumber() just before this call). Uses Firestore's `.create()`
  * rather than `.set()`, so if an id somehow collides with an existing
@@ -57,8 +71,9 @@ export async function updateDurable(collection: string, id: string, data: Record
   }
 }
 
-/** Deletes a document. */
+/** Deletes a document, except immutable/master-data collections such as Fleet. */
 export async function deleteDurable(collection: string, id: string): Promise<void> {
+  assertDeleteAllowed(collection);
   try {
     await requireDb().collection(collection).doc(id).delete();
   } catch (err) {
@@ -79,6 +94,9 @@ export type BatchOp =
 
 export async function runDurableBatch(ops: BatchOp[]): Promise<void> {
   if (ops.length === 0) return;
+  for (const op of ops) {
+    if (op.type === 'delete') assertDeleteAllowed(op.collection);
+  }
   const db = requireDb();
   try {
     const batch = db.batch();
