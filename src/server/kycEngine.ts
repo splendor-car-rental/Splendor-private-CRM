@@ -157,7 +157,7 @@ export class KycEngine {
       }
     }
 
-    return { hasExpired, expiredCategories, expiringWithin30Days };
+    return { hasExpired: expiredCategories.length > 0, expiredCategories, expiringWithin30Days };
   }
 
   // ----------------------------------------------------
