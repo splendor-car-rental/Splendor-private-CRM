@@ -13,9 +13,33 @@ const JOURNAL_COLLECTION = 'accounting_journals';
 const PERIOD_COLLECTION = 'accounting_periods';
 const AUDIT_RECOVERY_COLLECTION = 'accounting_audit_recovery';
 
+interface ChargeDepositAllocation {
+  depositId: string;
+  amount: number;
+  appliedAt: string;
+  appliedBy: string;
+  appliedByName: string;
+  journalId: string;
+}
+
+type AccountingCharge = AdditionalCharge & {
+  accountingJournalId?: string;
+  accountingPostingStatus?: string;
+  /** Cumulative amount actually settled from one or more deposits. */
+  depositAppliedAmount?: number;
+  /** Immutable append-only evidence for each deposit allocation. */
+  depositAllocations?: ChargeDepositAllocation[];
+};
+
 function db() {
   if (admin.apps.length === 0) throw new Error('Firebase Admin is not initialized.');
   return admin.firestore();
+}
+
+function assertFiniteMoney(value: unknown, label: string): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) throw new Error(`${label} must be a finite number.`);
+  return money(numeric);
 }
 
 function journalId(sourceType: string, sourceId: string, sourceAction: string): string {
@@ -83,12 +107,14 @@ export async function postApprovedChargeAtomic(
 
   const chargeSnap = await chargeRef.get();
   if (!chargeSnap.exists) throw new Error('Charge not found.');
-  const charge = chargeSnap.data() as AdditionalCharge & { accountingJournalId?: string; accountingPostingStatus?: string };
+  const charge = chargeSnap.data() as AccountingCharge;
   if (charge.approvalStatus !== 'approved') throw new Error('Charge must be approved before accounting posting.');
-  const total = money(charge.totalAmount);
-  const net = money(charge.amount);
-  const vat = money(charge.vatAmount);
-  if (total <= 0 || Math.abs(money(net + vat) - total) > 0.01) throw new Error('Charge amount/VAT/total values are inconsistent.');
+  const total = assertFiniteMoney(charge.totalAmount, 'Charge total');
+  const net = assertFiniteMoney(charge.amount, 'Charge amount');
+  const vat = assertFiniteMoney(charge.vatAmount, 'Charge VAT');
+  if (total <= 0 || net < 0 || vat < 0 || Math.abs(money(net + vat) - total) > 0.01) {
+    throw new Error('Charge amount/VAT/total values are inconsistent.');
+  }
 
   const issueDate = new Date(charge.timestamp).toISOString().slice(0, 10);
   const sourceAction = 'approve';
@@ -118,12 +144,13 @@ export async function postApprovedChargeAtomic(
     if (customerRef) reads.push(tx.get(customerRef));
     const [freshChargeSnap, periodSnap, existingJournal, customerSnap] = await Promise.all(reads);
     if (!freshChargeSnap.exists) throw new Error('Charge not found.');
-    const freshCharge = freshChargeSnap.data() as AdditionalCharge & { accountingJournalId?: string; accountingPostingStatus?: string };
+    const freshCharge = freshChargeSnap.data() as AccountingCharge;
     if (freshCharge.approvalStatus !== 'approved') throw new Error('Charge must be approved before accounting posting.');
+    if (!customerRef || !customerSnap?.exists) throw new Error('Charge customer not found.');
 
-    const freshTotal = money(freshCharge.totalAmount);
-    const freshNet = money(freshCharge.amount);
-    const freshVat = money(freshCharge.vatAmount);
+    const freshTotal = assertFiniteMoney(freshCharge.totalAmount, 'Charge total');
+    const freshNet = assertFiniteMoney(freshCharge.amount, 'Charge amount');
+    const freshVat = assertFiniteMoney(freshCharge.vatAmount, 'Charge VAT');
     const financialFieldsChanged = freshTotal !== total
       || freshNet !== net
       || freshVat !== vat
@@ -142,7 +169,7 @@ export async function postApprovedChargeAtomic(
       const now = new Date().toISOString();
       tx.set(chargeRef, { accountingPostingStatus: 'posted', accountingJournalId: journal.id, updatedAt: now }, { merge: true });
       replayed = true;
-      resultingCharge = { ...freshCharge, accountingPostingStatus: 'posted', accountingJournalId: journal.id } as typeof charge;
+      resultingCharge = { ...freshCharge, accountingPostingStatus: 'posted', accountingJournalId: journal.id };
       return;
     }
     if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${journal.periodKey} is closed.`);
@@ -150,11 +177,10 @@ export async function postApprovedChargeAtomic(
     const now = new Date().toISOString();
     tx.create(journalRef, journal as unknown as FirebaseFirestore.DocumentData);
     tx.set(chargeRef, { accountingPostingStatus: 'posted', accountingJournalId: journal.id, updatedAt: now }, { merge: true });
-    if (customerRef && customerSnap?.exists) {
-      const currentOutstanding = Number((customerSnap.data() as any).outstandingBalance || 0);
-      tx.set(customerRef, { outstandingBalance: money(currentOutstanding + total), updatedAt: now }, { merge: true });
-    }
-    resultingCharge = { ...freshCharge, accountingPostingStatus: 'posted', accountingJournalId: journal.id } as typeof charge;
+    const currentOutstanding = Number((customerSnap.data() as any).outstandingBalance || 0);
+    if (!Number.isFinite(currentOutstanding)) throw new Error('Customer outstanding balance is invalid and requires accounting review.');
+    tx.set(customerRef, { outstandingBalance: money(currentOutstanding + total), updatedAt: now }, { merge: true });
+    resultingCharge = { ...freshCharge, accountingPostingStatus: 'posted', accountingJournalId: journal.id };
   });
 
   if (!replayed) {
@@ -180,7 +206,7 @@ export async function applyDepositToApprovedChargeAtomic(
   recordAudit: RecordAuditFn
 ): Promise<{ deposit: Deposit; charge: AdditionalCharge; journal: JournalEntry; replayed: boolean }> {
   if (!idempotencyKey) throw new Error('Idempotency-Key is required for deposit application.');
-  const amount = money(input.amount);
+  const amount = assertFiniteMoney(input.amount, 'Deposit application amount');
   if (amount <= 0) throw new Error('Deposit application amount must be greater than zero.');
   if (!input.chargeId) throw new Error('chargeId is required.');
 
@@ -216,55 +242,89 @@ export async function applyDepositToApprovedChargeAtomic(
     async tx => {
       const periodRef = firestore.collection(PERIOD_COLLECTION).doc(journal.periodKey);
       const journalRef = firestore.collection(JOURNAL_COLLECTION).doc(journal.id);
-      const depositSnap = await tx.get(depositRef);
-      const chargeSnap = await tx.get(chargeRef);
+      const [depositSnap, chargeSnap, periodSnap, existingJournal] = await Promise.all([
+        tx.get(depositRef), tx.get(chargeRef), tx.get(periodRef), tx.get(journalRef)
+      ]);
       if (!depositSnap.exists) throw new Error('Deposit not found.');
       if (!chargeSnap.exists) throw new Error('Charge not found.');
       const deposit = depositSnap.data() as Deposit & { holdType?: string; accountingPostingStatus?: string; accountingJournalId?: string };
-      const charge = chargeSnap.data() as AdditionalCharge & { accountingPostingStatus?: string; accountingJournalId?: string };
+      const charge = chargeSnap.data() as AccountingCharge;
       const customerRef = deposit.customerId ? firestore.collection('customers').doc(deposit.customerId) : null;
-      const [customerSnap, periodSnap, existingJournal] = await Promise.all([
-        customerRef ? tx.get(customerRef) : Promise.resolve(null),
-        tx.get(periodRef),
-        tx.get(journalRef)
-      ]);
+      const customerSnap = customerRef ? await tx.get(customerRef) : null;
 
+      // All reads must happen before writes. Validation below is deliberately
+      // exhaustive because this operation moves money between two control
+      // accounts and is also used as contract-close settlement evidence.
+      if (!customerRef || !customerSnap?.exists) throw new Error('Deposit customer not found.');
       if (deposit.holdType === 'gateway_authorization') throw new Error('An uncaptured gateway authorization cannot be applied as accounting cash. Capture/settle it through the gateway lifecycle first.');
       if (deposit.accountingPostingStatus !== 'posted' || !deposit.accountingJournalId) throw new Error('Deposit receipt must be posted to accounting before it can be applied.');
-      if (amount > money(deposit.balance) + 0.005) throw new Error('Apply amount exceeds held deposit balance.');
+      if (!['held', 'partially_refunded'].includes(String(deposit.status || ''))) throw new Error(`Deposit cannot be applied in status ${deposit.status || 'unknown'}.`);
+      const depositBalance = assertFiniteMoney(deposit.balance, 'Held deposit balance');
+      if (depositBalance <= 0) throw new Error('Deposit has no held balance available to apply.');
+      if (amount > depositBalance + 0.005) throw new Error('Apply amount exceeds held deposit balance.');
       if (charge.customerId !== deposit.customerId) throw new Error('Charge does not belong to this deposit customer.');
+      if (deposit.contractId && charge.relatedContractId !== deposit.contractId) {
+        throw new Error('A contract-bound deposit can only settle charges from the same contract.');
+      }
       if (charge.approvalStatus !== 'approved') throw new Error('Charge must be approved before deposit application.');
       if (charge.accountingPostingStatus !== 'posted' || !charge.accountingJournalId) throw new Error('Charge must be posted to accounting before deposit application.');
-      if (charge.deductedFromDepositId) throw new Error('Charge has already been deducted from a deposit.');
-      if (amount > money(charge.totalAmount) + 0.005) throw new Error('Apply amount exceeds the approved charge total.');
+      if (charge.deductedFromDepositId) throw new Error('Charge has already been fully settled from deposit funds.');
+      const chargeTotal = assertFiniteMoney(charge.totalAmount, 'Approved charge total');
+      const previouslyApplied = assertFiniteMoney(charge.depositAppliedAmount || 0, 'Previously applied deposit amount');
+      const chargeRemaining = money(chargeTotal - previouslyApplied);
+      if (chargeRemaining <= 0.005) throw new Error('Charge is already fully settled from deposit funds.');
+      if (amount > chargeRemaining + 0.005) throw new Error('Apply amount exceeds the remaining approved charge balance.');
       if (existingJournal.exists) throw new Error('Duplicate deposit-application journal detected.');
       if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${journal.periodKey} is closed.`);
 
       const updatedDeposit = {
         ...deposit,
         appliedAmount: money((deposit.appliedAmount || 0) + amount),
-        balance: money(deposit.balance - amount),
+        balance: money(depositBalance - amount),
         appliedReason: input.reason || `${charge.type}: ${charge.description}`,
-        status: money(deposit.balance - amount) <= 0.005 ? 'applied' : 'held',
+        status: money(depositBalance - amount) <= 0.005 ? 'applied' : 'held',
         updatedAt: now
       } as Deposit;
-      const updatedCharge = { ...charge, deductedFromDepositId: deposit.id, updatedAt: now } as AdditionalCharge;
+      const nextApplied = money(previouslyApplied + amount);
+      const fullySettled = nextApplied + 0.005 >= chargeTotal;
+      const allocation: ChargeDepositAllocation = {
+        depositId: deposit.id,
+        amount,
+        appliedAt: now,
+        appliedBy: actor.uid,
+        appliedByName: actor.name,
+        journalId: journal.id
+      };
+      const updatedCharge: AccountingCharge = {
+        ...charge,
+        depositAppliedAmount: nextApplied,
+        depositAllocations: [...(Array.isArray(charge.depositAllocations) ? charge.depositAllocations : []), allocation],
+        ...(fullySettled ? { deductedFromDepositId: deposit.id } : {}),
+        updatedAt: now
+      };
 
       tx.set(depositRef, updatedDeposit as unknown as FirebaseFirestore.DocumentData, { merge: true });
-      tx.set(chargeRef, { deductedFromDepositId: deposit.id, updatedAt: now }, { merge: true });
+      tx.set(chargeRef, {
+        depositAppliedAmount: nextApplied,
+        depositAllocations: updatedCharge.depositAllocations,
+        ...(fullySettled ? { deductedFromDepositId: deposit.id } : {}),
+        updatedAt: now
+      }, { merge: true });
       tx.create(journalRef, {
         ...journal,
-        lines: journal.lines.map(line => ({ ...line, dimensions: { customerId: deposit.customerId, contractId: deposit.contractId, reservationId: deposit.reservationId } }))
+        lines: journal.lines.map(line => ({ ...line, dimensions: { customerId: deposit.customerId, contractId: deposit.contractId || charge.relatedContractId, reservationId: deposit.reservationId } }))
       } as unknown as FirebaseFirestore.DocumentData);
-      if (customerRef && customerSnap?.exists) {
-        const customer = customerSnap.data() as any;
-        tx.set(customerRef, {
-          securityDepositsHeld: Math.max(0, money(Number(customer.securityDepositsHeld || 0) - amount)),
-          outstandingBalance: Math.max(0, money(Number(customer.outstandingBalance || 0) - amount)),
-          updatedAt: now
-        }, { merge: true });
-      }
-      return { deposit: updatedDeposit, charge: updatedCharge, journal };
+
+      const customer = customerSnap.data() as any;
+      const held = Number(customer.securityDepositsHeld || 0);
+      const outstanding = Number(customer.outstandingBalance || 0);
+      if (!Number.isFinite(held) || !Number.isFinite(outstanding)) throw new Error('Customer financial balances are invalid and require accounting review.');
+      tx.set(customerRef, {
+        securityDepositsHeld: Math.max(0, money(held - amount)),
+        outstandingBalance: Math.max(0, money(outstanding - amount)),
+        updatedAt: now
+      }, { merge: true });
+      return { deposit: updatedDeposit, charge: updatedCharge as AdditionalCharge, journal };
     },
     requestFingerprint
   );
@@ -273,16 +333,17 @@ export async function applyDepositToApprovedChargeAtomic(
     const depositIndex = globalStore.deposits.findIndex(item => item.id === depositId);
     if (depositIndex >= 0) globalStore.deposits[depositIndex] = outcome.result.deposit as any;
     const chargeIndex = globalStore.charges.findIndex(item => item.id === input.chargeId);
-    if (chargeIndex >= 0) globalStore.charges[chargeIndex] = { ...globalStore.charges[chargeIndex], deductedFromDepositId: depositId } as any;
+    if (chargeIndex >= 0) Object.assign(globalStore.charges[chargeIndex] as any, outcome.result.charge);
     const customer = globalStore.customers.find(item => item.id === outcome.result.deposit.customerId);
     if (customer) {
       customer.securityDepositsHeld = Math.max(0, money((customer.securityDepositsHeld || 0) - amount));
       customer.outstandingBalance = Math.max(0, money((customer.outstandingBalance || 0) - amount));
     }
+    const chargeState = outcome.result.charge as AccountingCharge;
     await persistAuditRecovery(recordAudit, {
       userId: actor.uid, userName: actor.name, userRole: actor.role,
       entityType: 'Deposit', entityId: depositId, action: 'update',
-      newValue: `Applied ${amount.toFixed(2)} AED of deposit ${depositId} to approved charge ${input.chargeId}; journal ${journal.id}.`,
+      newValue: `Applied ${amount.toFixed(2)} AED of deposit ${depositId} to approved charge ${input.chargeId}; cumulative deposit settlement ${money(chargeState.depositAppliedAmount || 0).toFixed(2)} / ${money(chargeState.totalAmount).toFixed(2)} AED; journal ${journal.id}.`,
       reason: input.reason || 'Approved charge settlement from held security deposit'
     }, `DepositApply_${journal.id}`);
   }
@@ -298,7 +359,7 @@ export async function refundManualDepositAtomic(
   recordAudit: RecordAuditFn
 ): Promise<{ deposit: Deposit; journal: JournalEntry; replayed: boolean }> {
   if (!idempotencyKey) throw new Error('Idempotency-Key is required for deposit refunds.');
-  const amount = money(input.amount);
+  const amount = assertFiniteMoney(input.amount, 'Refund amount');
   if (amount <= 0) throw new Error('Refund amount must be greater than zero.');
   const accounts = await getEffectiveChartOfAccounts();
   const firestore = db();
@@ -345,14 +406,18 @@ export async function refundManualDepositAtomic(
         tx.get(periodRef),
         tx.get(journalRef)
       ]);
+      if (!customerRef || !customerSnap?.exists) throw new Error('Deposit customer not found.');
       if (deposit.holdType === 'gateway_authorization') throw new Error('Gateway authorization holds cannot use the manual refund route.');
       if (deposit.accountingPostingStatus !== 'posted' || !deposit.accountingJournalId) throw new Error('Deposit receipt must be posted to accounting before refund.');
-      if (amount > money(deposit.balance) + 0.005) throw new Error('Refund amount exceeds held deposit balance.');
+      if (!['held', 'partially_refunded'].includes(String(deposit.status || ''))) throw new Error(`Deposit cannot be refunded in status ${deposit.status || 'unknown'}.`);
+      const heldBalance = assertFiniteMoney(deposit.balance, 'Held deposit balance');
+      if (heldBalance <= 0) throw new Error('Deposit has no refundable held balance.');
+      if (amount > heldBalance + 0.005) throw new Error('Refund amount exceeds held deposit balance.');
       if (existingJournal.exists) throw new Error('Duplicate deposit-refund journal detected.');
       if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${journal.periodKey} is closed.`);
 
       const now = new Date().toISOString();
-      const balance = money(deposit.balance - amount);
+      const balance = money(heldBalance - amount);
       const updatedDeposit = {
         ...deposit,
         refundedAmount: money((deposit.refundedAmount || 0) + amount),
@@ -363,10 +428,10 @@ export async function refundManualDepositAtomic(
       } as Deposit;
       tx.set(depositRef, updatedDeposit as unknown as FirebaseFirestore.DocumentData, { merge: true });
       tx.create(journalRef, journal as unknown as FirebaseFirestore.DocumentData);
-      if (customerRef && customerSnap?.exists) {
-        const held = Number((customerSnap.data() as any).securityDepositsHeld || 0);
-        tx.set(customerRef, { securityDepositsHeld: Math.max(0, money(held - amount)), updatedAt: now }, { merge: true });
-      }
+
+      const held = Number((customerSnap.data() as any).securityDepositsHeld || 0);
+      if (!Number.isFinite(held)) throw new Error('Customer held-deposit balance is invalid and requires accounting review.');
+      tx.set(customerRef, { securityDepositsHeld: Math.max(0, money(held - amount)), updatedAt: now }, { merge: true });
       return { deposit: updatedDeposit, journal };
     },
     requestFingerprint
