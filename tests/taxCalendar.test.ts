@@ -47,6 +47,11 @@ describe('Tax Calendar foundation', () => {
     expect(deriveTaxCalendarReminders([missingSourceVersion], new Date('2026-10-29T08:00:00.000Z'))).toEqual([]);
   });
 
+  it('fails closed for an impossible persisted deadline date', () => {
+    const invalidDeadline = { ...basePeriod, filingDeadline: '2026-02-31' } as TaxPeriod;
+    expect(deriveTaxCalendarReminders([invalidDeadline], new Date('2026-03-05T08:00:00.000Z'))).toEqual([]);
+  });
+
   it('does not equate Closed with Filed', () => {
     const closed: TaxPeriod = { ...basePeriod, status: 'closed', governanceReadiness: 'CLOSED' };
     const reminders = deriveTaxCalendarReminders([closed], new Date('2026-10-29T08:00:00.000Z'));

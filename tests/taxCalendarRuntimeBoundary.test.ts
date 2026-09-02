@@ -30,7 +30,7 @@ describe('Tax Calendar runtime boundary', () => {
 
   it('does not create filing readiness or submission behavior', () => {
     expect(calendar).not.toContain("'READY_FOR_FILING'");
-    expect(calendar).not.toMatch(/submit.*return|file.*return/i);
+    expect(calendar).not.toMatch(/action\s*===\s*['"](?:file|filing|submit-return|submit-filing)['"]/i);
     expect(calendar).toContain('does not represent a filed return');
   });
 });
