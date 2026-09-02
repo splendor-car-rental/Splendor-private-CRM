@@ -32,6 +32,13 @@ function ensureTaxFirebaseAdmin(res: Response): boolean {
 export default async function safeTaxComplianceHandler(req: Request, res: Response) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   if (!ensureTaxFirebaseAdmin(res)) return;
+
+  const resource = String(req.query.resource || 'summary').trim();
+  if (resource === 'periods') {
+    const { default: periodHandler } = await import('../src/server/taxPeriodApi.js');
+    return periodHandler(req, res);
+  }
+
   const { default: handler } = await import('./tax-compliance.js');
   return handler(req, res);
 }
