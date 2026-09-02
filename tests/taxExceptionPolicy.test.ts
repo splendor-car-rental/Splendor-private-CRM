@@ -4,37 +4,37 @@ import type { TaxBlockingException } from '../src/tax/exceptionTypes';
 import type { TaxPeriod } from '../src/tax/types';
 
 const period: TaxPeriod = {
-  id: 'TAXPERIOD-VAT-2026Q3',
+  id: 'TAXPERIOD-VAT-SYNTHETIC-TEST',
   domain: 'VAT',
-  periodStart: '2026-07-01',
-  periodEnd: '2026-09-30',
-  filingDeadline: '2026-10-28',
+  periodStart: '2099-01-01',
+  periodEnd: '2099-01-31',
+  filingDeadline: '2099-02-15',
   deadlineBasis: 'OFFICIAL_SOURCE',
-  deadlineSourceId: 'SRC-1',
-  deadlineSourceVersionUpdatedAt: '2026-09-01T00:00:00.000Z',
-  taxProfileVersionUpdatedAt: '2026-09-01T00:00:00.000Z',
+  deadlineSourceId: 'SRC-SYNTHETIC-TEST',
+  deadlineSourceVersionUpdatedAt: '2099-01-01T00:00:00.000Z',
+  taxProfileVersionUpdatedAt: '2099-01-01T00:00:00.000Z',
   status: 'open',
   ruleVersionIds: [],
   blockingExceptionCount: 1,
   governanceReadiness: 'IN_PREPARATION',
-  createdBy: 'finance-1',
-  createdByName: 'Finance',
-  createdAt: '2026-09-02T00:00:00.000Z',
-  updatedAt: '2026-09-02T00:00:00.000Z'
+  createdBy: 'finance-test',
+  createdByName: 'Finance Test',
+  createdAt: '2099-01-02T00:00:00.000Z',
+  updatedAt: '2099-01-02T00:00:00.000Z'
 };
 
 const exception: TaxBlockingException = {
-  id: 'EX-1',
+  id: 'EX-SYNTHETIC-1',
   periodId: period.id,
   domain: 'VAT',
   category: 'MISSING_EVIDENCE',
-  title: 'Evidence gap',
-  description: 'Required evidence has not yet been attached.',
+  title: 'Synthetic evidence gap',
+  description: 'Synthetic test evidence has not yet been attached.',
   status: 'open',
-  openedBy: 'finance-1',
-  openedByName: 'Finance',
-  openedAt: '2026-09-02T01:00:00.000Z',
-  updatedAt: '2026-09-02T01:00:00.000Z'
+  openedBy: 'finance-test',
+  openedByName: 'Finance Test',
+  openedAt: '2099-01-02T01:00:00.000Z',
+  updatedAt: '2099-01-02T01:00:00.000Z'
 };
 
 describe('Tax Blocking Exception policy', () => {
@@ -50,14 +50,14 @@ describe('Tax Blocking Exception policy', () => {
   });
 
   it('requires independent resolver and durable resolution evidence', () => {
-    const reviewer = { uid: 'admin-1', name: 'Admin', role: 'admin' as const };
-    expect(validateResolveBlockingException(period, exception, reviewer, 'Verified correction.', 'LEDGER-REF-1')).toBeNull();
-    expect(validateResolveBlockingException(period, exception, { uid: 'finance-1', name: 'Finance', role: 'admin' }, 'Verified correction.', 'LEDGER-REF-1')).toContain('Four-Eyes');
-    expect(validateResolveBlockingException(period, exception, reviewer, 'Verified correction.')).toContain('Durable resolution evidence');
+    const reviewer = { uid: 'admin-test', name: 'Admin Test', role: 'admin' as const };
+    expect(validateResolveBlockingException(period, exception, reviewer, 'Verified synthetic correction.', 'LEDGER-SYNTHETIC-REF-1')).toBeNull();
+    expect(validateResolveBlockingException(period, exception, { uid: 'finance-test', name: 'Finance Test', role: 'admin' }, 'Verified synthetic correction.', 'LEDGER-SYNTHETIC-REF-1')).toContain('Four-Eyes');
+    expect(validateResolveBlockingException(period, exception, reviewer, 'Verified synthetic correction.')).toContain('Durable resolution evidence');
   });
 
   it('rejects repeated resolution', () => {
-    const reviewer = { uid: 'admin-1', name: 'Admin', role: 'admin' as const };
-    expect(validateResolveBlockingException(period, { ...exception, status: 'resolved' }, reviewer, 'Verified correction.', 'LEDGER-REF-1')).toContain('Only an open');
+    const reviewer = { uid: 'admin-test', name: 'Admin Test', role: 'admin' as const };
+    expect(validateResolveBlockingException(period, { ...exception, status: 'resolved' }, reviewer, 'Verified synthetic correction.', 'LEDGER-SYNTHETIC-REF-1')).toContain('Only an open');
   });
 });
