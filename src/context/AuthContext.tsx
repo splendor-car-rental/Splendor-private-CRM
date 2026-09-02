@@ -8,7 +8,7 @@ import {
   browserSessionPersistence,
   type User as FirebaseUser
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
+import { doc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { User, UserRole } from '../types';
 import { AuthLoadingScreen, LoginScreen, AccessPendingScreen } from '../components/auth/AuthScreens';
@@ -18,51 +18,11 @@ interface AuthContextType {
   currentUser: User;
   hasPermission: (permission: 'read' | 'create' | 'edit' | 'delete' | 'approve' | 'export') => boolean;
   logout: () => Promise<void>;
-  /** Read-only directory of provisioned staff accounts (for admin/settings screens). */
   staffDirectory: User[];
-  /** Updates the signed-in user's own profile fields (e.g. their avatar photo). */
   updateMyProfile: (data: Partial<Pick<User, 'avatar' | 'name' | 'nameAr' | 'phone'>>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-/**
- * One-time bootstrap allowlist: the first time one of these emails signs in
- * with Firebase Authentication, their Firestore `users/{uid}` profile is
- * created automatically from this seed data. Any email NOT in this list that
- * successfully authenticates gets NO profile and NO access until an
- * administrator creates their `users/{uid}` document (see Settings).
- *
- * This replaces the previous "switch role" simulator, which let anyone
- * viewing the app become CEO/Admin with a single click and no login.
- */
-const SEED_STAFF: Record<string, Omit<User, 'id' | 'status'>> = {
-  'ceo@splendor-rental.ae': {
-    name: 'Ahmed Morsy', nameAr: 'أحمد مرسي', email: 'ceo@splendor-rental.ae',
-    role: 'ceo', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    phone: '+971 50 111 2233', branch: 'Dubai Downtown Flagship'
-  },
-  'operations@splendor-rental.ae': {
-    name: 'Tariq Al-Mansoor', nameAr: 'طارق المنصور', email: 'operations@splendor-rental.ae',
-    role: 'operations', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    phone: '+971 52 444 5566', branch: 'Dubai Downtown Flagship'
-  },
-  'elena.r@splendor-rental.ae': {
-    name: 'Elena Rostova', nameAr: 'إيلينا روستوفا', email: 'elena.r@splendor-rental.ae',
-    role: 'sales', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    phone: '+971 55 777 8899', branch: 'Palm Jumeirah Executive Suite'
-  },
-  'faisal.h@splendor-rental.ae': {
-    name: 'Faisal Al-Hashimi', nameAr: 'فيصل الهاشمي', email: 'faisal.h@splendor-rental.ae',
-    role: 'finance', avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80',
-    phone: '+971 54 999 0011', branch: 'Dubai Downtown Flagship'
-  },
-  'khalid.b@splendor-rental.ae': {
-    name: 'Khalid Ben-Zayed', nameAr: 'خالد بن زايد', email: 'khalid.b@splendor-rental.ae',
-    role: 'fleet', avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&auto=format&fit=crop&q=80',
-    phone: '+971 50 333 4455', branch: 'Dubai International Airport VIP Terminal'
-  }
-};
 
 function mapAuthErrorToKey(code: string | undefined): string {
   switch (code) {
@@ -88,7 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let profileUnsubscribe: (() => void) | null = null;
 
-    const authUnsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+    const authUnsubscribe = onAuthStateChanged(auth, (fbUser) => {
       setFirebaseUser(fbUser);
 
       if (profileUnsubscribe) {
@@ -102,21 +62,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      // Provisioning is server-authoritative. A valid Firebase identity alone
+      // never creates a CRM staff profile in the browser and never grants a
+      // role. The authenticated user may only observe their existing profile.
       const profileRef = doc(db, 'users', fbUser.uid);
-
-      try {
-        const snap = await getDoc(profileRef);
-        if (!snap.exists()) {
-          const seed = fbUser.email ? SEED_STAFF[fbUser.email.toLowerCase()] : undefined;
-          if (seed) {
-            const newProfile: Omit<User, 'id'> = { ...seed, status: 'active' };
-            await setDoc(profileRef, newProfile, { merge: true });
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to bootstrap user profile:', error);
-      }
-
       profileUnsubscribe = onSnapshot(
         profileRef,
         (snap) => {
@@ -138,7 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    if (!firebaseUser) {
+    if (!firebaseUser || profile?.status !== 'active') {
       setStaffDirectory([]);
       return;
     }
@@ -150,7 +99,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (error) => console.warn('Failed to subscribe to staff directory:', error)
     );
     return () => unsubscribe();
-  }, [firebaseUser]);
+  }, [firebaseUser, profile?.status]);
 
   const login = useCallback(async (email: string, password: string, rememberMe: boolean) => {
     setAuthErrorKey(null);
@@ -169,15 +118,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateMyProfile = useCallback(
     async (data: Partial<Pick<User, 'avatar' | 'name' | 'nameAr' | 'phone'>>) => {
-      if (!firebaseUser) return;
+      if (!firebaseUser || profile?.status !== 'active') return;
       await updateDoc(doc(db, 'users', firebaseUser.uid), data as Record<string, any>);
     },
-    [firebaseUser]
+    [firebaseUser, profile?.status]
   );
 
   const hasPermission = useCallback(
     (permission: 'read' | 'create' | 'edit' | 'delete' | 'approve' | 'export'): boolean => {
-      if (!profile) return false;
+      if (!profile || profile.status !== 'active') return false;
       if (profile.role === 'ceo' || profile.role === 'admin') return true;
       if (permission === 'read') return true;
       if (permission === 'approve') return profile.role === 'finance';
@@ -196,7 +145,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return <LoginScreen onLogin={login} errorKey={authErrorKey} />;
   }
 
-  if (!profile) {
+  if (!profile || profile.status !== 'active') {
     return <AccessPendingScreen email={firebaseUser.email} onSignOut={logout} />;
   }
 
