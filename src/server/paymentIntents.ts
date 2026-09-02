@@ -6,9 +6,10 @@ import { fingerprintRequest, runIdempotentCreate, IdempotencyConflictError } fro
 import {
   getActiveGatewayAdapter, GatewayNotConfiguredError, type GatewayWebhookEvent
 } from './paymentGatewayAdapter';
-import { applyConfirmedPaymentRefund, PaymentError } from './payments';
+import { PaymentError } from './payments';
 import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './deposits';
 import { recordAtomicAccountingPayment } from './safeAccountingPayment';
+import { applyGatewayAccountingPaymentRefund } from './safeAccountingPaymentRefund';
 import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
 import { recordLtoInstallmentPayment, LtoError, type LtoActor } from './leaseToOwn';
 import type {
@@ -204,7 +205,7 @@ async function applyConfirmedRefundEffect(refund: PaymentRefund, intent: Payment
     const snap = await admin.firestore().collection('payments').where('gatewayPaymentIntentId', '==', intent.id).get();
     const paymentDoc = snap.docs[0];
     if (!paymentDoc) throw new PaymentIntentError(`No Payment record found for intent ${intent.id} to reverse.`);
-    await applyConfirmedPaymentRefund(paymentDoc.id, refund.amount, refund.id, recordAudit);
+    await applyGatewayAccountingPaymentRefund(paymentDoc.id, refund.amount, refund.id, SYSTEM_ACTOR, recordAudit);
     return;
   }
 
