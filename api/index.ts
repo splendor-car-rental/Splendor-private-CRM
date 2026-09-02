@@ -18,9 +18,6 @@ const dispatch = bundledHandler as (req: Request, res: Response) => unknown;
  * checks before delegating to the Express app. On Vercel those checks used to
  * call `.match()`/`.startsWith()` on an undefined `req.path`, crashing every
  * API request with HTTP 500.
- *
- * Normalize only the pathname here. The original URL/query/body/headers stay
- * untouched and Express still receives the same request object afterwards.
  */
 function ensureRequestPath(req: Request): Request {
   const target = req as Request & { path?: string; originalUrl?: string };
@@ -45,6 +42,34 @@ function ensureRequestPath(req: Request): Request {
   return target;
 }
 
-const handler = (req: Request, res: Response) => dispatch(ensureRequestPath(req), res);
+/**
+ * Owner policy: Splendor is not extending customer credit to individuals or
+ * corporate accounts.  Keep the legacy fields at zero for backward schema
+ * compatibility, but never accept a browser-supplied credit limit, exposure,
+ * payment term or credit-hold state.  Vercel has already materialized JSON
+ * request bodies at this boundary; the Express route remains the durable
+ * writer and audit owner.
+ */
+function enforceOwnerBusinessPolicies(req: Request): Request {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH'].includes(method)) return req;
+  if (!String(req.path || '').startsWith('/api/corporate-accounts')) return req;
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) return req;
+
+  req.body = {
+    ...req.body,
+    branchId: 'COMPANY_WIDE',
+    creditLimitAed: 0,
+    usedExposureAed: 0,
+    paymentTermsDays: 0,
+    status: 'active'
+  };
+  return req;
+}
+
+const handler = (req: Request, res: Response) => {
+  const normalized = ensureRequestPath(req);
+  return dispatch(enforceOwnerBusinessPolicies(normalized), res);
+};
 
 export default handler;
