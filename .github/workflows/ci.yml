@@ -44,9 +44,13 @@ jobs:
         run: bun run test
       - name: Production build
         run: bun run build
-      - name: Verify build output exists and Vercel API bundle loads
+      - name: Verify build output, approved assets, and Vercel API entrypoint
         run: |
           test -s dist/server.cjs
-          test -s dist/api-handler.cjs
+          test -s api-handler.cjs
           test -s dist/index.html
-          VERCEL=1 node -e "const m=require('./dist/api-handler.cjs'); const h=m.default||m; if(typeof h!=='function') throw new Error('Bundled Vercel API handler did not export a function');"
+          test -d dist/approved-forms
+          test -s dist/assets/approved/splendor-official-seal.svg
+          test "$(find dist/approved-forms -maxdepth 1 -type f -name '*.pdf' | wc -l)" -eq 16
+          VERCEL=1 node -e "const m=require('./api-handler.cjs'); const h=m.default||m; if(typeof h!=='function') throw new Error('Bundled Vercel API handler did not export a function');"
+          VERCEL=1 bun -e "import('./api/index.ts').then(m=>{if(typeof m.default!=='function') throw new Error('Vercel API entrypoint did not resolve generated bundle')})"
