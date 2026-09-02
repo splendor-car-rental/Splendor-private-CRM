@@ -92,7 +92,7 @@ export const FinanceLedgerView: React.FC = () => {
             {language === 'ar' ? 'الدفتر المالي، الفواتير، والودائع' : 'Financial Ledger & Deposit Custody'}
           </h2>
           <p className="text-xs text-zinc-400 mt-0.5">
-            {language === 'ar' ? 'إدارة الفواتير، ضريبة القيمة المضافة 5%، تسوية الودائع التأمينية وسندات القبض' : 'Authoritative invoicing, 5% UAE VAT compliance, security deposit custody & payment allocations'}
+            {language === 'ar' ? 'إدارة الفواتير وحسابات ضريبة القيمة المضافة المهيأة، وتسوية الودائع التأمينية وسندات القبض' : 'Authoritative invoicing with configured VAT calculations, security deposit custody & payment allocations'}
           </p>
         </div>
 
@@ -367,7 +367,6 @@ export const FinanceLedgerView: React.FC = () => {
                 <option value="card">Credit Card (Terminal)</option>
                 <option value="cash">Cash (Safe Deposit)</option>
                 <option value="online_link">Online Payment Link</option>
-                <option value="corporate_credit">Corporate Credit Account</option>
               </select>
             </div>
           </div>
