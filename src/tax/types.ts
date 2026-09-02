@@ -179,6 +179,10 @@ export interface TaxPeriod {
   closedAt?: string;
   closureNote?: string;
   blockingExceptionCount: number;
+  latestReconciliationSnapshotId?: string;
+  latestReconciliationCapturedAt?: string;
+  latestReconciliationPostingGapCount?: number;
+  latestReconciliationLedgerEvidenceHash?: string;
   governanceReadiness:
     | 'DRAFT'
     | 'IN_PREPARATION'

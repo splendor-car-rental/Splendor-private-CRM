@@ -57,6 +57,9 @@ export function validateResolveBlockingException(
   if (period.status === 'professionally_validated' || period.status === 'closed') {
     return 'A professionally validated or closed Tax Period cannot be mutated by resolving an exception. A controlled future reopen/amendment workflow is required.';
   }
+  if (exception.managedBy === 'TAX_RECONCILIATION') {
+    return 'Tax Reconciliation-managed exceptions can only be resolved through the authoritative Tax Reconciliation workflow.';
+  }
   if (exception.openedBy === actor.uid) return 'Four-Eyes control prevents the exception creator from resolving the same blocking exception.';
   if (!resolutionNote) return 'A resolution note is required.';
   if (!resolutionReference && !resolutionEvidenceDocumentId) return 'Durable resolution evidence or a resolution reference is required.';

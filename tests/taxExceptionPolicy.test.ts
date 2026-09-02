@@ -76,6 +76,12 @@ describe('Tax Blocking Exception policy', () => {
     expect(validateResolveBlockingException(period, exception, reviewer, 'Verified synthetic correction.')).toContain('Durable resolution evidence');
   });
 
+  it('prevents generic resolution from bypassing an authoritative reconciliation-managed blocker', () => {
+    const reviewer = { uid: 'admin-test', name: 'Admin Test', role: 'admin' as const };
+    const managed: TaxBlockingException = { ...exception, managedBy: 'TAX_RECONCILIATION', managedKey: 'POSTING_GAPS' };
+    expect(validateResolveBlockingException(period, managed, reviewer, 'Synthetic correction.', 'SYNTHETIC-REF')).toContain('authoritative Tax Reconciliation workflow');
+  });
+
   it('rejects repeated resolution', () => {
     const reviewer = { uid: 'admin-test', name: 'Admin Test', role: 'admin' as const };
     expect(validateResolveBlockingException(period, { ...exception, status: 'resolved' }, reviewer, 'Verified synthetic correction.', 'LEDGER-SYNTHETIC-REF-1')).toContain('Only an open');

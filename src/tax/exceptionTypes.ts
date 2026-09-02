@@ -10,6 +10,7 @@ export type TaxBlockingExceptionCategory =
   | 'OTHER';
 
 export type TaxBlockingExceptionStatus = 'open' | 'resolved';
+export type TaxBlockingExceptionManager = 'TAX_RECONCILIATION';
 
 export interface TaxBlockingException {
   id: string;
@@ -21,6 +22,8 @@ export interface TaxBlockingException {
   status: TaxBlockingExceptionStatus;
   evidenceReference?: string;
   evidenceDocumentId?: string;
+  managedBy?: TaxBlockingExceptionManager;
+  managedKey?: string;
   openedBy: string;
   openedByName: string;
   openedAt: string;
