@@ -33,11 +33,13 @@ function dateOnlyParts(value: string): DateParts | null {
 
 function toDate(input: string | number | Date): Date | null {
   if (typeof input === 'string') {
-    const parts = dateOnlyParts(input);
+    const trimmed = input.trim();
+    const parts = dateOnlyParts(trimmed);
     if (parts) {
       const d = new Date(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
       return Number.isNaN(d.getTime()) ? null : d;
     }
+    if (DATE_ONLY_RE.test(trimmed)) return null;
   }
   const d = input instanceof Date ? new Date(input.getTime()) : new Date(input);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -46,8 +48,10 @@ function toDate(input: string | number | Date): Date | null {
 export function formatDate(input: string | number | Date | undefined | null): string {
   if (input === undefined || input === null || input === '') return '';
   if (typeof input === 'string') {
-    const parts = dateOnlyParts(input);
+    const trimmed = input.trim();
+    const parts = dateOnlyParts(trimmed);
     if (parts) return `${parts.day}/${parts.month}/${parts.year}`;
+    if (DATE_ONLY_RE.test(trimmed)) return '';
   }
   const d = toDate(input);
   if (!d) return '';
@@ -62,6 +66,7 @@ export function formatDateTime(input: string | number | Date | undefined | null)
   const d = toDate(input);
   if (!d) return '';
   const datePart = formatDate(input);
+  if (!datePart) return '';
   const hours = String(d.getHours()).padStart(2, '0');
   const minutes = String(d.getMinutes()).padStart(2, '0');
   return `${datePart} ${hours}:${minutes}`;
@@ -87,6 +92,7 @@ export function formatDateTimeLocalized(input: string | number | Date | undefine
   const d = toDate(input);
   if (!d) return '';
   const datePart = formatDateLocalized(input, isAr);
+  if (!datePart) return '';
   const hours = String(d.getHours()).padStart(2, '0');
   const minutes = String(d.getMinutes()).padStart(2, '0');
   return `${datePart} - ${hours}:${minutes}`;
