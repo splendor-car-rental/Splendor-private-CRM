@@ -205,7 +205,7 @@ export default async function handler(req: Request, res: Response) {
   if (!actor) return;
 
   const loaded = readConfig();
-  if (!loaded.configured) {
+  if ('missing' in loaded) {
     return res.status(503).json({
       configured: false,
       provider: 'etqan',
