@@ -5,6 +5,9 @@ import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
 import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
 import { createManualDepositAtomic } from '../src/server/safeManualDepositCreate.js';
 import { recordAccountingAudit } from '../src/server/accountingAudit.js';
+import { issueNextNumber } from '../src/server/idGenerator.js';
+import { appendToAuditChain } from '../src/server/auditIntegrity.js';
+import { globalStore } from '../src/server/dataStore.js';
 import {
   issueAndRenderCorporateDocument,
   getCorporateDocumentMeta,
@@ -47,6 +50,21 @@ const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
 
 const ALL_STAFF_ROLES = ['ceo', 'admin', 'operations', 'sales', 'finance', 'fleet'];
 const ISSUED_DOCUMENT_PREFIX = 'issued-documents/';
+const HANDOVER_ROLES = ['ceo', 'admin', 'operations'];
+const HANDOVER_KYC_REQUIRED: Record<string, string[]> = {
+  UAE_RESIDENT: ['EMIRATES_ID_FRONT', 'EMIRATES_ID_BACK', 'DRIVING_LICENSE_FRONT', 'DRIVING_LICENSE_BACK'],
+  GCC_NATIONAL: ['PASSPORT', 'DRIVING_LICENSE_FRONT', 'DRIVING_LICENSE_BACK'],
+  TOURIST: ['PASSPORT', 'VISA_ENTRY_STAMP', 'DRIVING_LICENSE_FRONT']
+};
+
+class HandoverGateError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'HandoverGateError';
+    this.status = status;
+  }
+}
 
 async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
   const authorization = req.headers.authorization || '';
@@ -84,6 +102,254 @@ function sendCorporatePdf(res: Response, issued: { pdf: Buffer; fileName: string
   if (issued.archiveId) res.setHeader('X-Document-Archive-Id', issued.archiveId);
   res.setHeader('Cache-Control', 'no-store');
   return res.status(200).send(issued.pdf);
+}
+
+function calculateAge(dobIso: string, referenceIso: string): number {
+  const dob = new Date(dobIso);
+  const ref = new Date(referenceIso);
+  if (!Number.isFinite(dob.getTime()) || !Number.isFinite(ref.getTime())) return 0;
+  let age = ref.getUTCFullYear() - dob.getUTCFullYear();
+  const monthDelta = ref.getUTCMonth() - dob.getUTCMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && ref.getUTCDate() < dob.getUTCDate())) age -= 1;
+  return Math.max(0, age);
+}
+
+function validateKycForHandover(customer: any, contract: any, now: string) {
+  if (!customer || customer.status === 'blocklisted') {
+    throw new HandoverGateError(409, 'Handover blocked: customer is missing or blocklisted.');
+  }
+
+  const profile = customer.kycProfile;
+  if (!profile || profile.status !== 'VERIFIED') {
+    throw new HandoverGateError(409, 'Handover blocked: customer KYC is not VERIFIED.');
+  }
+
+  const dob = String(profile.dateOfBirth || customer.dateOfBirth || '').trim();
+  const legacySyntheticDob = !customer.dateOfBirth && dob === '1995-01-01';
+  if (!profile.isAgeVerified || !dob || legacySyntheticDob) {
+    throw new HandoverGateError(409, 'Handover blocked: customer date of birth/age has not been genuinely verified.');
+  }
+
+  const age = calculateAge(dob, contract.startDateTime || now);
+  if (age < 21) {
+    throw new HandoverGateError(409, `Handover blocked: customer age (${age}) is below the minimum rental age.`);
+  }
+
+  const category = String(profile.customerCategory || 'TOURIST');
+  const required = HANDOVER_KYC_REQUIRED[category] || HANDOVER_KYC_REQUIRED.TOURIST;
+  const documents = Array.isArray(profile.documents) ? profile.documents : [];
+  const targetTime = new Date(contract.endDateTime || contract.startDateTime || now).getTime();
+
+  for (const requiredCategory of required) {
+    const accepted = documents.find((doc: any) => doc?.category === requiredCategory && doc?.status === 'ACCEPTED');
+    if (!accepted) {
+      throw new HandoverGateError(409, `Handover blocked: required KYC document ${requiredCategory} is not approved.`);
+    }
+    if (accepted.expiryDate) {
+      const expiryTime = new Date(accepted.expiryDate).getTime();
+      if (!Number.isFinite(expiryTime) || expiryTime < targetTime) {
+        throw new HandoverGateError(409, `Handover blocked: required KYC document ${requiredCategory} expires before the rental completes.`);
+      }
+    }
+  }
+}
+
+function validateHandoverEvidence(handoverData: any) {
+  const startMileage = Number(handoverData?.startMileage);
+  const fuelLevelPercent = Number(handoverData?.fuelLevelPercent);
+  const customerSignatureUrl = String(handoverData?.customerSignatureUrl || '').trim();
+  const employeeSignatureUrl = String(handoverData?.employeeSignatureUrl || '').trim();
+
+  if (!Number.isFinite(startMileage) || startMileage < 0) {
+    throw new HandoverGateError(400, 'A valid non-negative startMileage is required for handover.');
+  }
+  if (!Number.isFinite(fuelLevelPercent) || fuelLevelPercent < 0 || fuelLevelPercent > 100) {
+    throw new HandoverGateError(400, 'fuelLevelPercent must be between 0 and 100.');
+  }
+  if (!customerSignatureUrl || !employeeSignatureUrl) {
+    throw new HandoverGateError(400, 'Both customer and employee handover signatures are required.');
+  }
+
+  return { startMileage, fuelLevelPercent, customerSignatureUrl, employeeSignatureUrl };
+}
+
+async function persistHandoverAudit(actor: { uid: string; name: string; role: string }, contract: any, startMileage: number) {
+  try {
+    const id = await issueNextNumber('AuditLog');
+    const timestamp = new Date().toISOString();
+    const baseEntry = {
+      id,
+      timestamp,
+      userId: actor.uid,
+      userName: actor.name,
+      userRole: actor.role,
+      entityType: 'Contract',
+      entityId: contract.id,
+      action: 'status_change',
+      previousValue: 'Status: Signed',
+      newValue: `Status: Active (verified handover at ${startMileage} km)`,
+      reason: 'Atomic production handover gate passed: KYC, deposit, signatures, vehicle readiness and schedule conflict checks verified'
+    };
+    const chain = await appendToAuditChain(baseEntry);
+    const entry = { ...baseEntry, ...chain };
+    await admin.firestore().collection('audit_logs').doc(id).set(entry);
+    globalStore.auditLogs.unshift(entry as any);
+  } catch (error) {
+    console.error('[contract-handover] handover succeeded but audit persistence failed', error);
+  }
+}
+
+async function handleProductionContractHandover(req: Request, res: Response, contractId: string) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method not allowed.' });
+  }
+
+  const actor = await getVerifiedStaff(req, res, HANDOVER_ROLES);
+  if (!actor) return;
+
+  let evidence: ReturnType<typeof validateHandoverEvidence>;
+  try {
+    evidence = validateHandoverEvidence((req.body || {}).handoverData || {});
+  } catch (error) {
+    if (error instanceof HandoverGateError) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+
+  const db = admin.firestore();
+  const now = new Date().toISOString();
+  let outcome: { contract: any; vehicle: any; customer: any };
+
+  try {
+    outcome = await db.runTransaction(async tx => {
+      const contractRef = db.collection('contracts').doc(contractId);
+      const contractSnap = await tx.get(contractRef);
+      if (!contractSnap.exists) throw new HandoverGateError(404, 'Contract not found.');
+      const contract = { id: contractSnap.id, ...(contractSnap.data() as any) };
+
+      if (contract.status !== 'signed') {
+        throw new HandoverGateError(409, `Handover requires a signed contract; current status is ${contract.status || 'unknown'}.`);
+      }
+      if (contract.termsAccepted !== true) {
+        throw new HandoverGateError(409, 'Handover blocked: contract terms have not been explicitly accepted.');
+      }
+      if (!contract.customerId || !contract.vehicleId) {
+        throw new HandoverGateError(409, 'Handover blocked: contract is missing its customer or vehicle binding.');
+      }
+
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const depositQuery = db.collection('deposits').where('contractId', '==', contract.id);
+      const vehicleContractsQuery = db.collection('contracts').where('vehicleId', '==', contract.vehicleId);
+
+      const [customerSnap, vehicleSnap, depositSnap, vehicleContractsSnap] = await Promise.all([
+        tx.get(customerRef),
+        tx.get(vehicleRef),
+        tx.get(depositQuery),
+        tx.get(vehicleContractsQuery)
+      ]);
+
+      if (!customerSnap.exists) throw new HandoverGateError(409, 'Handover blocked: customer record not found.');
+      if (!vehicleSnap.exists) throw new HandoverGateError(409, 'Handover blocked: vehicle record not found.');
+      const customer = { id: customerSnap.id, ...(customerSnap.data() as any) };
+      const vehicle = { id: vehicleSnap.id, ...(vehicleSnap.data() as any) };
+
+      validateKycForHandover(customer, contract, now);
+
+      const requiredDeposit = Math.max(0, Number(contract.depositAmount || 0));
+      const heldDepositBalance = depositSnap.docs.reduce((sum, doc) => {
+        const deposit = doc.data() as any;
+        if (!['held', 'collected', 'partially_refunded'].includes(String(deposit.status || ''))) return sum;
+        return sum + Math.max(0, Number(deposit.balance ?? deposit.amount ?? 0));
+      }, 0);
+      if (heldDepositBalance + 0.001 < requiredDeposit) {
+        throw new HandoverGateError(409, `Handover blocked: verified held deposit is ${heldDepositBalance} AED but ${requiredDeposit} AED is required.`);
+      }
+
+      if (vehicle.lifecycleStatus && vehicle.lifecycleStatus !== 'ACTIVE') {
+        throw new HandoverGateError(409, `Handover blocked: vehicle lifecycle status is ${vehicle.lifecycleStatus}.`);
+      }
+      if (['maintenance', 'unavailable'].includes(String(vehicle.status || ''))) {
+        throw new HandoverGateError(409, `Handover blocked: vehicle is ${vehicle.status}.`);
+      }
+      if (vehicle.status === 'rented' && vehicle.currentContractId !== contract.id) {
+        throw new HandoverGateError(409, 'Handover blocked: vehicle is already rented under another contract.');
+      }
+
+      const start = new Date(contract.startDateTime).getTime();
+      const end = new Date(contract.endDateTime).getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        throw new HandoverGateError(409, 'Handover blocked: contract rental window is invalid.');
+      }
+      for (const doc of vehicleContractsSnap.docs) {
+        if (doc.id === contract.id) continue;
+        const other = doc.data() as any;
+        if (!['approved', 'signed', 'active'].includes(String(other.status || ''))) continue;
+        const otherStart = new Date(other.startDateTime).getTime();
+        const otherEnd = new Date(other.endDateTime).getTime();
+        if (Number.isFinite(otherStart) && Number.isFinite(otherEnd) && start <= otherEnd && end >= otherStart) {
+          throw new HandoverGateError(409, `Handover blocked: vehicle has a conflicting ${other.status} contract (${doc.id}).`);
+        }
+      }
+
+      const handover = {
+        ...((req.body || {}).handoverData || {}),
+        handoverDateTime: now,
+        employeeId: actor.uid,
+        employeeName: actor.name,
+        startMileage: evidence.startMileage,
+        fuelLevelPercent: evidence.fuelLevelPercent,
+        customerSignatureUrl: evidence.customerSignatureUrl,
+        employeeSignatureUrl: evidence.employeeSignatureUrl
+      };
+      const updatedContract = {
+        ...contract,
+        status: 'active',
+        handover,
+        depositStatus: requiredDeposit > 0 ? 'held' : contract.depositStatus,
+        updatedAt: now
+      };
+      const updatedVehicle = {
+        ...vehicle,
+        status: 'rented',
+        currentCustomerId: contract.customerId,
+        currentContractId: contract.id,
+        mileage: evidence.startMileage,
+        updatedAt: now
+      };
+      const updatedCustomer = {
+        ...customer,
+        totalRentals: Number(customer.totalRentals || 0) + 1,
+        updatedAt: now
+      };
+
+      tx.set(contractRef, updatedContract, { merge: true });
+      tx.set(vehicleRef, {
+        status: 'rented',
+        currentCustomerId: contract.customerId,
+        currentContractId: contract.id,
+        mileage: evidence.startMileage,
+        updatedAt: now
+      }, { merge: true });
+      tx.set(customerRef, { totalRentals: updatedCustomer.totalRentals, updatedAt: now }, { merge: true });
+
+      return { contract: updatedContract, vehicle: updatedVehicle, customer: updatedCustomer };
+    });
+  } catch (error) {
+    if (error instanceof HandoverGateError) return res.status(error.status).json({ error: error.message });
+    console.error('[contract-handover] atomic handover failed', error);
+    return res.status(500).json({ error: 'Contract handover failed atomically. No handover was completed.' });
+  }
+
+  const contractIndex = globalStore.contracts.findIndex(c => c.id === outcome.contract.id);
+  if (contractIndex !== -1) globalStore.contracts[contractIndex] = outcome.contract;
+  const vehicleIndex = globalStore.vehicles.findIndex(v => v.id === outcome.vehicle.id);
+  if (vehicleIndex !== -1) globalStore.vehicles[vehicleIndex] = outcome.vehicle;
+  const customerIndex = globalStore.customers.findIndex(c => c.id === outcome.customer.id);
+  if (customerIndex !== -1) globalStore.customers[customerIndex] = outcome.customer;
+
+  await persistHandoverAudit(actor, outcome.contract, evidence.startMileage);
+  return res.status(200).json({ success: true, contract: outcome.contract });
 }
 
 async function handleContextualCorporateDocument(req: Request, res: Response, mode: 'preview' | 'issue') {
@@ -204,6 +470,11 @@ async function handleIssuedDocumentFile(req: Request, res: Response) {
 }
 
 async function handler(req: Request, res: Response) {
+  const handoverMatch = req.path.match(/^\/api\/contracts\/([^/]+)\/handover$/);
+  if (handoverMatch) {
+    return handleProductionContractHandover(req, res, decodeURIComponent(handoverMatch[1]));
+  }
+
   if (req.path === '/api/corporate-documents/preview') {
     return handleContextualCorporateDocument(req, res, 'preview');
   }
