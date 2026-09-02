@@ -6,6 +6,11 @@ const apiHandler = readFileSync(new URL('../api/handler.ts', import.meta.url), '
 const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
 const vercelConfig = readFileSync(new URL('../vercel.json', import.meta.url), 'utf8');
 const premiumCss = readFileSync(new URL('../src/premium-sapphire.css', import.meta.url), 'utf8');
+const scrollCss = readFileSync(new URL('../src/scroll-ownership.css', import.meta.url), 'utf8');
+const mainEntry = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
+const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const sidebar = readFileSync(new URL('../src/components/layout/Sidebar.tsx', import.meta.url), 'utf8');
+const auth = readFileSync(new URL('../src/components/auth/AuthScreens.tsx', import.meta.url), 'utf8');
 
 describe('production serverless entrypoint', () => {
   it('statically imports one Node ESM build artifact beside the Vercel entrypoint', () => {
@@ -46,8 +51,35 @@ describe('production Arabic application shell', () => {
   });
 
   it('uses the main pane as the explicit vertical wheel/touch scroll container', () => {
-    expect(premiumCss).toContain('#root main');
-    expect(premiumCss).toContain('overflow-y: auto');
-    expect(premiumCss).toContain('touch-action: pan-y');
+    expect(app).toContain('data-testid="main-scroll-viewport"');
+    expect(app).toContain('h-dvh min-h-0 overflow-hidden');
+    expect(app).toContain('flex-1 min-h-0 w-full min-w-0 overflow-y-auto');
+    expect(scrollCss).toContain('[data-testid="main-scroll-viewport"]');
+    expect(scrollCss).toContain('touch-action: pan-y');
+    expect(scrollCss).toContain('-webkit-overflow-scrolling: touch');
+  });
+
+  it('gives the sidebar its own bounded scroll viewport and locks the document behind the mobile drawer', () => {
+    expect(sidebar).toContain('data-testid="sidebar-shell"');
+    expect(sidebar).toContain('data-testid="sidebar-scroll-viewport"');
+    expect(sidebar).toContain('flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y');
+    expect(sidebar).toContain("html.style.overflow = 'hidden'");
+    expect(sidebar).toContain("body.style.overflow = 'hidden'");
+    expect(sidebar).toContain('previousHtmlOverflow');
+    expect(sidebar).toContain('previousBodyOverflow');
+    expect(scrollCss).toContain('[data-testid="sidebar-scroll-viewport"]');
+    expect(scrollCss).toContain('height: 100dvh !important');
+  });
+
+  it('keeps the login form reachable on short screens instead of allowing the app-shell overflow rule to clip it', () => {
+    expect(auth).toContain('data-testid="login-scroll-viewport"');
+    expect(auth).toContain('h-full min-h-0 w-full overflow-y-auto overflow-x-hidden');
+    expect(auth).not.toContain('my-auto');
+    expect(scrollCss).toContain('#root > [data-testid="login-scroll-viewport"]');
+    expect(scrollCss).toContain('overflow-y: auto !important');
+    const premiumImport = mainEntry.indexOf("import './premium-sapphire.css'");
+    const scrollImport = mainEntry.indexOf("import './scroll-ownership.css'");
+    expect(premiumImport).toBeGreaterThan(-1);
+    expect(scrollImport).toBeGreaterThan(premiumImport);
   });
 });
