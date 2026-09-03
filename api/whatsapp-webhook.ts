@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { processInboundWhatsAppMessage } from '../src/server/whatsappConversation.js';
 
 let admin: any = null;
 
@@ -66,10 +67,16 @@ async function recordInboundEvent(eventId: string, data: any) {
 }
 
 export default async function handler(req: any, res: any) {
-  // Keep Meta's GET verification dependency-free. This path must not load
-  // Firebase Admin or the CRM conversation engine because Vercel must be
-  // able to answer the Meta handshake even when Firebase credentials are
-  // unavailable or the conversation engine has unrelated dependencies.
+  // The GET handshake still runs Firebase-free (Firebase Admin is only
+  // initialized lazily via initFirebase(), never at module load) even though
+  // the conversation engine is now a static top-level import above --
+  // Vercel's Node bundler cannot resolve a dynamic import() of a literal
+  // .ts specifier at runtime (it looks for a file that only exists as
+  // source, not in the deployed bundle), which is exactly what silently
+  // broke every inbound WhatsApp message with a 500 (ERR_MODULE_NOT_FOUND)
+  // before this fix. A static import is traced and bundled correctly, the
+  // same pattern already used by api/fleet-safe.ts and
+  // api/contract-extension-safe.ts.
   if (req.method === 'GET') {
     const mode = req.query?.['hub.mode'];
     const token = req.query?.['hub.verify_token'];
@@ -99,7 +106,6 @@ export default async function handler(req: any, res: any) {
   if (payload?.object !== 'whatsapp_business_account') return res.status(404).end();
   if (!(await initFirebase())) return res.status(503).json({ error: 'Webhook storage is not configured.' });
 
-  const { processInboundWhatsAppMessage } = await import('../src/server/whatsappConversation.ts');
   const now = new Date().toISOString();
   const messages = (payload.entry || []).flatMap((entry: any) =>
     (entry.changes || []).flatMap((change: any) => change.value?.messages || [])

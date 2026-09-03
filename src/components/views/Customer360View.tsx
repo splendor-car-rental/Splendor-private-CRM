@@ -27,7 +27,7 @@ export const Customer360View: React.FC = () => {
     customers, contracts, invoices, deposits,
     payments, communications, documents,
     selectedCustomerId, setSelectedCustomerId,
-    updateCustomer, mergeCustomers,
+    mergeCustomers,
     setActiveView, setSelectedContractId, addDocument, showToast
   } = useCRM();
 
