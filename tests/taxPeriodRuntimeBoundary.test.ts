@@ -11,12 +11,21 @@ describe('Tax Period runtime boundary', () => {
     expect(safeApi).toContain("import('../src/server/taxComplianceMasterApi.js')");
   });
 
-  it('requires authentication and independent tax permissions', () => {
+  it('requires authentication and server-owned lifecycle permissions before state transitions', () => {
     expect(runtime).toContain('verifyIdToken');
     expect(runtime).toContain("requirePermission(actor, 'tax.view'");
     expect(runtime).toContain("requirePermission(actor, 'tax.prepare'");
-    expect(runtime).toContain("requirePermission(actor, 'tax.review'");
-    expect(runtime).toContain("requirePermission(actor, 'tax.approve'");
+    expect(runtime).toContain('resolveTaxPeriodLifecycleAction');
+    expect(runtime).toContain("return { action: 'complete-review', permission: 'tax.review' }");
+    expect(runtime).toContain("return { action: 'record-professional-validation', permission: 'tax.approve' }");
+    expect(runtime).toContain("return { action: 'close', permission: 'tax.approve' }");
+    expect(runtime).toContain('requirePermission(actor, authorizedTransition.permission, res)');
+
+    const transitionStart = runtime.indexOf('async function transitionTaxPeriod');
+    const handlerStart = runtime.indexOf('export default async function taxPeriodHandler');
+    expect(transitionStart).toBeGreaterThan(-1);
+    expect(handlerStart).toBeGreaterThan(transitionStart);
+    expect(runtime.slice(transitionStart, handlerStart)).not.toContain('requirePermission(');
   });
 
   it('creates evidence-bound immutable periods inside Firestore transactions', () => {
@@ -34,6 +43,7 @@ describe('Tax Period runtime boundary', () => {
 
   it('exposes only the non-filing lifecycle requested by governance', () => {
     for (const action of ['open', 'submit-review', 'complete-review', 'record-professional-validation', 'close']) {
+      expect(runtime).toContain(`case '${action}'`);
       expect(runtime).toContain(`action === '${action}'`);
     }
     expect(runtime).toContain("status: 'ready_for_professional_review'");
@@ -45,6 +55,7 @@ describe('Tax Period runtime boundary', () => {
 
   it('has no delete or filing/submission action surface', () => {
     expect(runtime).not.toMatch(/method\s*===\s*['"]DELETE['"]/);
+    expect(runtime).not.toMatch(/case\s*['"](?:file|filing|submit-return|submit-filing)['"]/);
     expect(runtime).not.toMatch(/action\s*===\s*['"](?:file|filing|submit-return|submit-filing)['"]/);
     expect(runtime).toContain("res.setHeader('Allow', 'GET, POST')");
     expect(runtime).toContain("'NOT_READY_FOR_FILING'");
