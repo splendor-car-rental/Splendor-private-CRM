@@ -31,6 +31,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
   const [mileageAllowance, setMileageAllowance] = useState<number>(200);
   const [extraKmRate, setExtraKmRate] = useState<number>(15);
   const [depositReleaseDays, setDepositReleaseDays] = useState<number>(21);
+  const [depositAmount, setDepositAmount] = useState<number>(vehicles.find(v => v.id === (availableVehicles[0]?.id || ''))?.minDeposit || 10000);
   const [notes, setNotes] = useState<string>('Instant Executive Rental Agreement created from Command Center.');
 
   const selectedVehicle = vehicles.find(v => v.id === selectedVehicleId) || vehicles[0];
@@ -44,11 +45,15 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
   const rentalTotal = dailyRate * diffDays;
   const vatAmount = calculateVatOnNet(rentalTotal);
   const grandTotal = rentalTotal + vatAmount;
-  const depositAmount = selectedVehicle?.minDeposit || 10000;
 
   const handleVehicleChange = async (vehId: string) => {
     setSelectedVehicleId(vehId);
     setConflictWarning(null);
+    // Reset the deposit to this vehicle's own standard amount as a starting
+    // suggestion -- staff can still freely override it below per customer
+    // risk profile or an agreed insurance amount, it is never locked to a
+    // single fixed figure.
+    setDepositAmount(vehicles.find(v => v.id === vehId)?.minDeposit || 10000);
     if (vehId && startDate && endDate) {
       const avail = await checkVehicleAvailability(vehId, new Date(startDate).toISOString(), new Date(endDate).toISOString());
       if (!avail.available) {
@@ -280,9 +285,20 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
             </div>
           </div>
 
-          <div className="flex items-center justify-between text-xs text-amber-300 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
-            <span>{language === 'ar' ? 'مبلغ التأمين المحتجز في العقد:' : 'Held Security Deposit Amount:'}</span>
-            <span className="font-bold font-mono">{(depositAmount || 0).toLocaleString()} AED</span>
+          <div className="flex items-center justify-between gap-3 text-xs text-amber-300 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+            <label htmlFor="contract-deposit-amount">{language === 'ar' ? 'مبلغ التأمين المحتجز في العقد:' : 'Held Security Deposit Amount:'}</label>
+            <div className="flex items-center gap-1.5">
+              <input
+                id="contract-deposit-amount"
+                type="number"
+                min={0}
+                step={100}
+                value={depositAmount}
+                onChange={e => setDepositAmount(Math.max(0, Number(e.target.value) || 0))}
+                className="w-28 px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-amber-500/40 text-amber-200 font-bold font-mono text-right focus:outline-none focus:border-amber-400"
+              />
+              <span className="font-bold">AED</span>
+            </div>
           </div>
         </div>
 

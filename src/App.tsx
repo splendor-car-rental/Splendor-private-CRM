@@ -81,10 +81,10 @@ const MainLayout: React.FC = () => {
       case 'tolls': return <TollsParkingView />;
       case 'notification-center': return <NotificationWhatsAppCenterView />;
       case 'tasks': return <TasksFollowupsView />;
-      case 'procurement':
+      case 'procurement': return <ProcurementView initialTab="suppliers" />;
       case 'purchase-orders':
       case 'lpo':
-      case 'supply-orders': return <ProcurementView />;
+      case 'supply-orders': return <ProcurementView initialTab="purchase-orders" />;
       case 'security': return <SecurityBlocklistView />;
       case 'inspections': return <VehicleInspectionsView />;
       case 'lease-to-own': return <LeaseToOwnView />;

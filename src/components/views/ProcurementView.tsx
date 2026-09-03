@@ -85,13 +85,21 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={meta.variant} size="sm">{language === 'ar' ? meta.labelAr : meta.label}</Badge>;
 }
 
-export const ProcurementView: React.FC = () => {
+interface ProcurementViewProps {
+  /** Which internal tab to land on -- lets distinct sidebar entries (e.g.
+   * "Procurement & Suppliers" vs "Purchase Orders") that both render this
+   * shared workspace open on the tab their label actually promised, instead
+   * of always defaulting to Purchase Orders regardless of which was clicked. */
+  initialTab?: 'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts';
+}
+
+export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = 'purchase-orders' }) => {
   const { language } = useLanguage();
   const { currentUser } = useAuth();
   const { showToast, customers } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
-  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts'>('purchase-orders');
+  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts'>(initialTab);
   const [loading, setLoading] = useState(true);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
@@ -541,6 +549,12 @@ export const ProcurementView: React.FC = () => {
               {language === 'ar' ? 'أمر توريد داخلي جديد' : 'New Purchase Order'}
             </button>
           </div>
+          {suppliers.length === 0 && (
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>{language === 'ar' ? 'لا يوجد أي مورد مسجّل بعد -- افتح تبويب "الموردون" وأضف موردًا أولاً قبل إنشاء أمر توريد.' : 'No supplier is registered yet -- open the "Suppliers" tab and add one before creating a purchase order.'}</span>
+            </div>
+          )}
           <div className="space-y-2.5">
             {purchaseOrders.map(po => (
               <div key={po.id} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">

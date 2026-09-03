@@ -34,25 +34,44 @@ const MODELS_COLLECTION = 'vehicle_catalog_models';
 const STATIC_MANUFACTURERS = [...DEFAULT_MANUFACTURERS, ...UAE_CATALOG_EXPANSION_MANUFACTURERS];
 const STATIC_MODELS = [...DEFAULT_CATALOG_MODELS, ...UAE_CATALOG_EXPANSION_MODELS];
 
-/** Static manufacturers plus approved Firestore additions. Pending/rejected proposals never appear. */
+/**
+ * Static manufacturers plus approved Firestore additions. Pending/rejected
+ * proposals never appear. The static seed list is always non-empty and
+ * never depends on Firestore, so a transient read failure on the (much
+ * smaller) approved-additions collection degrades to "no extra
+ * staff-approved entries this call" rather than wiping out the entire
+ * Manufacturer dropdown on the Add/Edit Vehicle screen.
+ */
 export async function listManufacturers(): Promise<VehicleManufacturer[]> {
   if (admin.apps.length === 0) return STATIC_MANUFACTURERS;
-  const db = admin.firestore();
-  const snap = await db.collection(MANUFACTURERS_COLLECTION).get();
-  const approved = snap.docs.map((d) => d.data() as VehicleManufacturer);
-  const seedIds = new Set(STATIC_MANUFACTURERS.map((m) => m.id));
-  return [...STATIC_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
+  try {
+    const db = admin.firestore();
+    const snap = await db.collection(MANUFACTURERS_COLLECTION).get();
+    const approved = snap.docs.map((d) => d.data() as VehicleManufacturer);
+    const seedIds = new Set(STATIC_MANUFACTURERS.map((m) => m.id));
+    return [...STATIC_MANUFACTURERS, ...approved.filter((m) => !seedIds.has(m.id))];
+  } catch (error) {
+    console.error('[vehicleCatalog] Failed to read approved manufacturer additions, falling back to the static seed list:', error);
+    return STATIC_MANUFACTURERS;
+  }
 }
 
-/** Models are strictly scoped to the selected manufacturer. */
+/** Models are strictly scoped to the selected manufacturer. Same fallback
+ * reasoning as listManufacturers() above: never let a Firestore hiccup on
+ * the approved-additions collection empty out the Model dropdown. */
 export async function listModelsForManufacturer(manufacturerId: string): Promise<VehicleCatalogModel[]> {
   const seedModels = STATIC_MODELS.filter((m) => m.manufacturerId === manufacturerId);
   if (admin.apps.length === 0) return seedModels;
-  const db = admin.firestore();
-  const snap = await db.collection(MODELS_COLLECTION).where('manufacturerId', '==', manufacturerId).get();
-  const approved = snap.docs.map((d) => d.data() as VehicleCatalogModel);
-  const seedIds = new Set(seedModels.map((m) => m.id));
-  return [...seedModels, ...approved.filter((m) => !seedIds.has(m.id))];
+  try {
+    const db = admin.firestore();
+    const snap = await db.collection(MODELS_COLLECTION).where('manufacturerId', '==', manufacturerId).get();
+    const approved = snap.docs.map((d) => d.data() as VehicleCatalogModel);
+    const seedIds = new Set(seedModels.map((m) => m.id));
+    return [...seedModels, ...approved.filter((m) => !seedIds.has(m.id))];
+  } catch (error) {
+    console.error('[vehicleCatalog] Failed to read approved model additions, falling back to the static seed list:', error);
+    return seedModels;
+  }
 }
 
 export interface ProposeCatalogUpdateInput {

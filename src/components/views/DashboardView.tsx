@@ -135,13 +135,9 @@ export const DashboardView: React.FC = () => {
               </div>
               <p className="text-xs text-zinc-400 mt-1 flex items-center gap-3 flex-wrap">
                 <span>
-                  {language === 'ar' 
-                    ? `إجمالي السجلات السحابية: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} مستند` 
-                    : `Cloud Documents: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} live records`}
-                </span>
-                <span>•</span>
-                <span>
-                  {language === 'ar' ? `زمن الاستجابة: ${firebaseSyncState.latencyMs || 24}ms` : `Latency: ${firebaseSyncState.latencyMs || 24}ms`}
+                  {language === 'ar'
+                    ? `إجمالي السجلات: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} مستند`
+                    : `Total Records: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} live records`}
                 </span>
               </p>
             </div>
@@ -170,7 +166,7 @@ export const DashboardView: React.FC = () => {
             <span className="text-xs font-bold text-[#f5d97f] font-mono">{vehicles.length}</span>
           </div>
           <div className="px-3 py-2 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center justify-between">
-            <span className="text-[11px] text-zinc-400">{language === 'ar' ? 'العملاء VIP' : 'Customers'}</span>
+            <span className="text-[11px] text-zinc-400">{language === 'ar' ? 'العملاء' : 'Customers'}</span>
             <span className="text-xs font-bold text-emerald-400 font-mono">{customers.length}</span>
           </div>
           <div className="px-3 py-2 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center justify-between">
