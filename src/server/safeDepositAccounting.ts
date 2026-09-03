@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import admin from 'firebase-admin';
 import { fingerprintRequest, runIdempotent } from './idempotency';
+import { PersistenceError } from './persistence';
 import type { RecordAuditFn } from './businessRules';
 import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
 import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting';
@@ -12,6 +13,26 @@ import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/
 const JOURNAL_COLLECTION = 'accounting_journals';
 const PERIOD_COLLECTION = 'accounting_periods';
 const AUDIT_RECOVERY_COLLECTION = 'accounting_audit_recovery';
+
+/**
+ * Every one of these functions' business-rule checks (approval status,
+ * already-posted, already-deducted, duplicate journal, closed period...)
+ * runs inside a runIdempotent/runDurableTransaction callback. A plain
+ * `Error` thrown from inside that callback gets caught and replaced with a
+ * generic "Transaction failed." by runDurableTransaction (persistence.ts),
+ * which only ever preserves the message of a PersistenceError -- deliberately,
+ * so a raw Firestore driver failure never leaks its internals to a client.
+ * Throwing DepositAccountingError (a PersistenceError) instead is what
+ * actually gets these specific, actionable messages back to the caller
+ * instead of a useless "Transaction failed." -- this was silently swallowing
+ * every one of these messages in production since PR #9.
+ */
+export class DepositAccountingError extends PersistenceError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DepositAccountingError';
+  }
+}
 
 function db() {
   if (admin.apps.length === 0) throw new Error('Firebase Admin is not initialized.');
@@ -82,13 +103,13 @@ export async function postApprovedChargeAtomic(
   const accounts = await getEffectiveChartOfAccounts();
 
   const chargeSnap = await chargeRef.get();
-  if (!chargeSnap.exists) throw new Error('Charge not found.');
+  if (!chargeSnap.exists) throw new DepositAccountingError('Charge not found.');
   const charge = chargeSnap.data() as AdditionalCharge & { accountingJournalId?: string; accountingPostingStatus?: string };
-  if (charge.approvalStatus !== 'approved') throw new Error('Charge must be approved before accounting posting.');
+  if (charge.approvalStatus !== 'approved') throw new DepositAccountingError('Charge must be approved before accounting posting.');
   const total = money(charge.totalAmount);
   const net = money(charge.amount);
   const vat = money(charge.vatAmount);
-  if (total <= 0 || Math.abs(money(net + vat) - total) > 0.01) throw new Error('Charge amount/VAT/total values are inconsistent.');
+  if (total <= 0 || Math.abs(money(net + vat) - total) > 0.01) throw new DepositAccountingError('Charge amount/VAT/total values are inconsistent.');
 
   const issueDate = new Date(charge.timestamp).toISOString().slice(0, 10);
   const sourceAction = 'approve';
@@ -117,9 +138,9 @@ export async function postApprovedChargeAtomic(
     const reads = [tx.get(chargeRef), tx.get(periodRef), tx.get(journalRef)] as Promise<FirebaseFirestore.DocumentSnapshot>[];
     if (customerRef) reads.push(tx.get(customerRef));
     const [freshChargeSnap, periodSnap, existingJournal, customerSnap] = await Promise.all(reads);
-    if (!freshChargeSnap.exists) throw new Error('Charge not found.');
+    if (!freshChargeSnap.exists) throw new DepositAccountingError('Charge not found.');
     const freshCharge = freshChargeSnap.data() as AdditionalCharge & { accountingJournalId?: string; accountingPostingStatus?: string };
-    if (freshCharge.approvalStatus !== 'approved') throw new Error('Charge must be approved before accounting posting.');
+    if (freshCharge.approvalStatus !== 'approved') throw new DepositAccountingError('Charge must be approved before accounting posting.');
 
     const freshTotal = money(freshCharge.totalAmount);
     const freshNet = money(freshCharge.amount);
@@ -131,13 +152,13 @@ export async function postApprovedChargeAtomic(
       || freshCharge.relatedContractId !== charge.relatedContractId
       || freshCharge.vehicleId !== charge.vehicleId;
     if (financialFieldsChanged) {
-      throw new Error('Charge financial fields changed while accounting posting was being prepared. Retry from the latest approved charge state.');
+      throw new DepositAccountingError('Charge financial fields changed while accounting posting was being prepared. Retry from the latest approved charge state.');
     }
 
     if (existingJournal.exists) {
       const posted = existingJournal.data() as JournalEntry;
       if (posted.sourceType !== 'AdditionalCharge' || posted.sourceId !== charge.id || posted.sourceAction !== sourceAction || Math.abs(money(posted.totalDebit) - total) > 0.01 || Math.abs(money(posted.totalCredit) - total) > 0.01) {
-        throw new Error('Existing charge journal does not match the approved charge. Manual accounting review is required.');
+        throw new DepositAccountingError('Existing charge journal does not match the approved charge. Manual accounting review is required.');
       }
       const now = new Date().toISOString();
       tx.set(chargeRef, { accountingPostingStatus: 'posted', accountingJournalId: journal.id, updatedAt: now }, { merge: true });
@@ -145,7 +166,7 @@ export async function postApprovedChargeAtomic(
       resultingCharge = { ...freshCharge, accountingPostingStatus: 'posted', accountingJournalId: journal.id } as typeof charge;
       return;
     }
-    if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${journal.periodKey} is closed.`);
+    if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new DepositAccountingError(`Accounting period ${journal.periodKey} is closed.`);
 
     const now = new Date().toISOString();
     tx.create(journalRef, journal as unknown as FirebaseFirestore.DocumentData);
@@ -179,10 +200,10 @@ export async function applyDepositToApprovedChargeAtomic(
   idempotencyKey: string | undefined,
   recordAudit: RecordAuditFn
 ): Promise<{ deposit: Deposit; charge: AdditionalCharge; journal: JournalEntry; replayed: boolean }> {
-  if (!idempotencyKey) throw new Error('Idempotency-Key is required for deposit application.');
+  if (!idempotencyKey) throw new DepositAccountingError('Idempotency-Key is required for deposit application.');
   const amount = money(input.amount);
-  if (amount <= 0) throw new Error('Deposit application amount must be greater than zero.');
-  if (!input.chargeId) throw new Error('chargeId is required.');
+  if (amount <= 0) throw new DepositAccountingError('Deposit application amount must be greater than zero.');
+  if (!input.chargeId) throw new DepositAccountingError('chargeId is required.');
 
   // The charge must first exist in AR so the deposit application is a clean
   // liability-to-receivable settlement, never direct/ambiguous revenue.
@@ -218,8 +239,8 @@ export async function applyDepositToApprovedChargeAtomic(
       const journalRef = firestore.collection(JOURNAL_COLLECTION).doc(journal.id);
       const depositSnap = await tx.get(depositRef);
       const chargeSnap = await tx.get(chargeRef);
-      if (!depositSnap.exists) throw new Error('Deposit not found.');
-      if (!chargeSnap.exists) throw new Error('Charge not found.');
+      if (!depositSnap.exists) throw new DepositAccountingError('Deposit not found.');
+      if (!chargeSnap.exists) throw new DepositAccountingError('Charge not found.');
       const deposit = depositSnap.data() as Deposit & { holdType?: string; accountingPostingStatus?: string; accountingJournalId?: string };
       const charge = chargeSnap.data() as AdditionalCharge & { accountingPostingStatus?: string; accountingJournalId?: string };
       const customerRef = deposit.customerId ? firestore.collection('customers').doc(deposit.customerId) : null;
@@ -229,16 +250,16 @@ export async function applyDepositToApprovedChargeAtomic(
         tx.get(journalRef)
       ]);
 
-      if (deposit.holdType === 'gateway_authorization') throw new Error('An uncaptured gateway authorization cannot be applied as accounting cash. Capture/settle it through the gateway lifecycle first.');
-      if (deposit.accountingPostingStatus !== 'posted' || !deposit.accountingJournalId) throw new Error('Deposit receipt must be posted to accounting before it can be applied.');
-      if (amount > money(deposit.balance) + 0.005) throw new Error('Apply amount exceeds held deposit balance.');
-      if (charge.customerId !== deposit.customerId) throw new Error('Charge does not belong to this deposit customer.');
-      if (charge.approvalStatus !== 'approved') throw new Error('Charge must be approved before deposit application.');
-      if (charge.accountingPostingStatus !== 'posted' || !charge.accountingJournalId) throw new Error('Charge must be posted to accounting before deposit application.');
-      if (charge.deductedFromDepositId) throw new Error('Charge has already been deducted from a deposit.');
-      if (amount > money(charge.totalAmount) + 0.005) throw new Error('Apply amount exceeds the approved charge total.');
-      if (existingJournal.exists) throw new Error('Duplicate deposit-application journal detected.');
-      if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${journal.periodKey} is closed.`);
+      if (deposit.holdType === 'gateway_authorization') throw new DepositAccountingError('An uncaptured gateway authorization cannot be applied as accounting cash. Capture/settle it through the gateway lifecycle first.');
+      if (deposit.accountingPostingStatus !== 'posted' || !deposit.accountingJournalId) throw new DepositAccountingError('Deposit receipt must be posted to accounting before it can be applied.');
+      if (amount > money(deposit.balance) + 0.005) throw new DepositAccountingError('Apply amount exceeds held deposit balance.');
+      if (charge.customerId !== deposit.customerId) throw new DepositAccountingError('Charge does not belong to this deposit customer.');
+      if (charge.approvalStatus !== 'approved') throw new DepositAccountingError('Charge must be approved before deposit application.');
+      if (charge.accountingPostingStatus !== 'posted' || !charge.accountingJournalId) throw new DepositAccountingError('Charge must be posted to accounting before deposit application.');
+      if (charge.deductedFromDepositId) throw new DepositAccountingError('Charge has already been deducted from a deposit.');
+      if (amount > money(charge.totalAmount) + 0.005) throw new DepositAccountingError('Apply amount exceeds the approved charge total.');
+      if (existingJournal.exists) throw new DepositAccountingError('Duplicate deposit-application journal detected.');
+      if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new DepositAccountingError(`Accounting period ${journal.periodKey} is closed.`);
 
       const updatedDeposit = {
         ...deposit,
@@ -297,20 +318,20 @@ export async function refundManualDepositAtomic(
   idempotencyKey: string | undefined,
   recordAudit: RecordAuditFn
 ): Promise<{ deposit: Deposit; journal: JournalEntry; replayed: boolean }> {
-  if (!idempotencyKey) throw new Error('Idempotency-Key is required for deposit refunds.');
+  if (!idempotencyKey) throw new DepositAccountingError('Idempotency-Key is required for deposit refunds.');
   const amount = money(input.amount);
-  if (amount <= 0) throw new Error('Refund amount must be greater than zero.');
+  if (amount <= 0) throw new DepositAccountingError('Refund amount must be greater than zero.');
   const accounts = await getEffectiveChartOfAccounts();
   const firestore = db();
   const depositRef = firestore.collection('deposits').doc(depositId);
   const initialSnap = await depositRef.get();
-  if (!initialSnap.exists) throw new Error('Deposit not found.');
+  if (!initialSnap.exists) throw new DepositAccountingError('Deposit not found.');
   const initialDeposit = initialSnap.data() as Deposit & { holdType?: string; accountingPostingStatus?: string; accountingJournalId?: string; accountingAccountCode?: string };
-  if (initialDeposit.holdType === 'gateway_authorization') throw new Error('Gateway authorization holds must be released/refunded by the signed gateway lifecycle, not the manual accounting refund route.');
-  if (initialDeposit.accountingPostingStatus !== 'posted' || !initialDeposit.accountingJournalId) throw new Error('Deposit receipt must be posted to accounting before refund.');
+  if (initialDeposit.holdType === 'gateway_authorization') throw new DepositAccountingError('Gateway authorization holds must be released/refunded by the signed gateway lifecycle, not the manual accounting refund route.');
+  if (initialDeposit.accountingPostingStatus !== 'posted' || !initialDeposit.accountingJournalId) throw new DepositAccountingError('Deposit receipt must be posted to accounting before refund.');
   const settlementAccountCode = String(input.settlementAccountCode || initialDeposit.accountingAccountCode || '');
   const settlement = accounts.find(account => account.code === settlementAccountCode);
-  if (!settlement || !settlement.active || settlement.accountClass !== 'asset' || !settlement.cashEquivalent) throw new Error('Refund requires an active cash/bank/clearing account.');
+  if (!settlement || !settlement.active || settlement.accountClass !== 'asset' || !settlement.cashEquivalent) throw new DepositAccountingError('Refund requires an active cash/bank/clearing account.');
 
   const refundDate = input.refundDate ? new Date(input.refundDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
   const sourceAction = `refund:${idempotencyKey}`;
@@ -337,7 +358,7 @@ export async function refundManualDepositAtomic(
       const periodRef = firestore.collection(PERIOD_COLLECTION).doc(journal.periodKey);
       const journalRef = firestore.collection(JOURNAL_COLLECTION).doc(journal.id);
       const depositSnap = await tx.get(depositRef);
-      if (!depositSnap.exists) throw new Error('Deposit not found.');
+      if (!depositSnap.exists) throw new DepositAccountingError('Deposit not found.');
       const deposit = depositSnap.data() as Deposit & { holdType?: string; accountingPostingStatus?: string; accountingJournalId?: string };
       const customerRef = deposit.customerId ? firestore.collection('customers').doc(deposit.customerId) : null;
       const [customerSnap, periodSnap, existingJournal] = await Promise.all([
@@ -345,11 +366,11 @@ export async function refundManualDepositAtomic(
         tx.get(periodRef),
         tx.get(journalRef)
       ]);
-      if (deposit.holdType === 'gateway_authorization') throw new Error('Gateway authorization holds cannot use the manual refund route.');
-      if (deposit.accountingPostingStatus !== 'posted' || !deposit.accountingJournalId) throw new Error('Deposit receipt must be posted to accounting before refund.');
-      if (amount > money(deposit.balance) + 0.005) throw new Error('Refund amount exceeds held deposit balance.');
-      if (existingJournal.exists) throw new Error('Duplicate deposit-refund journal detected.');
-      if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new Error(`Accounting period ${journal.periodKey} is closed.`);
+      if (deposit.holdType === 'gateway_authorization') throw new DepositAccountingError('Gateway authorization holds cannot use the manual refund route.');
+      if (deposit.accountingPostingStatus !== 'posted' || !deposit.accountingJournalId) throw new DepositAccountingError('Deposit receipt must be posted to accounting before refund.');
+      if (amount > money(deposit.balance) + 0.005) throw new DepositAccountingError('Refund amount exceeds held deposit balance.');
+      if (existingJournal.exists) throw new DepositAccountingError('Duplicate deposit-refund journal detected.');
+      if (periodSnap.exists && (periodSnap.data() as AccountingPeriod).status === 'closed') throw new DepositAccountingError(`Accounting period ${journal.periodKey} is closed.`);
 
       const now = new Date().toISOString();
       const balance = money(deposit.balance - amount);

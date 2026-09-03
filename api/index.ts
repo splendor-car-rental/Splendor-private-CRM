@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { getVerifiedActiveStaff } from '../src/server/activeStaffAuth.js';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
 import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
-import { createManualDepositAtomic } from '../src/server/safeManualDepositCreate.js';
+import { handleSafeManualDepositCreate } from '../src/server/safeManualDepositCreate.js';
 import { recordAccountingAudit } from '../src/server/accountingAudit.js';
 import {
   issueAndRenderCorporateDocument,
@@ -46,11 +46,6 @@ const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
   account_statement: ['ceo', 'admin', 'finance', 'operations', 'sales'],
   quotation: ['ceo', 'admin', 'sales', 'operations']
 };
-
-function idempotencyKeyFromRequest(req: Request): string | undefined {
-  const value = req.headers['idempotency-key'];
-  return Array.isArray(value) ? value[0] : value;
-}
 
 async function verifiedStaff(req: Request, res: Response, roles: readonly string[]) {
   return getVerifiedActiveStaff(req, res, roles);
@@ -102,30 +97,7 @@ async function handler(req: Request, res: Response) {
   if (req.path === '/api/deposits' && req.method === 'POST') {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance', 'operations', 'sales']);
     if (!actor) return;
-    try {
-      const body = req.body || {};
-      if (body.holdType === 'gateway_authorization') {
-        return res.status(400).json({ error: 'Gateway authorization holds must be created by the signed payment-gateway lifecycle.' });
-      }
-      const result = await createManualDepositAtomic({
-        customerId: String(body.customerId || ''),
-        customerName: body.customerName,
-        contractId: body.contractId,
-        reservationId: body.reservationId,
-        amount: Number(body.amount),
-        paymentMethod: body.paymentMethod,
-        settlementAccountCode: body.settlementAccountCode,
-        holdReleaseDueDate: body.holdReleaseDueDate,
-        notes: body.notes,
-        transactionRef: body.transactionRef
-      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
-      return res.status(result.replayed ? 200 : 201).json(result.deposit);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Security deposit request failed.';
-      const lowered = message.toLowerCase();
-      const status = lowered.includes('idempotency-key') || lowered.includes('duplicate') || lowered.includes('closed') ? 409 : 400;
-      return res.status(status).json({ error: message });
-    }
+    return handleSafeManualDepositCreate(req, res, actor, recordAccountingAudit);
   }
 
   const depositMutationMatch = req.path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);

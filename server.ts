@@ -38,8 +38,9 @@ import {
   decideCatalogUpdate, listCatalogUpdateRequests, VehicleCatalogError
 } from './src/server/vehicleCatalog';
 import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate';
-import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './src/server/payments';
-import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './src/server/deposits';
+import { handleSafeManualDepositCreate } from './src/server/safeManualDepositCreate';
+import { handleSafeLegacyDepositMutation, handleSafeCustomerPaymentRequest } from './src/server/accountingApi';
+import { recordAccountingAudit } from './src/server/accountingAudit';
 import {
   createPaymentIntent, getPaymentIntent, refundPaymentIntent, releaseSecurityDepositHold,
   handleGatewayWebhook, PaymentIntentError
@@ -3803,107 +3804,34 @@ app.get('/api/deposits', (req, res) => {
   res.json(globalStore.deposits);
 });
 
+// Same handleSafeManualDepositCreate() the Vercel serverless boundary
+// (api/index.ts) already uses for this exact path -- previously this route
+// ran a second, non-idempotent implementation (createSecurityDeposit in
+// deposits.ts) that posted no accounting journal at all and had no
+// protection against a double-click/retry creating two deposits. Same
+// split-brain pattern as plate assignment (see assign-plate above).
 app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
-  const deposit = await createSecurityDeposit(req.body || {}, recordAudit);
-  res.status(201).json(deposit);
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeManualDepositCreate(req, res, actor, recordAccountingAudit);
 }));
 
-// Rule: no direct deduction from a security deposit -- a charge/claim must
-// already exist and already be approved before any amount can be taken
-// from the deposit against it. A chargeId is mandatory; the referenced
-// AdditionalCharge is validated (belongs to the same customer, approved,
-// not already used to justify a prior deduction, and the amount taken
-// can't exceed what the charge itself is for) and marked consumed in the
-// same transaction, so it can never be deducted twice.
+// Same handleSafeLegacyDepositMutation() the Vercel serverless boundary
+// (api/index.ts) already uses for this exact path -- previously this route
+// ran its own inline transaction here, correct on its own terms (real
+// read-before-write, mandatory approved chargeId, anti-double-deduction)
+// but never posting an accounting journal, unlike the safe implementation.
+// Same split-brain pattern as plate assignment and deposit creation above.
 app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
-  const { applyAmount, reason, chargeId, actorId, actorName } = req.body;
-  const amt = Number(applyAmount);
-  const now = new Date().toISOString();
-
-  if (!chargeId) {
-    return res.status(400).json({ error: 'chargeId is required -- a deposit can only be deducted against an existing, approved charge/claim, never a free-text reason alone.' });
-  }
-
-  const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
-  const chargeRef = admin.firestore().collection('charges').doc(chargeId);
-  let updatedDeposit: any;
-  try {
-    updatedDeposit = await runDurableTransaction(async (tx, db) => {
-      const snap = await tx.get(depositRef);
-      if (!snap.exists) throw new PersistenceError('Deposit not found');
-      const deposit = snap.data() as any;
-      if (amt > deposit.balance) throw new PersistenceError('Apply amount exceeds held balance');
-
-      const chargeSnap = await tx.get(chargeRef);
-      if (!chargeSnap.exists) throw new PersistenceError('Charge not found');
-      const charge = chargeSnap.data() as any;
-      if (charge.customerId !== deposit.customerId) throw new PersistenceError('Charge does not belong to this deposit\'s customer');
-      if (charge.approvalStatus !== 'approved') throw new PersistenceError('Charge must be approved before it can justify a deposit deduction');
-      if (charge.deductedFromDepositId) throw new PersistenceError('Charge has already been deducted from a deposit');
-      if (amt > charge.totalAmount) throw new PersistenceError('Apply amount exceeds the charge\'s own total amount');
-
-      // Real Firestore transactions require all reads before any writes --
-      // read the customer now, before the deposit/charge writes below.
-      const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
-      const customerSnap = customerRef ? await tx.get(customerRef) : null;
-
-      const updated = {
-        ...deposit,
-        appliedAmount: deposit.appliedAmount + amt,
-        balance: deposit.balance - amt,
-        appliedReason: reason || `${charge.type}: ${charge.description}`,
-        status: deposit.balance - amt === 0 ? 'applied' : 'held',
-        updatedAt: now
-      };
-      tx.set(depositRef, updated, { merge: true });
-      tx.set(chargeRef, { deductedFromDepositId: deposit.id }, { merge: true });
-
-      if (customerRef && customerSnap?.exists) {
-        const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-        tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-      }
-      return updated;
-    });
-  } catch (err) {
-    if (err instanceof PersistenceError) {
-      const notFound = err.message === 'Deposit not found' || err.message === 'Charge not found';
-      return res.status(notFound ? 404 : 400).json({ error: err.message });
-    }
-    throw err;
-  }
-
-  const index = globalStore.deposits.findIndex(d => d.id === req.params.id);
-  if (index !== -1) globalStore.deposits[index] = updatedDeposit;
-  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
-  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
-  const chargeIndex = globalStore.charges.findIndex(c => c.id === chargeId);
-  if (chargeIndex !== -1) globalStore.charges[chargeIndex] = { ...globalStore.charges[chargeIndex], deductedFromDepositId: updatedDeposit.id };
-
-  await recordAudit({
-    userId: actorId || 'USR-004',
-    userName: actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: updatedDeposit.id,
-    action: 'update',
-    newValue: `Applied ${amt} AED from deposit against charge ${chargeId}: ${reason || ''}`,
-    reason: reason || `Deducted against charge ${chargeId}`
-  });
-
-  res.json({ success: true, deposit: updatedDeposit });
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeLegacyDepositMutation(req, res, actor, req.params.id, 'apply');
 }));
 
 app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
-  const { refundAmount, actorId, actorName } = req.body;
-  try {
-    const updatedDeposit = await refundOrReleaseDeposit(req.params.id, refundAmount, { id: actorId || 'USR-004', name: actorName || 'Finance Manager' }, recordAudit);
-    res.json({ success: true, deposit: updatedDeposit });
-  } catch (err) {
-    if (err instanceof DepositError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
-      return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
-    }
-    throw err;
-  }
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeLegacyDepositMutation(req, res, actor, req.params.id, 'refund');
 }));
 
 app.get('/api/invoices', (req, res) => {
@@ -3914,20 +3842,18 @@ app.get('/api/payments', (req, res) => {
   res.json(globalStore.payments);
 });
 
-// Idempotency-Key protected: a double-click or network retry on this route
-// previously created two separate Payment records, each independently
-// decrementing invoice.paidAmount and customer.outstandingBalance --
-// double-crediting the customer. The whole payment+invoice+customer write
-// is now one atomic transaction, replayed (not repeated) on a matching key.
+// Same handleSafeCustomerPaymentRequest() the Vercel serverless boundary
+// (api/index.ts) already uses for this exact path -- previously this route
+// called createConfirmedPayment directly, which posted no accounting
+// journal, required no settlement account, and (unlike the safe
+// implementation) let 'corporate_credit' be recorded as if real cash had
+// been received rather than what it actually is: an invoice staying
+// outstanding on the corporate account. Same split-brain pattern as
+// plate assignment and deposits above.
 app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
-  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
-  try {
-    const { result: payment } = await createConfirmedPayment(req.body || {}, idempotencyKey, recordAudit);
-    res.status(201).json(payment);
-  } catch (err) {
-    if (err instanceof PaymentError) return res.status(400).json({ error: err.message });
-    throw err;
-  }
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeCustomerPaymentRequest(req, res, actor);
 }));
 
 // Sets a Payment's human verification status -- separate from and never

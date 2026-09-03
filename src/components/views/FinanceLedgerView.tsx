@@ -364,8 +364,10 @@ export const FinanceLedgerView: React.FC = () => {
                 <option value="card">Credit Card (Terminal)</option>
                 <option value="cash">Cash (Safe Deposit)</option>
                 <option value="online_link">Online Payment Link</option>
-                <option value="corporate_credit">Corporate Credit Account</option>
               </select>
+              {/* Corporate credit is never a received payment -- no cash actually
+                  moved, so it can't be "recorded" here. It stays as an outstanding
+                  invoice on the corporate account instead (see Corporate Accounts). */}
             </div>
           </div>
 

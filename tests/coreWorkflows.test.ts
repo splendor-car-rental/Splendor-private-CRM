@@ -401,8 +401,10 @@ describe('POST /api/payments -- idempotent payment recording', () => {
       .set(authAs(FINANCE_UID))
       .set('Idempotency-Key', key)
       .send({ customerId: 'CUS-CW-1', amount: 500, method: 'card' });
-    expect(second.status).toBe(201);
-    expect(second.body.id).toBe(first.body.id); // same payment, not a duplicate
+    // 200, not 201: a replayed Idempotency-Key returns the original result,
+    // it does not create (and therefore must not report creating) a second one.
+    expect(second.status).toBe(200);
+    expect(second.body.paymentId).toBe(first.body.paymentId); // same payment, not a duplicate
   });
 
   it('rejects a non-positive payment amount', async () => {
@@ -414,67 +416,102 @@ describe('POST /api/payments -- idempotent payment recording', () => {
   });
 });
 
+// Deposits created through POST /api/deposits (see the accounting-payments
+// describe block below) are always already posted to accounting; a deposit
+// seeded directly (bypassing that route, as every case here does) must
+// carry the same accountingPostingStatus/accountingJournalId/
+// accountingAccountCode fields the real creation path would have set, or
+// apply/refund correctly refuse it as "not posted yet" -- that refusal is
+// itself the same real production behavior being tested (api/index.ts has
+// enforced it in production since PR #9; this file exercises the identical
+// server.ts route that used to run a separate, less-safe implementation).
+function seedPostedDeposit(id: string, overrides: Record<string, any> = {}) {
+  seedDoc('deposits', id, {
+    id, amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held',
+    accountingPostingStatus: 'posted', accountingJournalId: `JRN-SEED-${id}`, accountingAccountCode: '1100',
+    ...overrides
+  });
+}
+
+function seedApprovableCharge(id: string, overrides: Record<string, any> = {}) {
+  seedDoc('charges', id, {
+    id, type: 'fuel', description: 'Fuel shortfall', approvalStatus: 'approved',
+    totalAmount: 300, amount: 300, vatAmount: 0, timestamp: new Date().toISOString(),
+    ...overrides
+  });
+}
+
 describe('POST /api/deposits/:id/apply and /refund', () => {
   it('applies part of a held deposit against an existing, approved charge -- and marks that charge consumed', async () => {
-    seedDoc('deposits', 'DEP-APPLY-1', { id: 'DEP-APPLY-1', customerId: 'CUS-DEP-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
-    seedDoc('charges', 'CHG-DEP-1', { id: 'CHG-DEP-1', customerId: 'CUS-DEP-1', type: 'fuel', totalAmount: 300, description: 'Fuel shortfall', approvalStatus: 'approved' });
+    seedPostedDeposit('DEP-APPLY-1', { customerId: 'CUS-DEP-1' });
+    seedApprovableCharge('CHG-DEP-1', { customerId: 'CUS-DEP-1', totalAmount: 300, amount: 300 });
     const res = await request(app)
       .post('/api/deposits/DEP-APPLY-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'apply-key-1')
       .send({ applyAmount: 300, chargeId: 'CHG-DEP-1' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201); // a fresh Idempotency-Key created a new application, not a replay
     expect(res.body.deposit.appliedAmount).toBe(300);
     expect(res.body.deposit.balance).toBe(700);
     expect(adminMock.store.get('charges')?.get('CHG-DEP-1').deductedFromDepositId).toBe('DEP-APPLY-1');
   });
 
   it('refunds a held deposit', async () => {
-    seedDoc('deposits', 'DEP-REFUND-1', { id: 'DEP-REFUND-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
+    seedPostedDeposit('DEP-REFUND-1');
     const res = await request(app)
       .post('/api/deposits/DEP-REFUND-1/refund')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'refund-key-1')
       .send({ refundAmount: 1000 });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.deposit.refundedAmount).toBe(1000);
   });
 
   it('rejects applying more than the remaining deposit balance', async () => {
-    seedDoc('deposits', 'DEP-OVERAPPLY-1', { id: 'DEP-OVERAPPLY-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
-    seedDoc('charges', 'CHG-DEP-2', { id: 'CHG-DEP-2', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 5000, description: 'Too much', approvalStatus: 'approved' });
+    seedPostedDeposit('DEP-OVERAPPLY-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
+    seedApprovableCharge('CHG-DEP-2', { customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 5000, amount: 5000, description: 'Too much' });
     const res = await request(app)
       .post('/api/deposits/DEP-OVERAPPLY-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'overapply-key-1')
       .send({ applyAmount: 5000, chargeId: 'CHG-DEP-2' });
     expect(res.status).not.toBe(200);
+    expect(res.status).not.toBe(201);
   });
 
   it('rejects a deposit deduction with no chargeId -- never a direct deduction without a backing charge/claim', async () => {
-    seedDoc('deposits', 'DEP-NOCHG-1', { id: 'DEP-NOCHG-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedPostedDeposit('DEP-NOCHG-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
     const res = await request(app)
       .post('/api/deposits/DEP-NOCHG-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'nochg-key-1')
       .send({ applyAmount: 100, reason: 'No charge attached' });
     expect(res.status).toBe(400);
   });
 
   it('rejects deducting against a charge that is not yet approved', async () => {
-    seedDoc('deposits', 'DEP-PENDCHG-1', { id: 'DEP-PENDCHG-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedPostedDeposit('DEP-PENDCHG-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
     seedDoc('charges', 'CHG-DEP-3', { id: 'CHG-DEP-3', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, description: 'Pending review', approvalStatus: 'pending_approval' });
     const res = await request(app)
       .post('/api/deposits/DEP-PENDCHG-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'pendchg-key-1')
       .send({ applyAmount: 100, chargeId: 'CHG-DEP-3' });
     expect(res.status).toBe(400);
   });
 
   it('rejects deducting against a charge that was already deducted from a deposit', async () => {
-    seedDoc('deposits', 'DEP-REUSED-1', { id: 'DEP-REUSED-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
-    seedDoc('charges', 'CHG-DEP-4', { id: 'CHG-DEP-4', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, description: 'Already used', approvalStatus: 'approved', deductedFromDepositId: 'DEP-SOME-OTHER' });
+    seedPostedDeposit('DEP-REUSED-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
+    seedApprovableCharge('CHG-DEP-4', { customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, amount: 200, description: 'Already used', deductedFromDepositId: 'DEP-SOME-OTHER' });
     const res = await request(app)
       .post('/api/deposits/DEP-REUSED-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'reused-key-1')
       .send({ applyAmount: 100, chargeId: 'CHG-DEP-4' });
-    expect(res.status).toBe(400);
+    // 409, not 400: this is a conflict with existing state (the charge was
+    // already consumed by a different deposit), the same bucket every other
+    // "already"/"duplicate" conflict in the accounting API falls into.
+    expect(res.status).toBe(409);
   });
 });
 

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
 import { issueNextNumber } from './idGenerator';
 import { fingerprintRequest, runIdempotent } from './idempotency';
@@ -186,4 +187,49 @@ export async function createManualDepositAtomic(
   }
 
   return { ...outcome.result, replayed: outcome.replayed };
+}
+
+/**
+ * The single request-handling entry point for POST /api/deposits, called
+ * from both api/index.ts (the real Vercel production route) and server.ts
+ * (local dev / the route the test suite exercises via supertest). Keeping
+ * one implementation here -- instead of api/index.ts and server.ts each
+ * carrying their own copy of this request/response logic -- is what
+ * actually closes the split-brain: server.ts used to call the older,
+ * non-idempotent, no-journal `createSecurityDeposit` from `deposits.ts`
+ * directly, which was silently dead in production but still what local
+ * dev and every test ran against.
+ */
+export async function handleSafeManualDepositCreate(
+  req: Request,
+  res: Response,
+  actor: AccountingActor,
+  recordAudit: RecordAuditFn
+) {
+  const body = req.body || {};
+  if (body.holdType === 'gateway_authorization') {
+    return res.status(400).json({ error: 'Gateway authorization holds must be created by the signed payment-gateway lifecycle.' });
+  }
+  const idempotencyKeyHeader = req.headers['idempotency-key'];
+  const idempotencyKey = Array.isArray(idempotencyKeyHeader) ? idempotencyKeyHeader[0] : idempotencyKeyHeader;
+  try {
+    const result = await createManualDepositAtomic({
+      customerId: String(body.customerId || ''),
+      customerName: body.customerName,
+      contractId: body.contractId,
+      reservationId: body.reservationId,
+      amount: Number(body.amount),
+      paymentMethod: body.paymentMethod,
+      settlementAccountCode: body.settlementAccountCode,
+      holdReleaseDueDate: body.holdReleaseDueDate,
+      notes: body.notes,
+      transactionRef: body.transactionRef
+    }, actor, idempotencyKey, recordAudit);
+    return res.status(result.replayed ? 200 : 201).json(result.deposit);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Security deposit request failed.';
+    const lowered = message.toLowerCase();
+    const status = lowered.includes('idempotency-key') || lowered.includes('duplicate') || lowered.includes('closed') ? 409 : 400;
+    return res.status(status).json({ error: message });
+  }
 }
