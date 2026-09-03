@@ -82,6 +82,58 @@ export interface CorporateAccount {
   updatedAt: string;
 }
 
+/** A category of identity/license evidence the KYC engine requires per customer jurisdiction (see src/server/kycEngine.ts's REQUIRED_DOCUMENTS_MAP). */
+export type DocumentCategory = 'EMIRATES_ID_FRONT' | 'EMIRATES_ID_BACK' | 'PASSPORT' | 'VISA_ENTRY_STAMP' | 'DRIVING_LICENSE_FRONT' | 'DRIVING_LICENSE_BACK' | 'INTL_DRIVING_PERMIT';
+
+/** Which jurisdiction's document set applies to a customer -- drives REQUIRED_DOCUMENTS_MAP, never guessed once set. */
+export type CustomerKycCategory = 'UAE_RESIDENT' | 'GCC_NATIONAL' | 'TOURIST';
+
+/** Overall KYC verification state for a customer -- VERIFIED is only ever reached when every required document is ACCEPTED and unexpired and age is confirmed (see KycEngine.reconcileProfileState). */
+export type KycStatus = 'UNVERIFIED' | 'DOCUMENTS_PENDING' | 'UNDER_REVIEW' | 'VERIFIED' | 'REJECTED' | 'EXPIRED';
+
+/** A single uploaded piece of identity evidence, staff-reviewed individually -- never auto-accepted. */
+export interface KycDocument {
+  id: string; // KYC-DOC-...
+  customerId: string;
+  category: DocumentCategory;
+  storagePath: string;
+  fileUrl: string;
+  fileName: string;
+  /** The real MIME type detected from the file's own magic bytes (KycEngine.validateFileSignature), not the client-claimed content-type. */
+  fileType?: string;
+  documentNumberMasked?: string;
+  /** The real, unmasked document number -- never sent to the client; only used server-side. */
+  documentNumberRaw?: string;
+  expiryDate?: string;
+  issuingCountry?: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  uploadedAt: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  rejectionReason?: string;
+}
+
+/** A customer's KYC dossier -- one per customer, reconciled from its documents rather than hand-set (see KycEngine). */
+export interface CustomerKycProfile {
+  customerId: string;
+  customerCategory: CustomerKycCategory;
+  status: KycStatus;
+  /** Never manufactured -- absent means age cannot be verified, not "assumed adult". */
+  dateOfBirth: string;
+  age: number;
+  isAgeVerified: boolean;
+  documents: KycDocument[];
+  riskScore: 'LOW' | 'MEDIUM' | 'HIGH' | 'BLOCKED';
+  rejectionNotes?: string;
+  /** CEO-only override for the supercar under-25 age policy -- a named executive exception, never a default. */
+  ceoExceptionGranted?: boolean;
+  ceoExceptionReason?: string;
+  ceoExceptionGrantedAt?: string;
+  ceoExceptionGrantedBy?: string;
+  updatedAt: string;
+}
+
 export interface Customer {
   id: string; // e.g. CUS-000001
   type: CustomerType;
@@ -118,6 +170,10 @@ export interface Customer {
   dateOfBirth?: string;
   /** Which language a customer-facing WhatsApp message should be sent in, monolingual (no mixing) -- used by the Lease-to-Own notification flows (dispatchCustomerNotification's `language` param). Defaults to 'ar' when absent, never mixed with a guessed opposite language. */
   preferredLanguage?: 'ar' | 'en';
+  /** Lazily created by KycEngine.getOrCreateKycProfile on first access -- absent for a customer whose KYC has never been evaluated. */
+  kycProfile?: CustomerKycProfile;
+  kycStatus?: KycStatus;
+  kycCustomerCategory?: CustomerKycCategory;
 
   // CRM details
   source: string;

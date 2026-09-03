@@ -8,25 +8,7 @@ import {
   DocumentCategory
 } from '../types';
 import { globalStore } from './dataStore';
-
-export const REQUIRED_DOCUMENTS_MAP: Record<CustomerKycCategory, DocumentCategory[]> = {
-  UAE_RESIDENT: [
-    'EMIRATES_ID_FRONT',
-    'EMIRATES_ID_BACK',
-    'DRIVING_LICENSE_FRONT',
-    'DRIVING_LICENSE_BACK'
-  ],
-  GCC_NATIONAL: [
-    'PASSPORT',
-    'DRIVING_LICENSE_FRONT',
-    'DRIVING_LICENSE_BACK'
-  ],
-  TOURIST: [
-    'PASSPORT',
-    'VISA_ENTRY_STAMP',
-    'DRIVING_LICENSE_FRONT'
-  ]
-};
+import { REQUIRED_DOCUMENTS_MAP } from '../config/kycDocuments';
 
 export const DIRECT_LICENSE_RECOGNIZED_COUNTRIES = new Set([
   'AE', 'SA', 'KW', 'QA', 'BH', 'OM',

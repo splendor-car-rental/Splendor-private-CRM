@@ -12,6 +12,7 @@ import { Customer, CRMDocument } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
+import { KycManagerCard } from '../common/KycManagerCard';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
 import { apiFetch } from '../../lib/apiFetch';
@@ -76,7 +77,7 @@ export const Customer360View: React.FC = () => {
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
 
   // 360 Tab selection
-  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs' | 'kyc'>('overview');
 
   // Filtered customer list
   const filteredCustomers = customers.filter(c => {
@@ -491,6 +492,14 @@ export const Customer360View: React.FC = () => {
               >
                 {language === 'ar' ? 'المستندات' : 'Documents'} ({customerDocs.length})
               </button>
+              <button
+                onClick={() => setActiveTab('kyc')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  activeTab === 'kyc' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {language === 'ar' ? 'التحقق من الهوية (KYC)' : 'KYC Verification'}
+              </button>
             </div>
 
             {/* TAB CONTENT: Profile & Identity */}
@@ -750,6 +759,17 @@ export const Customer360View: React.FC = () => {
                   )}
                 </div>
               </div>
+            )}
+
+            {/* TAB CONTENT: KYC Verification */}
+            {activeTab === 'kyc' && activeCustomer && (
+              <KycManagerCard
+                customer={activeCustomer}
+                currentUserId={currentUser.id}
+                currentUserRole={currentUser.role}
+                currentUserName={currentUser.name}
+                showToast={showToast}
+              />
             )}
           </div>
         ) : (

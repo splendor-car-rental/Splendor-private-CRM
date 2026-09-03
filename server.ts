@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
+import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction, KycDocument, DocumentCategory } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { calculateVatOnNet, extractVatFromGross, applyVat } from './src/config/tax';
@@ -28,6 +28,7 @@ import { createContractDurable, ContractValidationError } from './src/server/con
 import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
 import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
 import { createBlocklistEntry, checkBlocklist, listBlocklistEntries, requestUnblock, BlocklistError } from './src/server/blocklist';
+import { KycEngine } from './src/server/kycEngine';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
@@ -2964,6 +2965,273 @@ app.delete('/api/customers/:id', requireRole('ceo', 'admin'), asyncHandler(async
   });
 
   res.json({ success: true, message: `Customer ${customerId} successfully deleted.` });
+}));
+
+// --- KYC (src/server/kycEngine.ts + src/components/common/KycManagerCard.tsx +
+// src/components/views/PublicKycPortalView.tsx). The engine and both UI
+// components existed already but had no routes connecting them -- these
+// close that gap. Every profile mutation goes through KycEngine's own
+// state machine (reconcileProfileState) rather than being set directly, so
+// VERIFIED can never be reached without real accepted, unexpired documents
+// and a confirmed date of birth.
+const VALID_KYC_DOCUMENT_CATEGORIES: DocumentCategory[] = [
+  'EMIRATES_ID_FRONT', 'EMIRATES_ID_BACK', 'PASSPORT', 'VISA_ENTRY_STAMP',
+  'DRIVING_LICENSE_FRONT', 'DRIVING_LICENSE_BACK', 'INTL_DRIVING_PERMIT'
+];
+
+app.get('/api/kyc/:customerId', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'), asyncHandler(async (req, res) => {
+  const customer = globalStore.customers.find(c => c.id === req.params.customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  await updateDurable('customers', customer.id, customer as any);
+
+  const eligibility = KycEngine.evaluateCustomerKycEligibility(customer.id);
+  res.json({ profile, eligibility });
+}));
+
+app.post('/api/kyc/generate-link', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet'), asyncHandler(async (req, res) => {
+  const { customerId, expiresInHours } = req.body || {};
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const { token, expiresAt } = KycEngine.generateIntakeToken(customerId, Number(expiresInHours) || 48);
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const intakeUrl = `${origin}/kyc?token=${token}`;
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  await updateDurable('customers', customer.id, customer as any);
+
+  const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('REQUIRED', customer as any, intakeUrl);
+  try {
+    await dispatchCustomerNotification('kyc_link_generated', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage);
+  } catch (err) {
+    console.error('WhatsApp dispatch failed (kyc_link_generated):', err);
+  }
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    newValue: `Generated a KYC intake link (expires ${expiresAt}).`,
+    reason: 'KYC document collection'
+  });
+
+  res.json({ success: true, intakeUrl, expiresAt, profile });
+}));
+
+app.post('/api/kyc/verify-document', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const { customerId, documentId, action, rejectionReason, expiryDate, issuingCountry } = req.body || {};
+  if (!customerId || !documentId || !action) {
+    return res.status(400).json({ error: 'customerId, documentId, and action are required.' });
+  }
+  if (!['APPROVE', 'REJECT'].includes(action)) {
+    return res.status(400).json({ error: 'action must be APPROVE or REJECT.' });
+  }
+  if (action === 'REJECT' && !String(rejectionReason || '').trim()) {
+    return res.status(400).json({ error: 'A reason is required to reject a document.' });
+  }
+
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const doc = (profile.documents || []).find(d => d.id === documentId);
+  if (!doc) return res.status(404).json({ error: "Document not found on this customer's KYC profile." });
+
+  const actor = await getRequesterActor(req);
+  const now = new Date().toISOString();
+  const previousStatus = doc.status;
+  if (action === 'APPROVE') {
+    doc.status = 'ACCEPTED';
+    doc.rejectionReason = undefined;
+  } else {
+    doc.status = 'REJECTED';
+    doc.rejectionReason = String(rejectionReason).trim();
+  }
+  doc.verifiedAt = now;
+  doc.verifiedBy = actor?.uid || 'USR-001';
+  doc.verifiedByName = actor?.name || 'Staff';
+  if (expiryDate) doc.expiryDate = expiryDate;
+  if (issuingCountry) doc.issuingCountry = issuingCountry;
+
+  KycEngine.reconcileProfileState(profile, customer as any);
+  profile.updatedAt = now;
+  await updateDurable('customers', customer.id, customer as any);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    previousValue: `Document ${doc.category}: ${previousStatus}`,
+    newValue: `Document ${doc.category} marked ${doc.status}${action === 'REJECT' ? ` (${doc.rejectionReason})` : ''}.`,
+    reason: 'KYC document review'
+  });
+
+  if (profile.status === 'VERIFIED') {
+    const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('VERIFIED', customer as any);
+    try { await dispatchCustomerNotification('kyc_verified', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage); }
+    catch (err) { console.error('WhatsApp dispatch failed (kyc_verified):', err); }
+  } else if (action === 'REJECT') {
+    const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('REJECTED', customer as any, undefined, doc.rejectionReason);
+    try { await dispatchCustomerNotification('kyc_rejected', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage); }
+    catch (err) { console.error('WhatsApp dispatch failed (kyc_rejected):', err); }
+  }
+
+  res.json({ success: true, profile });
+}));
+
+app.post('/api/kyc/update-status', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const { customerId, customerCategory } = req.body || {};
+  if (!customerId || !customerCategory) return res.status(400).json({ error: 'customerId and customerCategory are required.' });
+  if (!['UAE_RESIDENT', 'GCC_NATIONAL', 'TOURIST'].includes(customerCategory)) {
+    return res.status(400).json({ error: 'Invalid customerCategory.' });
+  }
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const previousCategory = profile.customerCategory;
+  profile.customerCategory = customerCategory;
+  KycEngine.reconcileProfileState(profile, customer as any);
+  profile.updatedAt = new Date().toISOString();
+  await updateDurable('customers', customer.id, customer as any);
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    previousValue: `KYC category: ${previousCategory}`,
+    newValue: `KYC category: ${customerCategory}`,
+    reason: 'KYC jurisdiction category correction'
+  });
+
+  res.json({ success: true, profile });
+}));
+
+app.post('/api/kyc/grant-ceo-exception', requireRole('ceo'), asyncHandler(async (req, res) => {
+  const { customerId, reason } = req.body || {};
+  if (!customerId || !String(reason || '').trim()) {
+    return res.status(400).json({ error: 'customerId and a written executive justification are required.' });
+  }
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const actor = await getRequesterActor(req);
+  profile.ceoExceptionGranted = true;
+  profile.ceoExceptionReason = String(reason).trim();
+  profile.ceoExceptionGrantedAt = new Date().toISOString();
+  profile.ceoExceptionGrantedBy = actor?.uid || 'USR-001';
+  profile.updatedAt = new Date().toISOString();
+  await updateDurable('customers', customer.id, customer as any);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'CEO',
+    userRole: 'ceo',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    newValue: `CEO exception granted for the supercar under-25 age policy. Justification: ${profile.ceoExceptionReason}`,
+    reason: 'Executive KYC age-policy exception'
+  });
+
+  res.json({ success: true, profile });
+}));
+
+// Public, token-gated intake -- no staff session exists for a customer
+// filling this out from a WhatsApp link, so trust comes entirely from
+// KycEngine.verifyIntakeToken's HMAC check, not from req.authUser (this
+// route sits under /public/, exempted from the requireAuth gate above).
+app.post('/api/public/kyc/upload', asyncHandler(async (req, res) => {
+  const { token, category, fileName, fileType, dataBase64, documentNumber, expiryDate, issuingCountry } = req.body || {};
+  const verification = KycEngine.verifyIntakeToken(String(token || ''));
+  if (!verification.isValid || !verification.customerId) {
+    return res.status(401).json({ error: verification.error || 'Invalid or expired verification link.' });
+  }
+
+  const customer = globalStore.customers.find(c => c.id === verification.customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer record not found.' });
+
+  if (!VALID_KYC_DOCUMENT_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Invalid document category.' });
+  }
+  if (!fileName || !dataBase64) {
+    return res.status(400).json({ error: 'A file is required.' });
+  }
+
+  const base64Data = String(dataBase64).includes(',') ? String(dataBase64).split(',').pop()! : String(dataBase64);
+  const buffer = Buffer.from(base64Data, 'base64');
+  if (buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'File is too large (10MB max).' });
+  }
+
+  const signatureCheck = KycEngine.validateFileSignature(buffer);
+  if (!signatureCheck.isValid) {
+    return res.status(400).json({ error: signatureCheck.error || 'Invalid file.' });
+  }
+
+  const storagePath = `customer-documents/${customer.id}/kyc-${category}-${Date.now()}-${String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const bucket = admin.storage().bucket();
+  await bucket.file(storagePath).save(buffer, { metadata: { contentType: signatureCheck.detectedMime || fileType || 'application/octet-stream' } });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const docId = `KYC-DOC-${Date.now()}-${(profile.documents || []).length + 1}`;
+  const newDoc: KycDocument = {
+    id: docId,
+    customerId: customer.id,
+    category,
+    storagePath,
+    fileUrl: `/api/documents/file?path=${encodeURIComponent(storagePath)}`,
+    fileName: String(fileName),
+    fileType: signatureCheck.detectedMime,
+    documentNumberMasked: documentNumber ? KycEngine.maskDocumentNumber(category, String(documentNumber)) : undefined,
+    documentNumberRaw: documentNumber ? String(documentNumber) : undefined,
+    expiryDate: expiryDate || undefined,
+    issuingCountry: issuingCountry || undefined,
+    status: 'PENDING',
+    uploadedAt: new Date().toISOString()
+  };
+  // A re-upload of the same category before staff review supersedes the
+  // earlier pending copy; an already-ACCEPTED/REJECTED document is kept as
+  // real review history rather than silently overwritten.
+  profile.documents = (profile.documents || []).filter(d => !(d.category === category && d.status === 'PENDING'));
+  profile.documents.push(newDoc);
+  KycEngine.reconcileProfileState(profile, customer as any);
+  profile.updatedAt = new Date().toISOString();
+  await updateDurable('customers', customer.id, customer as any);
+
+  try {
+    const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('DOCS_RECEIVED', customer as any);
+    await dispatchCustomerNotification('kyc_docs_received', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage);
+  } catch (err) {
+    console.error('WhatsApp dispatch failed (kyc_docs_received):', err);
+  }
+
+  await recordAudit({
+    userId: 'PUBLIC_KYC_PORTAL',
+    userName: customer.fullName,
+    userRole: 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    newValue: `Customer self-uploaded a ${category} document via the public KYC intake portal.`,
+    reason: 'Public KYC document intake'
+  });
+
+  res.json({ success: true, documentId: docId });
 }));
 
 app.delete('/api/leads/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {

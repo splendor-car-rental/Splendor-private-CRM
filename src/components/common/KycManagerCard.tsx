@@ -7,7 +7,7 @@ import {
 import { Customer, CustomerKycProfile, CustomerKycCategory, KycDocument, DocumentCategory, KycStatus } from '../../types';
 import { Badge } from './Badge';
 import { Modal } from './Modal';
-import { REQUIRED_DOCUMENTS_MAP } from '../../server/kycEngine';
+import { REQUIRED_DOCUMENTS_MAP } from '../../config/kycDocuments';
 import { formatDate } from '../../lib/dateFormat';
 
 interface KycManagerCardProps {
