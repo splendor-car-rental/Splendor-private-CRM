@@ -194,13 +194,17 @@ async function hydrateExtension(source: ContextualDocumentSource): Promise<Hydra
 }
 
 async function loadInvoiceTaxEvidence(invoice: any) {
-  const items = Array.isArray(invoice?.items) ? invoice.items : [];
-  const ruleIds = Array.from(new Set(items.map((line: any) => String(line?.taxRuleVersionId || '').trim()).filter(Boolean)));
+  const items: any[] = Array.isArray(invoice?.items) ? invoice.items : [];
+  const ruleIds: string[] = Array.from(new Set<string>(
+    items.map((line: any) => String(line?.taxRuleVersionId || '').trim()).filter((id: string) => id.length > 0)
+  ));
   const ruleSnaps = await Promise.all(ruleIds.map(id => firestore().collection('tax_rule_versions').doc(id).get()));
   const rules = ruleSnaps
     .filter(snapshot => snapshot.exists)
     .map(snapshot => ({ id: snapshot.id, ...snapshot.data() } as TaxRuleVersion));
-  const sourceIds = Array.from(new Set(rules.flatMap(rule => rule.sourceIds || [])));
+  const sourceIds: string[] = Array.from(new Set<string>(
+    rules.flatMap(rule => (rule.sourceIds || []).map(String)).filter((id: string) => id.length > 0)
+  ));
   const sourceSnaps = await Promise.all(sourceIds.map(id => firestore().collection('tax_official_sources').doc(id).get()));
   const sources = sourceSnaps
     .filter(snapshot => snapshot.exists)
