@@ -6,22 +6,24 @@ import { vatPortion } from '../config/tax';
 import type { AuditLog, Contract, Customer, Vehicle } from '../types';
 
 // Server-authoritative "instant contract" creation (POST /api/contracts).
-// Previously this route trusted client-supplied dailyRate/rentalTotal/
-// vatAmount/grandTotal verbatim whenever present, had no requireRole at
-// all, and performed no availability check -- any authenticated staff
-// member (any of the six roles) could issue a real, audited rental
-// contract for any vehicle at an arbitrary price with zero conflict check.
 //
-// This function recalculates every financial figure from the vehicle's own
-// record, checks availability, and writes the contract + vehicle status +
-// customer totals + audit entry as ONE atomic Firestore transaction, with
-// idempotency-key support so a double-click or network retry can't create
-// two contracts for the same request.
+// Contract creation is NOT the authoritative event for operational rental
+// metrics. A contract can exist before physical handover, and a retry or an
+// alternate reservation-to-contract entry path must not change the meaning
+// of `totalRentals` or `lifetimeValue`.
+//
+// The clean-recovery invariant for #36 is therefore:
+// - contract creation may create the durable contract and preserve the
+//   existing vehicle reservation/rented compatibility behavior;
+// - it MUST NOT increment customer totalRentals;
+// - it MUST NOT recognize customer lifetimeValue;
+// - handover is the single operational rental-count event;
+// - financial closure is the single lifetime-value recognition event.
+//
+// Pricing and availability remain server-authoritative and this function
+// remains idempotent, so this change removes the metric side effect without
+// weakening the existing contract-creation protections.
 
-// Extends PersistenceError (not plain Error) so runDurableTransaction()
-// passes it through unchanged instead of wrapping it into a generic
-// "Transaction failed." -- the caller (server.ts) needs the real message
-// ("Vehicle not found.") to return a meaningful 400 to the client.
 export class ContractValidationError extends PersistenceError {
   constructor(message: string) {
     super(message);
@@ -51,15 +53,12 @@ export interface CreateContractResult {
   contract: Contract;
   auditEntry: AuditLog;
   vehicleUpdate: { status: string; currentCustomerId: string; currentContractId: string };
-  customerUpdate: { totalRentals: number; lifetimeValue: number };
+  /** Contract creation no longer mutates customer operational/financial metrics. */
+  customerUpdate: Record<string, never>;
   replayed: boolean;
 }
 
 export async function createContractDurable(input: CreateContractInput): Promise<CreateContractResult> {
-  // Ids are issued via their own atomic transactions (on numbering_configs
-  // documents, unrelated to the vehicle/customer/contract documents this
-  // function's own transaction touches) before that transaction opens --
-  // Firestore does not support nesting one transaction inside another.
   const contractId = await issueNextNumber('Contract');
   const auditId = await issueNextNumber('AuditLog');
 
@@ -167,10 +166,7 @@ export async function createContractDurable(input: CreateContractInput): Promise
         currentCustomerId: contract.customerId,
         currentContractId: contract.id
       };
-      const customerUpdate = {
-        totalRentals: (customer.totalRentals || 0) + 1,
-        lifetimeValue: (customer.lifetimeValue || 0) + grandTotal
-      };
+      const customerUpdate: Record<string, never> = {};
 
       const auditEntry: AuditLog = {
         id: auditId,
@@ -182,12 +178,14 @@ export async function createContractDurable(input: CreateContractInput): Promise
         entityId: contractId,
         action: 'create',
         newValue: `Issued instant contract ${contractId} for ${contract.customerName} (${grandTotal.toLocaleString()} AED)`,
-        reason: 'Executive instant contract creation'
+        reason: 'Executive instant contract creation; customer rental/LTV metrics are deferred to their authoritative lifecycle events'
       } as AuditLog;
 
       tx.create(db.collection('contracts').doc(contractId), contract as unknown as Record<string, unknown>);
       tx.set(vehicleRef, { ...vehicleUpdate, updatedAt: now }, { merge: true });
-      tx.set(customerRef, { ...customerUpdate, updatedAt: now }, { merge: true });
+      // Intentionally no customer metric write here. Reservation-derived
+      // contract creation already behaves this way; both entry paths are now
+      // consistent and handover owns totalRentals.
       tx.create(db.collection('audit_logs').doc(auditId), auditEntry as unknown as Record<string, unknown>);
 
       return { contract, auditEntry, vehicleUpdate, customerUpdate };
