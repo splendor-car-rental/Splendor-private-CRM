@@ -1649,12 +1649,12 @@ export interface Communication {
 export interface CRMDocument {
   id: string; // DOC-000001
   title: string;
-  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'other';
+  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'blocklist_evidence' | 'other';
   fileName: string;
   fileSize: string;
   fileType: string;
   fileUrl: string;
-  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch';
+  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch' | 'blocklist_entry';
   relatedEntityId: string;
   relatedEntityName?: string;
   expiryDate?: string;
