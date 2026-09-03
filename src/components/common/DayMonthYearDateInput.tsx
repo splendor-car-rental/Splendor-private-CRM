@@ -69,13 +69,19 @@ export const DayMonthYearDateInput: React.FC<DayMonthYearDateInputProps> = ({
   const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let raw = e.target.value;
 
-    // Auto-insert slash after 2 digits and 4 digits if typing numbers sequentially
-    // But allow backspace/deletion without getting stuck
+    // Auto-insert a slash after 2 digits and again after 4, recomputed from
+    // the digits on every keystroke (not just the first) -- gating this on
+    // "no slash yet" stopped inserting the SECOND slash the moment the
+    // first one had already been auto-inserted, since by then raw always
+    // contained a slash. Skips only when the user is typing dash-separated
+    // (DD-MM-YYYY), which is entered as-is instead.
     const numbersOnly = raw.replace(/[^\d]/g, '');
     let formatted = raw;
 
-    if (!raw.includes('/') && !raw.includes('-') && numbersOnly.length > 2) {
-      if (numbersOnly.length <= 4) {
+    if (!raw.includes('-') && numbersOnly.length > 0) {
+      if (numbersOnly.length <= 2) {
+        formatted = numbersOnly;
+      } else if (numbersOnly.length <= 4) {
         formatted = `${numbersOnly.slice(0, 2)}/${numbersOnly.slice(2)}`;
       } else {
         formatted = `${numbersOnly.slice(0, 2)}/${numbersOnly.slice(2, 4)}/${numbersOnly.slice(4, 8)}`;

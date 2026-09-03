@@ -11,14 +11,9 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { formatAED } from '../../lib/currency';
 import { formatDate } from '../../lib/dateFormat';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
+import { SOVEREIGN_BRANCHES } from '../../config/branches';
 import { CorporateAccount } from '../../types';
-
-const SOVEREIGN_BRANCHES = [
-  { id: 'DXB_BB', nameEn: 'Dubai Flagship • Business Bay', nameAr: 'الفرع الرئيسي • الخليج التجاري', code: 'DXB-01' },
-  { id: 'DXB_DIFC', nameEn: 'DIFC Executive Hub & Lounge', nameAr: 'مركز دبي المالي العالمي (DIFC)', code: 'DXB-02' },
-  { id: 'DXB_PALM', nameEn: 'Palm Jumeirah VIP Concierge', nameAr: 'نخلة جميرا (VIP)', code: 'DXB-03' },
-  { id: 'AUH_HUB', nameEn: 'Abu Dhabi Sovereign Hub', nameAr: 'فرع العاصمة أبوظبي', code: 'AUH-01' }
-];
 
 export const CorporateBranchPortalView: React.FC = () => {
   const { language } = useLanguage();
@@ -591,12 +586,11 @@ export const CorporateBranchPortalView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'انتهاء الرخصة' : 'License Expiry'}</label>
-                  <input
-                    type="date"
+                  <DayMonthYearDateInput
+                    label={language === 'ar' ? 'انتهاء الرخصة' : 'License Expiry'}
                     value={formData.licenseExpiry}
-                    onChange={e => setFormData({ ...formData, licenseExpiry: e.target.value })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
+                    onChange={iso => setFormData({ ...formData, licenseExpiry: iso })}
+                    isAr={language === 'ar'}
                   />
                 </div>
               </div>

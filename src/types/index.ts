@@ -82,9 +82,20 @@ export interface Customer {
   idType: 'emirates_id' | 'passport' | 'gcc_id';
   idNumber: string;
   idExpiryDate: string;
+  /** Optional -- most existing customer records were never asked for this. */
+  idIssueDate?: string;
   licenseNumber: string;
   licenseCountry: string;
   licenseExpiryDate: string;
+  /** Optional -- most existing customer records were never asked for these. */
+  licenseIssuedBy?: string;
+  licenseIssueDate?: string;
+  /** A UAE-issued license alone does not entitle a non-resident tourist to drive; a separate International Driving Permit is tracked independently rather than assumed. */
+  hasInternationalLicense?: boolean;
+  internationalLicenseNumber?: string;
+  internationalLicenseCountry?: string;
+  internationalLicenseIssueDate?: string;
+  internationalLicenseExpiryDate?: string;
   /** Optional -- most existing customer records were never asked for this. Added for Lease-to-Own age eligibility (checkLtoEligibility() in src/server/leaseToOwn.ts); absent for an existing customer is treated as "age cannot be verified" (conservatively ineligible for LTO), never guessed. */
   dateOfBirth?: string;
   /** Which language a customer-facing WhatsApp message should be sent in, monolingual (no mixing) -- used by the Lease-to-Own notification flows (dispatchCustomerNotification's `language` param). Defaults to 'ar' when absent, never mixed with a guessed opposite language. */

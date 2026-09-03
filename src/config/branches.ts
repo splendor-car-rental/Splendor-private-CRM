@@ -1,0 +1,19 @@
+/**
+ * Splendor's own internal branch/location network -- the fixed list a
+ * corporate account or reservation is assigned TO. Single source of truth
+ * shared by every screen that lets staff pick a Splendor branch, so it
+ * can't drift into two different lists.
+ */
+export interface SplendorBranch {
+  id: string;
+  nameEn: string;
+  nameAr: string;
+  code: string;
+}
+
+export const SOVEREIGN_BRANCHES: SplendorBranch[] = [
+  { id: 'DXB_BB', nameEn: 'Dubai Flagship • Business Bay', nameAr: 'الفرع الرئيسي • الخليج التجاري', code: 'DXB-01' },
+  { id: 'DXB_DIFC', nameEn: 'DIFC Executive Hub & Lounge', nameAr: 'مركز دبي المالي العالمي (DIFC)', code: 'DXB-02' },
+  { id: 'DXB_PALM', nameEn: 'Palm Jumeirah VIP Concierge', nameAr: 'نخلة جميرا (VIP)', code: 'DXB-03' },
+  { id: 'AUH_HUB', nameEn: 'Abu Dhabi Sovereign Hub', nameAr: 'فرع العاصمة أبوظبي', code: 'AUH-01' }
+];
