@@ -47,6 +47,32 @@ const USER_ROLES = new Set<UserRole>(['ceo', 'admin', 'operations', 'sales', 'fl
 const PERIOD_DOMAINS = new Set(['VAT', 'CORPORATE_TAX']);
 const DEADLINE_BASES = new Set<TaxDeadlineBasis>(['EMARATAX_CONFIRMED', 'OFFICIAL_SOURCE', 'SPECIAL_OFFICIAL_NOTICE']);
 
+type TaxPeriodLifecycleAction = 'open' | 'submit-review' | 'complete-review' | 'record-professional-validation' | 'close';
+type AuthorizedTaxPeriodTransition = { action: TaxPeriodLifecycleAction; permission: TaxPermission };
+
+/**
+ * User input may request a lifecycle action, but it never decides which
+ * permission protects that action. This server-owned allowlist resolves both
+ * the normalized action and its required permission before any transaction or
+ * state read/write occurs. Unknown actions fail closed.
+ */
+export function resolveTaxPeriodLifecycleAction(value: string): AuthorizedTaxPeriodTransition | null {
+  switch (value) {
+    case 'open':
+      return { action: 'open', permission: 'tax.prepare' };
+    case 'submit-review':
+      return { action: 'submit-review', permission: 'tax.prepare' };
+    case 'complete-review':
+      return { action: 'complete-review', permission: 'tax.review' };
+    case 'record-professional-validation':
+      return { action: 'record-professional-validation', permission: 'tax.approve' };
+    case 'close':
+      return { action: 'close', permission: 'tax.approve' };
+    default:
+      return null;
+  }
+}
+
 function cleanText(value: unknown, maxLength = 500): string {
   return String(value ?? '').trim().slice(0, maxLength);
 }
@@ -478,7 +504,7 @@ async function createTaxPeriod(req: Request, res: Response, actor: TaxActor) {
   return res.status(201).json(result);
 }
 
-async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor, action: string) {
+async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor, action: TaxPeriodLifecycleAction) {
   const periodId = cleanText(req.body?.periodId || req.query.periodId, 180);
   if (!periodId) return res.status(400).json({ error: 'periodId is required.' });
 
@@ -502,7 +528,6 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
     }
 
     if (action === 'open') {
-      if (!requirePermission(actor, 'tax.prepare', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const error = validateOpenTaxPeriod(previous, actor);
       if (error) throw new Error(error);
       next = {
@@ -516,7 +541,6 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       };
       reason = 'Tax Period opened for controlled preparation.';
     } else if (action === 'submit-review') {
-      if (!requirePermission(actor, 'tax.prepare', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
       if (freshnessError) throw new Error(freshnessError);
       const error = validateSubmitForReview(previous, actor);
@@ -533,7 +557,6 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       };
       reason = 'Prepared Tax Period submitted for independent internal review.';
     } else if (action === 'complete-review') {
-      if (!requirePermission(actor, 'tax.review', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const freshnessError = await validateAuthoritativeReconciliationFreshness(tx, db, previous);
       if (freshnessError) throw new Error(freshnessError);
       const error = validateIndependentReview(previous, actor);
@@ -551,7 +574,6 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       };
       reason = 'Independent internal review passed; external professional validation is now required.';
     } else if (action === 'record-professional-validation') {
-      if (!requirePermission(actor, 'tax.approve', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const validation = normalizeProfessionalValidation(req.body?.professionalValidation || req.body);
       const evidenceError = validateProfessionalValidation(validation);
       if (evidenceError) throw new Error(evidenceError);
@@ -573,7 +595,6 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       };
       reason = 'Verified external UAE tax-professional validation evidence recorded for this Tax Period.';
     } else if (action === 'close') {
-      if (!requirePermission(actor, 'tax.approve', res)) throw new Error('FORBIDDEN_RESPONSE_ALREADY_SENT');
       const closureNote = cleanText(req.body?.closureNote || req.body?.reason, 3000);
       if (!closureNote) throw new Error('A closure note is required. Closing a Tax Period does not mean it was filed.');
       const accountingClosureError = await validateAccountingClosureForTaxPeriod(tx, db, previous);
@@ -594,7 +615,8 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
       };
       reason = closureNote;
     } else {
-      throw new Error('Unknown Tax Period lifecycle action.');
+      const unreachable: never = action;
+      throw new Error(`Unknown Tax Period lifecycle action: ${String(unreachable)}`);
     }
 
     tx.set(ref, next, { merge: false });
@@ -602,10 +624,7 @@ async function transitionTaxPeriod(req: Request, res: Response, actor: TaxActor,
     return next;
   }).catch(error => ({ error: error instanceof Error ? error.message : 'Tax period transition failed.' }));
 
-  if ('error' in result) {
-    if (result.error === 'FORBIDDEN_RESPONSE_ALREADY_SENT') return;
-    return res.status(400).json(result);
-  }
+  if ('error' in result) return res.status(400).json(result);
   return res.status(200).json(result);
 }
 
@@ -619,7 +638,7 @@ export default async function taxPeriodHandler(req: Request, res: Response) {
 
   const method = String(req.method || 'GET').toUpperCase();
   const resource = cleanText(req.query.resource || '', 40);
-  const action = cleanText(req.query.action, 60);
+  const rawAction = cleanText(req.query.action, 60);
   if (resource !== 'periods') return res.status(400).json({ error: 'Unknown Tax Period resource.' });
 
   if (method === 'GET') {
@@ -635,8 +654,13 @@ export default async function taxPeriodHandler(req: Request, res: Response) {
     return res.status(200).json(periods);
   }
 
-  if (method === 'POST' && !action) return createTaxPeriod(req, res, actor);
-  if (method === 'POST' && action) return transitionTaxPeriod(req, res, actor, action);
+  if (method === 'POST' && !rawAction) return createTaxPeriod(req, res, actor);
+  if (method === 'POST' && rawAction) {
+    const authorizedTransition = resolveTaxPeriodLifecycleAction(rawAction);
+    if (!authorizedTransition) return res.status(400).json({ error: 'Unknown Tax Period lifecycle action.' });
+    if (!requirePermission(actor, authorizedTransition.permission, res)) return;
+    return transitionTaxPeriod(req, res, actor, authorizedTransition.action);
+  }
 
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ error: 'Method or Tax Period action not allowed.' });
