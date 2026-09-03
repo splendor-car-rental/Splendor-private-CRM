@@ -140,8 +140,14 @@ Functional verification → typecheck/lint → unit/integration/workflow tests �
 ## FINAL ACCEPTANCE (unchanged target, reached after P0-P4)
 Execute the full 24-step rental lifecycle acceptance test from customer creation through contract closure, profitability/dashboard updates, notifications, and complete audit trail.
 
-## CURRENT RESUME CHECKPOINT
-**P0 done, pending final CI confirmation on the last pushed SHA.** P1 is confirmed already done (Missions A-F were already merged to main via PR #9 — do not attempt to "recover" them again). One follow-up task is queued but not yet started: `task_2b745e0f` (swallowed accounting error messages in the other `safe*.ts` accounting modules, same pattern as `safeDepositAccounting.ts`). Immediate next action: live-verify CI is green on the latest SHA, then begin P2 (Tax/VAT governance) per the section below. Live-verify GitHub state (PR #56 CI/CodeQL on the latest pushed SHA, open issue list) before continuing if resuming after a gap.
+## CURRENT RESUME CHECKPOINT (updated 2026-09-03, end of P4 first pass)
+**P0-P3 done. P4 (repository closure) substantially done**, evidence recorded in `docs/RELEASE_ACCEPTANCE_MATRIX.md`. Issues #35, #36, #41 closed with evidence; #54 closed with its scope narrowed to what this cycle actually built (VAT math, evidence staleness, posting gaps, Four-Eyes, permanent filing restrictions), with the larger deferred engineering work (blocking-exception concurrency proofs, reconciliation freshness, Professional Validator Registry, source/rule version pinning) split into new issue #57 — not abandoned, explicitly out of scope for this cycle by the owner's own recorded decision. Issue #39 (master tracking gate) updated to reflect all of the above.
+
+**Issue #55 remains open**: the date-format and «سحابة» branding items are fixed and tested; the scroll/viewport/modal/table/RTL items remain code-reviewed only, not behaviorally proven, because this session's sandboxed environment blocks the Firebase Auth emulator's one-time binary download (`connect_rejected` to `firebase-public.firebaseio.com`, documented in `docs/QA_TEST_ENVIRONMENT.md`) — the login-gated app cannot be driven end-to-end here. Owner decision recorded: proceed without that verification for now rather than attempt a workaround; those rows stay UNVERIFIED until tested on a machine with normal outbound internet access.
+
+**Not yet done for a full release**: runtime/preview smoke on the exact final PR #56 HEAD, independent Work review, and the owner's explicit merge authorization (Issue #39's own non-negotiable rule: CI green alone is not acceptance). One older follow-up task remains queued and unstarted: `task_2b745e0f` (swallowed accounting error messages in the other `safe*.ts` accounting modules, same pattern already fixed in `safeDepositAccounting.ts`).
+
+Immediate next action if resuming: live-verify GitHub state (PR #56 CI/CodeQL on the latest pushed SHA, current issue list) before continuing, since state may have changed since this checkpoint was written.
 
 ## COMMUNICATION POLICY
 Continue without asking the user to say "start" again for routine batch-to-batch progress. Do send a real, substantive report at the end of each P0-P4 phase (not each individual batch) summarizing what was verified PASS/FAIL/UNVERIFIED. Interrupt immediately for anything Rule 17 above names.

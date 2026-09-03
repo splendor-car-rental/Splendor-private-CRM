@@ -116,15 +116,30 @@ runner, or non-sandboxed Claude Code session) before treating #55 as
 closeable — this is exactly the kind of runtime/behavioral requirement
 Rule 14 says code existing does not satisfy.
 
-## Overall recommendation
+## Overall recommendation (dispositioned 2026-09-03)
 
-Not all six gates have full evidence on this exact HEAD. Per Issue #39's
-own non-negotiable rule ("Do not merge #56 into main until every
-applicable blocking gate above has evidence... Owner explicitly
-authorizes merge"), **PR #56 should not be merged yet.** What is
-genuinely ready:
+Per Issue #39's own non-negotiable rule ("Do not merge #56 into main
+until every applicable blocking gate above has evidence... Owner
+explicitly authorizes merge"), **PR #56 has not been merged.** Owner
+decisions on every open question above were recorded and acted on:
 
-- #35, #36: **PASS**, closeable now.
-- #41: **PASS** with two named residual gaps (no anti-regression test, multi-page unverified) — owner's call whether those block closing.
-- #54: requires an owner scope decision (narrow the issue vs. keep the deferred items open) before it can be dispositioned either way.
-- #55: requires real-browser verification outside this sandboxed session before its scroll/viewport/modal/table/RTL rows can move past UNVERIFIED.
+- **#35, #36: PASS, closed** with the evidence in this document.
+- **#41: PASS, closed**, with its two residual gaps (no anti-regression
+  test against a future placeholder/redraw, multi-page conformity
+  unverified) named explicitly in the closing comment as known, tracked
+  debt rather than silently dropped.
+- **#54: closed, scope narrowed** to what this cycle actually built and
+  verified (VAT math, evidence staleness, posting gaps, Four-Eyes,
+  permanent filing restrictions). The larger deferred engineering work
+  (blocking-exception concurrency proofs, reconciliation freshness, the
+  Professional Validator Registry, source/rule version pinning) was not
+  abandoned — it continues in new issue **#57**.
+- **#55: left open.** Owner chose to proceed without real-browser
+  verification for now rather than attempt a workaround in this
+  sandboxed session; its scroll/viewport/modal/table/RTL rows remain
+  UNVERIFIED until tested on a machine with normal outbound internet
+  access.
+
+**Still required before merging PR #56 into `main`**: runtime/preview
+smoke on the exact final HEAD, independent Work review, and the owner's
+explicit merge authorization. None of those have happened yet.
