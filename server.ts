@@ -41,6 +41,7 @@ import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate
 import { handleSafeManualDepositCreate } from './src/server/safeManualDepositCreate';
 import { handleSafeLegacyDepositMutation, handleSafeCustomerPaymentRequest } from './src/server/accountingApi';
 import { recordAccountingAudit } from './src/server/accountingAudit';
+import { executeContractExtensionTransaction, ContractExtensionRecoveryError } from './src/server/contractExtensionRecovery';
 import {
   createPaymentIntent, getPaymentIntent, refundPaymentIntent, releaseSecurityDepositHold,
   handleGatewayWebhook, PaymentIntentError
@@ -2774,143 +2775,57 @@ app.post('/api/contracts/:id/close', requireRole('ceo', 'admin', 'operations', '
 // ----------------------------------------------------
 // CONTRACT EXTENSION ADDENDUM & FORMAL RENEWAL ENGINE
 // ----------------------------------------------------
+// Same executeContractExtensionTransaction() the Vercel serverless boundary
+// (api/contract-extension-safe.ts, the route Vercel actually rewrites this
+// exact path to per vercel.json) already uses -- previously this route ran
+// its own inline transaction here, and it wrote tx.set(contractRef, ...)
+// before tx.get(vehicleRef), the exact real-Firestore-rejected read-after-
+// write ordering bug Issue #35 tracks. Same split-brain pattern as plate
+// assignment, deposits, and payments above: this was reachable (and still
+// broken) via local dev and every test that calls server.ts directly.
 app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const contractId = req.params.id;
-  const { 
-    newEndDateTime, 
-    dailyRate: customDailyRate,
-    currentOdometerKm,
-    paymentMethod = 'credit_card',
-    paymentMethodLabel,
-    issueDate,
-    notes,
-    actorId,
-    actorName
-  } = req.body;
+  const { newEndDateTime, dailyRate: customDailyRate, currentOdometerKm, paymentMethod, paymentMethodLabel, issueDate, notes } = req.body;
 
   if (!newEndDateTime) {
     return res.status(400).json({ error: 'newEndDateTime is required for extending the contract.' });
   }
 
-  const now = new Date().toISOString();
-  const contractRef = admin.firestore().collection('contracts').doc(contractId);
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
 
-  let updatedContract: any;
-  let newAddendum: any;
-  let calculatedExtraDays = 0;
-  let calculatedExtraAmount = 0;
+  const addendumId = await issueNextNumber('Addendum');
 
+  let outcome: Awaited<ReturnType<typeof executeContractExtensionTransaction>>;
   try {
-    const outcome = await runDurableTransaction(async (tx, db) => {
-      const snap = await tx.get(contractRef);
-      if (!snap.exists) throw new PersistenceError('Contract not found');
-      const contract = snap.data() as any;
-
-      if (contract.status === 'completed' || contract.status === 'cancelled') {
-        throw new PersistenceError(`Cannot extend a contract with status '${contract.status}'.`);
-      }
-
-      const prevEnd = new Date(contract.endDateTime).getTime();
-      const nextEnd = new Date(newEndDateTime).getTime();
-
-      if (isNaN(nextEnd) || nextEnd <= prevEnd) {
-        throw new PersistenceError('New end date/time must be strictly after the current contract end date/time.');
-      }
-
-      const diffMs = nextEnd - prevEnd;
-      const extraDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-      const rate = customDailyRate !== undefined && customDailyRate > 0 ? Number(customDailyRate) : (contract.dailyRate || 0);
-      const periodRentalAmount = rate * extraDays;
-      const vatRatePercent = 5;
-      const vatAmount = Math.round((periodRentalAmount * 0.05) * 100) / 100;
-      const totalExtensionAmount = periodRentalAmount + vatAmount;
-
-      calculatedExtraDays = extraDays;
-      calculatedExtraAmount = totalExtensionAmount;
-
-      const addendumId = await issueNextNumber('Addendum');
-      const addendumSeq = ((contract.extensions?.length || 0) + 1).toString().padStart(4, '0');
-      const addendumNumber = `EXT-${new Date().getFullYear()}-${addendumSeq}`;
-
-      const addendumRecord = {
-        id: addendumId,
-        addendumNumber,
-        contractId: contract.id,
-        contractNumber: contract.contractNumber || contract.id,
-        issueDate: issueDate || new Date().toISOString().split('T')[0],
-        customerName: contract.customerName,
-        customerPhone: contract.customerPhone,
-        plateNumber: contract.vehiclePlate,
-        vehicleName: contract.vehicleName,
-        currentEndDateTime: contract.endDateTime,
-        newEndDateTime,
-        extensionDurationDays: extraDays,
-        currentOdometerKm: Number(currentOdometerKm) || (contract.handover?.startMileage || 0),
-        dailyRate: rate,
-        periodRentalAmount,
-        vatRatePercent,
-        vatAmount,
-        totalExtensionAmount,
-        paymentMethod,
-        paymentMethodLabel: paymentMethodLabel || paymentMethod,
-        bankDetails: {
-          bankName: 'بنك الإمارات دبي الوطني (Emirates NBD)',
-          accountNumber: '1015963340001',
-          iban: 'AE220260001015963340001'
-        },
-        notes: notes || `Contract extension for ${extraDays} day(s).`,
-        createdBy: actorId || 'USR-001',
-        createdByName: actorName || 'Operations Specialist',
-        createdAt: now,
-        updatedAt: now
-      };
-
-      const updatedExtensions = [...(contract.extensions || []), addendumRecord];
-      const updatedTotal = (contract.grandTotal || 0) + totalExtensionAmount;
-      const updatedRentalTotal = (contract.rentalTotal || 0) + periodRentalAmount;
-      const updatedVatAmount = (contract.vatAmount || 0) + vatAmount;
-
-      const updated = {
-        ...contract,
-        endDateTime: newEndDateTime,
-        dailyRate: rate,
-        rentalTotal: updatedRentalTotal,
-        vatAmount: updatedVatAmount,
-        grandTotal: updatedTotal,
-        extensions: updatedExtensions,
-        updatedAt: now
-      };
-
-      tx.set(contractRef, updated, { merge: true });
-
-      if (contract.vehicleId) {
-        const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-        const vSnap = await tx.get(vehicleRef);
-        if (vSnap.exists) {
-          tx.set(vehicleRef, { updatedAt: now }, { merge: true });
-        }
-      }
-
-      return { updated, addendumRecord };
+    outcome = await executeContractExtensionTransaction(admin.firestore(), {
+      contractId,
+      newEndDateTime,
+      customDailyRate,
+      currentOdometerKm,
+      paymentMethod,
+      paymentMethodLabel,
+      issueDate,
+      notes,
+      actor,
+      addendumId
     });
-
-    updatedContract = outcome.updated;
-    newAddendum = outcome.addendumRecord;
   } catch (err) {
-    if (err instanceof PersistenceError) {
-      return res.status(400).json({ error: err.message });
+    if (err instanceof ContractExtensionRecoveryError) {
+      return res.status(err.status).json({ error: err.message });
     }
     throw err;
   }
 
-  const cIndex = globalStore.contracts.findIndex(c => c.id === contractId);
-  if (cIndex !== -1) globalStore.contracts[cIndex] = updatedContract;
+  const { contract: updatedContract, addendum: newAddendum, extraDays: calculatedExtraDays, extraAmount: calculatedExtraAmount } = outcome;
 
-  const actor = await getRequesterActor(req);
+  const cIndex = globalStore.contracts.findIndex(c => c.id === contractId);
+  if (cIndex !== -1) globalStore.contracts[cIndex] = updatedContract as unknown as Contract;
+
   await recordAudit({
-    userId: actor?.uid || actorId || 'USR-001',
-    userName: actor?.name || actorName || 'Operations Specialist',
-    userRole: (actor?.role as any) || 'operations',
+    userId: actor.uid,
+    userName: actor.name,
+    userRole: actor.role as any,
     entityType: 'Contract',
     entityId: updatedContract.id,
     action: 'update',
@@ -3694,82 +3609,12 @@ app.get('/api/lto/vehicles/:id/summary', asyncHandler(async (req, res) => {
   res.json(await getLtoSummaryForVehicle(req.params.id));
 }));
 
-// Extends an active contract's end date -- e.g. a customer wants a few more
-// days. Recalculates the rental total/VAT/grand total for the added days
-// at the contract's existing daily rate, logs an audit entry, and sends the
-// customer a WhatsApp "extension addendum" notice (the spec's explicit
-// "ملحق تمديد للعقد" -- extension addendum -- requirement).
-app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
-  const { newEndDateTime, actorId, actorName } = req.body || {};
-  if (!newEndDateTime) return res.status(400).json({ error: 'newEndDateTime is required.' });
-  const now = new Date().toISOString();
-  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
-
-  let outcome: { updated: any; extraDays: number; extraAmount: number };
-  try {
-    outcome = await runDurableTransaction(async (tx) => {
-      const snap = await tx.get(contractRef);
-      if (!snap.exists) throw new PersistenceError('Contract not found.');
-      const contract = snap.data() as any;
-
-      const oldEnd = contract.endDateTime;
-      const newEndMs = new Date(newEndDateTime).getTime();
-      const oldEndMs = new Date(oldEnd).getTime();
-      // Naturally idempotent: once endDateTime is updated to newEndDateTime,
-      // a repeat of the exact same request fails this same check (new <=
-      // old) instead of double-extending.
-      if (Number.isNaN(newEndMs) || newEndMs <= oldEndMs) {
-        throw new PersistenceError('The new end date must be after the current end date.');
-      }
-
-      const extraDays = Math.ceil((newEndMs - oldEndMs) / 86400000);
-      const extraRental = extraDays * contract.dailyRate;
-      const extraVat = calculateVatOnNet(extraRental);
-      const updated = {
-        ...contract,
-        endDateTime: newEndDateTime,
-        rentalTotal: contract.rentalTotal + extraRental,
-        vatAmount: contract.vatAmount + extraVat,
-        grandTotal: contract.grandTotal + extraRental + extraVat,
-        updatedAt: now
-      };
-      tx.set(contractRef, updated, { merge: true });
-      return { updated, extraDays, extraAmount: Math.round((extraRental + extraVat) * 100) / 100 };
-    });
-  } catch (err) {
-    if (err instanceof PersistenceError && (err.message === 'Contract not found.' || err.message.startsWith('The new end date'))) {
-      return res.status(err.message === 'Contract not found.' ? 404 : 400).json({ error: err.message });
-    }
-    throw err;
-  }
-
-  const { updated: updatedContract, extraDays, extraAmount } = outcome;
-  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
-  if (index !== -1) globalStore.contracts[index] = updatedContract;
-
-  await recordAudit({
-    userId: actorId || 'USR-001',
-    userName: actorName || 'Operations',
-    userRole: 'operations',
-    entityType: 'Contract',
-    entityId: updatedContract.id,
-    action: 'update',
-    previousValue: `End date: ${updatedContract.endDateTime}`,
-    newValue: `Extended to ${newEndDateTime} (+${extraDays} day(s), +${extraAmount.toLocaleString()} AED)`,
-    reason: 'Contract extension'
-  });
-
-  try {
-    const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
-    await dispatchCustomerNotification('customer_contract_extended', updatedContract.customerId, updatedContract.customerName, customer?.phone,
-      `Your contract ${updatedContract.id} has been extended by ${extraDays} day(s) -- new return date ${newEndDateTime.slice(0, 10)}. Additional amount: ${extraAmount.toLocaleString()} AED.`,
-      `تم تمديد عقدكم رقم ${updatedContract.id} لمدة ${extraDays} يوم/أيام -- تاريخ التسليم الجديد ${newEndDateTime.slice(0, 10)}. المبلغ الإضافي: ${extraAmount.toLocaleString()} درهم.`);
-  } catch (err) {
-    console.error('WhatsApp dispatch failed (customer_contract_extended):', err);
-  }
-
-  res.json({ success: true, contract: updatedContract, extraDays, extraAmount });
-}));
+// A second, older /api/contracts/:id/extend handler used to live here --
+// dead code (Express dispatches only the first matching route registered
+// above, at the top of this file, to the shared executeContractExtensionTransaction()
+// implementation), but it duplicated the same read-after-write ordering bug
+// Issue #35 tracks and was removed rather than left as a live trap for a
+// future refactor that reorders route registration.
 
 // ----------------------------------------------------
 // 8. CHARGES, DEPOSITS, PAYMENTS & STATEMENTS

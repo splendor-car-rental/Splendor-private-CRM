@@ -117,17 +117,29 @@ vi.mock('firebase-admin', () => {
       };
     },
     runTransaction: async (fn: any) => {
+      // Real Firestore transactions reject any read issued after the first
+      // write in the same transaction attempt. Enforce that here too --
+      // this exact class of bug (Issue #35: a write before a later read in
+      // the same transaction) is invisible against a mock that just
+      // applies operations in call order without checking, which is why it
+      // shipped in the first place.
+      let writesStarted = false;
       const applySet = (ref: any, data: any, opts?: { merge?: boolean }) => {
         maybeFail(ref.__collection);
+        writesStarted = true;
         const col = collectionOf(ref.__collection);
         const existing = col.get(ref.id);
         col.set(ref.id, opts?.merge && existing ? { ...existing, ...data } : data);
       };
       const tx = {
-        get: async (refOrQuery: any) => refOrQuery.get(),
+        get: async (refOrQuery: any) => {
+          if (writesStarted) throw new Error('STRICT_TX_READ_AFTER_WRITE: Firestore transactions require all reads to be executed before all writes.');
+          return refOrQuery.get();
+        },
         set: (ref: any, data: any, opts?: any) => applySet(ref, data, opts),
         create: (ref: any, data: any) => {
           maybeFail(ref.__collection);
+          writesStarted = true;
           const col = collectionOf(ref.__collection);
           if (col.has(ref.id)) {
             const err: any = new Error('ALREADY_EXISTS');
@@ -136,7 +148,7 @@ vi.mock('firebase-admin', () => {
           }
           col.set(ref.id, data);
         },
-        delete: (ref: any) => collectionOf(ref.__collection).delete(ref.id)
+        delete: (ref: any) => { writesStarted = true; collectionOf(ref.__collection).delete(ref.id); }
       };
       return fn(tx, firestoreObj);
     }
