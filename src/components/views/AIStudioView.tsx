@@ -6,6 +6,7 @@ import {
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
+import { formatTime } from '../../lib/dateFormat';
 
 export const AIStudioView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -44,21 +45,21 @@ export const AIStudioView: React.FC = () => {
 
     const userText = chatPrompt;
     setChatPrompt('');
-    setChatMessages(prev => [...prev, { role: 'user', text: userText, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+    setChatMessages(prev => [...prev, { role: 'user', text: userText, time: formatTime(new Date()) }]);
     setChatLoading(true);
 
     try {
       const res = await queryAI(userText, language);
       setChatMessages(prev => [...prev, { 
         role: 'assistant', 
-        text: res.text || 'Analysis completed successfully.', 
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+        text: res.text || 'Analysis completed successfully.',
+        time: formatTime(new Date())
       }]);
     } catch (err: any) {
       setChatMessages(prev => [...prev, { 
         role: 'assistant', 
-        text: 'Apologies, I encountered an issue retrieving the analysis. Please check your query or verify system metrics.', 
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+        text: 'Apologies, I encountered an issue retrieving the analysis. Please check your query or verify system metrics.',
+        time: formatTime(new Date())
       }]);
     } finally {
       setChatLoading(false);

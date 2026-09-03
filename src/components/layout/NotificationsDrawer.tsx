@@ -3,6 +3,7 @@ import { X, Check, Bell, AlertTriangle, AlertCircle, Info, Calendar, FileText } 
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
+import { formatTime } from '../../lib/dateFormat';
 
 interface NotificationsDrawerProps {
   isOpen: boolean;
@@ -69,7 +70,7 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({ isOpen
                   </div>
 
                   <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-500">
-                    <span>{new Date(notif.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    <span>{formatTime(notif.timestamp)}</span>
                     {notif.link && (
                       <button
                         onClick={() => {

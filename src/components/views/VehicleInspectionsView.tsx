@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { uploadFile } from '../../lib/upload';
+import { formatDateTime } from '../../lib/dateFormat';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
@@ -154,7 +155,7 @@ export const VehicleInspectionsView: React.FC = () => {
                   </Badge>
                 </div>
                 <p className="text-zinc-400 mt-0.5">{isAr ? INSPECTION_TYPE_LABELS[inspection.type].ar : INSPECTION_TYPE_LABELS[inspection.type].en}{inspection.contractNumber ? ` · ${inspection.contractNumber}` : ''}</p>
-                <p className="text-zinc-600 text-[10px] mt-1 font-mono">{inspection.id} · {new Date(inspection.startedAt).toLocaleString()}</p>
+                <p className="text-zinc-600 text-[10px] mt-1 font-mono">{inspection.id} · {formatDateTime(inspection.startedAt)}</p>
               </button>
             ))}
             {filtered.length === 0 && <p className="text-zinc-500 py-6 text-center">{isAr ? 'لا توجد سجلات فحص.' : 'No inspection records.'}</p>}
@@ -511,7 +512,7 @@ const InspectionWorkspace: React.FC<{
                 </div>
               </div>
               <p className="text-zinc-400 mt-1">{d.description}</p>
-              <p className="text-zinc-600 text-[10px] mt-1">{d.recordedByName} · {new Date(d.recordedAt).toLocaleString()}</p>
+              <p className="text-zinc-600 text-[10px] mt-1">{d.recordedByName} · {formatDateTime(d.recordedAt)}</p>
               {d.reviewNotes && <p className="text-zinc-500 text-[10px] mt-0.5">{isAr ? 'ملاحظة المراجعة:' : 'Review note:'} {d.reviewNotes}</p>}
               {isDraft && isDecider && d.liabilityStatus === 'pending_review' && (
                 <button onClick={() => setReviewingDamage(d)} className="mt-1.5 text-sky-400 hover:text-sky-300 font-medium">{isAr ? 'مراجعة المسؤولية' : 'Review liability'}</button>
@@ -545,7 +546,7 @@ const InspectionWorkspace: React.FC<{
         <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-2">
           <h4 className="font-bold text-zinc-200 uppercase tracking-wide text-[11px] flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5" /> {isAr ? 'إقرار العميل' : 'Customer Acknowledgement'}</h4>
           {inspection.customerAcknowledgement ? (
-            <p className="text-emerald-400">{isAr ? 'أقرّ' : 'Acknowledged by'} {inspection.customerAcknowledgement.acknowledgedByName} -- {isAr ? 'بشهادة' : 'witnessed by'} {inspection.customerAcknowledgement.witnessedByName}, {new Date(inspection.customerAcknowledgement.acknowledgedAt).toLocaleString()}</p>
+            <p className="text-emerald-400">{isAr ? 'أقرّ' : 'Acknowledged by'} {inspection.customerAcknowledgement.acknowledgedByName} -- {isAr ? 'بشهادة' : 'witnessed by'} {inspection.customerAcknowledgement.witnessedByName}, {formatDateTime(inspection.customerAcknowledgement.acknowledgedAt)}</p>
           ) : (
             <>
               <p className="text-amber-400">{isAr ? 'لم يتم تسجيل إقرار العميل بعد.' : 'No customer acknowledgement recorded yet.'}</p>

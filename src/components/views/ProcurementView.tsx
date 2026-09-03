@@ -1506,7 +1506,7 @@ const NewTarsRecordModal: React.FC<{
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Failed to open a TARS record.');
-      showToast(language === 'ar' ? 'تم فتح سجل TARS' : 'TARS record opened', `${data.id} — ${language === 'ar' ? 'الموعد النهائي' : 'deadline'} ${new Date(data.deadlineAt).toLocaleString()}`);
+      showToast(language === 'ar' ? 'تم فتح سجل TARS' : 'TARS record opened', `${data.id} — ${language === 'ar' ? 'الموعد النهائي' : 'deadline'} ${formatDateTime(data.deadlineAt)}`);
       setContractId(''); setVehicleId('');
       onCreated();
     } catch (err: any) {

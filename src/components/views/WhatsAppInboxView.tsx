@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
+import { formatTime } from '../../lib/dateFormat';
 import type { WhatsAppConversation, WhatsAppConversationMessage, WhatsAppConversationState, WhatsAppConversationPriority } from '../../types';
 
 /**
@@ -196,7 +197,7 @@ export const WhatsAppInboxView: React.FC = () => {
                     {c.unread && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />}
                     {c.customerName || c.phone}
                   </p>
-                  <span className="text-[9px] text-zinc-600 shrink-0">{c.lastInboundAt ? new Date(c.lastInboundAt).toLocaleTimeString() : ''}</span>
+                  <span className="text-[9px] text-zinc-600 shrink-0">{c.lastInboundAt ? formatTime(c.lastInboundAt) : ''}</span>
                 </div>
                 <p className="text-[10px] text-zinc-500 truncate mt-0.5">{c.lastMessagePreview || '—'}</p>
                 <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -271,7 +272,7 @@ export const WhatsAppInboxView: React.FC = () => {
                   <div key={m.id} className={`flex ${m.direction === 'inbound' ? 'justify-start' : 'justify-end'}`}>
                     <div className={`max-w-[75%] px-3 py-2 rounded-2xl text-xs whitespace-pre-wrap ${m.direction === 'inbound' ? 'bg-zinc-800 text-zinc-100' : 'bg-[#D4AF37]/15 border border-[#D4AF37]/25 text-zinc-100'}`}>
                       <p>{m.body}</p>
-                      <p className="text-[9px] text-zinc-500 mt-1">{m.sentByName || (m.direction === 'inbound' ? (isAr ? 'العميل' : 'Customer') : '')} · {new Date(m.timestamp).toLocaleTimeString()}</p>
+                      <p className="text-[9px] text-zinc-500 mt-1">{m.sentByName || (m.direction === 'inbound' ? (isAr ? 'العميل' : 'Customer') : '')} · {formatTime(m.timestamp)}</p>
                     </div>
                   </div>
                 ))}

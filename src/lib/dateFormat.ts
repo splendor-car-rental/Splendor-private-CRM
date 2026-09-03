@@ -23,19 +23,28 @@ const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
  * through the Date constructor, where converting to local wall-clock time
  * for display is the actually-intended behavior.
  */
-function extractCalendarDate(input: string | number | Date): { day: number; month: number; year: number } | null {
+function extractCalendarDate(input: string | number | Date, timeZone?: string): { day: number; month: number; year: number } | null {
   if (typeof input === 'string' && DATE_ONLY_PATTERN.test(input)) {
     const [year, month, day] = input.split('-').map(Number);
     return { day, month, year };
   }
   const d = input instanceof Date ? input : new Date(input);
   if (isNaN(d.getTime())) return null;
+  if (timeZone) {
+    // A real timestamp read in a specific timezone (e.g. server code
+    // rendering a customer-facing message in UAE time regardless of the
+    // host's own timezone) instead of the runtime's local getters.
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+    const map: Record<string, string> = {};
+    for (const part of parts) map[part.type] = part.value;
+    return { day: parseInt(map.day, 10), month: parseInt(map.month, 10), year: parseInt(map.year, 10) };
+  }
   return { day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear() };
 }
 
-export function formatDate(input: string | number | Date | undefined | null): string {
+export function formatDate(input: string | number | Date | undefined | null, timeZone?: string): string {
   if (!input) return '';
-  const parsed = extractCalendarDate(input);
+  const parsed = extractCalendarDate(input, timeZone);
   if (!parsed) return '';
   const day = String(parsed.day).padStart(2, '0');
   const month = String(parsed.month).padStart(2, '0');
@@ -50,6 +59,22 @@ export function formatDateTime(input: string | number | Date | undefined | null)
   const hours = String(d.getHours()).padStart(2, '0');
   const minutes = String(d.getMinutes()).padStart(2, '0');
   return `${datePart} ${hours}:${minutes}`;
+}
+
+/**
+ * Time-only (no date), 24-hour, zero-padded HH:MM -- for a chat/WhatsApp
+ * message timestamp or a "last seen" indicator where only the clock time is
+ * shown. A single fixed format everywhere this appears, instead of each
+ * call site picking its own `toLocaleTimeString()` options (some already in
+ * this codebase used 12-hour AM/PM, some 24-hour, inconsistently).
+ */
+export function formatTime(input: string | number | Date | undefined | null): string {
+  if (!input) return '';
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return '';
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
 }
 
 export function formatDateLocalized(input: string | number | Date | undefined | null, isAr = false): string {

@@ -9,6 +9,7 @@ import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
 import { calculateVatOnNet, extractVatFromGross, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
+import { formatDate } from './src/lib/dateFormat';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
 import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/server/bankImportGuard';
@@ -2836,8 +2837,8 @@ app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations', 
 
   try {
     await dispatchNotificationEvent('contract_extended',
-      `Contract ${updatedContract.contractNumber} extended by ${calculatedExtraDays} day(s) until ${new Date(newEndDateTime).toLocaleDateString()} (+${calculatedExtraAmount.toLocaleString()} AED).`,
-      `تم تمديد العقد رقم ${updatedContract.contractNumber} لمدة ${calculatedExtraDays} يوم حتى تاريخ ${new Date(newEndDateTime).toLocaleDateString()} (إجمالي الإضافة ${calculatedExtraAmount.toLocaleString()} درهم).`
+      `Contract ${updatedContract.contractNumber} extended by ${calculatedExtraDays} day(s) until ${formatDate(newEndDateTime, 'Asia/Dubai')} (+${calculatedExtraAmount.toLocaleString()} AED).`,
+      `تم تمديد العقد رقم ${updatedContract.contractNumber} لمدة ${calculatedExtraDays} يوم حتى تاريخ ${formatDate(newEndDateTime, 'Asia/Dubai')} (إجمالي الإضافة ${calculatedExtraAmount.toLocaleString()} درهم).`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (contract_extended):', err);

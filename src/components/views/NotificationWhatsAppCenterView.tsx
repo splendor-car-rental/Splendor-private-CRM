@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { NOTIFICATION_EVENTS, NOTIFICATION_CATEGORY_LABELS, CUSTOMER_NOTIFICATION_EVENTS } from '../../config/notificationEvents';
 import { NotificationCategory } from '../../types';
+import { formatTime } from '../../lib/dateFormat';
 
 /**
  * Luxury dark-mode / glassmorphism control panel: deep charcoal base,
@@ -398,7 +399,7 @@ const MessageLogPanel: React.FC<{ log: any[]; isAr: boolean }> = ({ log, isAr })
             <p className="text-[10px] text-zinc-500 truncate">{entry.message}</p>
             {entry.errorMessage && <p className="text-[10px] text-rose-400 mt-0.5">{entry.errorMessage}</p>}
           </div>
-          <span className="text-[9px] text-zinc-600 shrink-0">{new Date(entry.createdAt).toLocaleTimeString()}</span>
+          <span className="text-[9px] text-zinc-600 shrink-0">{formatTime(entry.createdAt)}</span>
         </div>
       ))}
     </div>

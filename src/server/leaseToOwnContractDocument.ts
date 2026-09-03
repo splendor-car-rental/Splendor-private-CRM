@@ -34,7 +34,13 @@ function money(n: number): string {
 function arDate(iso: string | undefined): string {
   if (!iso) return '.......................';
   const d = new Date(iso);
-  return d.toLocaleDateString('ar-AE', { year: 'numeric', month: 'long', day: 'numeric', calendar: 'gregory' });
+  // This runs server-side (Vercel), whose runtime timezone is not
+  // guaranteed to be UAE's -- it's commonly UTC. Without an explicit
+  // timeZone, a timestamp close to midnight UAE time (UTC+4) can render as
+  // the wrong calendar day on a signed legal contract. Every date on this
+  // document must read as it would to someone standing in the UAE,
+  // regardless of where the rendering server physically runs.
+  return d.toLocaleDateString('ar-AE', { year: 'numeric', month: 'long', day: 'numeric', calendar: 'gregory', timeZone: 'Asia/Dubai' });
 }
 
 /** Builds the full Arabic contract HTML without performing I/O. */

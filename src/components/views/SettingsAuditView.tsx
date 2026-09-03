@@ -10,6 +10,7 @@ import { Badge } from '../common/Badge';
 import { AuthenticatedImage } from '../common/AuthenticatedImage';
 import { AddStaffModal } from '../auth/AddStaffModal';
 import { EditStaffModal } from '../auth/EditStaffModal';
+import { formatDateTime } from '../../lib/dateFormat';
 import { GovernanceView } from './GovernanceView';
 import { ROLE_RANK } from '../../config/permissions';
 import { User } from '../../types';
@@ -346,7 +347,7 @@ export const SettingsAuditView: React.FC = () => {
                 {auditLogs.map(log => (
                   <tr key={log.id} className="hover:bg-zinc-900/40 transition-colors">
                     <td className="p-4 font-mono text-zinc-400 whitespace-nowrap">
-                      {new Date(log.timestamp).toLocaleString()}
+                      {formatDateTime(log.timestamp)}
                     </td>
                     <td className="p-4 font-semibold text-zinc-200">{log.userName}</td>
                     <td className="p-4 font-mono text-[11px] uppercase text-[#f5d97f]">{log.action}</td>
