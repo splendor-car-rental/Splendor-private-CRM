@@ -3100,8 +3100,19 @@ app.post('/api/corporate-accounts', requireRole('ceo', 'admin', 'sales', 'financ
       name: req.body.primaryContact?.name || '',
       email: req.body.primaryContact?.email || '',
       phone: req.body.primaryContact?.phone || '',
-      designation: req.body.primaryContact?.designation || ''
+      designation: req.body.primaryContact?.designation || '',
+      idNumber: req.body.primaryContact?.idNumber || undefined,
+      authorizationType: req.body.primaryContact?.authorizationType || undefined,
+      authorizationRef: req.body.primaryContact?.authorizationRef || undefined
     },
+    branches: Array.isArray(req.body.branches) ? req.body.branches.map((b: any) => ({
+      id: String(b?.id || ''),
+      branchName: String(b?.branchName || ''),
+      emirate: String(b?.emirate || ''),
+      address: String(b?.address || ''),
+      phone: b?.phone || undefined,
+      isHeadOffice: Boolean(b?.isHeadOffice)
+    })) : undefined,
     creditLimitAed: Number(req.body.creditLimitAed) || 0,
     usedExposureAed: 0,
     paymentTermsDays: Number(req.body.paymentTermsDays) || 30,

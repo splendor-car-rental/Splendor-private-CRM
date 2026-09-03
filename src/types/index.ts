@@ -39,6 +39,16 @@ export interface BlocklistEntry {
   removedByName?: string;
 }
 
+/** One of a corporate customer's own office locations -- distinct from `branchId`, which names the SPLENDOR branch servicing this account, not the client's own address. */
+export interface CorporateAccountBranch {
+  id: string;
+  branchName: string;
+  emirate: string;
+  address: string;
+  phone?: string;
+  isHeadOffice: boolean;
+}
+
 export interface CorporateAccount {
   id: string; // CORP-000001
   legalName: string;
@@ -47,12 +57,20 @@ export interface CorporateAccount {
   trnVatNumber?: string;
   licenseExpiry?: string;
   branchId: string;
+  /** The individual legally authorized to act for this company -- a corporate account is never treated as capable of signing for itself, so this person's own authority is tracked, not just their contact details. */
   primaryContact: {
     name: string;
     email: string;
     phone: string;
     designation: string;
+    /** The authorized person's own ID/passport number -- optional because most existing accounts predate this field, never guessed for one that does. */
+    idNumber?: string;
+    authorizationType?: 'power_of_attorney' | 'board_resolution' | 'trade_license_partner' | 'delegation_letter';
+    /** Reference number of the POA/board resolution/delegation letter itself -- the actual document is attached as real evidence via CRMDocument (relatedEntityType 'corporate_account'), never a self-reported checkbox. */
+    authorizationRef?: string;
   };
+  /** The client's own office network. Optional -- most existing accounts were registered before this was tracked. */
+  branches?: CorporateAccountBranch[];
   creditLimitAed: number;
   usedExposureAed: number;
   paymentTermsDays: number;
@@ -1649,12 +1667,12 @@ export interface Communication {
 export interface CRMDocument {
   id: string; // DOC-000001
   title: string;
-  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'blocklist_evidence' | 'other';
+  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'blocklist_evidence' | 'corporate_authorization' | 'other';
   fileName: string;
   fileSize: string;
   fileType: string;
   fileUrl: string;
-  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch' | 'blocklist_entry';
+  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch' | 'blocklist_entry' | 'corporate_account';
   relatedEntityId: string;
   relatedEntityName?: string;
   expiryDate?: string;

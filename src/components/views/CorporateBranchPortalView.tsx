@@ -433,7 +433,7 @@ export const CorporateBranchPortalView: React.FC = () => {
               {selectedCorp.primaryContact && (
                 <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-2 text-xs">
                   <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
-                    {language === 'ar' ? 'المسؤول المعتمد' : 'Authorized Representative'}
+                    {language === 'ar' ? 'الشخص المخوّل بالتوقيع' : 'Authorized Signatory'}
                   </div>
                   <div className="font-semibold text-zinc-200">{selectedCorp.primaryContact.name || '—'}</div>
                   <div className="text-zinc-400 text-[11px]">{selectedCorp.primaryContact.designation || 'Contact Person'}</div>
@@ -444,6 +444,37 @@ export const CorporateBranchPortalView: React.FC = () => {
                     {selectedCorp.primaryContact.email && (
                       <span className="flex items-center gap-1"><Mail className="w-3 h-3 text-blue-400" /> {selectedCorp.primaryContact.email}</span>
                     )}
+                  </div>
+                  {(selectedCorp.primaryContact.authorizationType || selectedCorp.primaryContact.authorizationRef) && (
+                    <div className="pt-2 mt-1 border-t border-zinc-800/80 text-[11px] text-zinc-400 space-y-0.5">
+                      {selectedCorp.primaryContact.authorizationType && (
+                        <div>{language === 'ar' ? 'نوع التفويض: ' : 'Authorization: '}<span className="text-zinc-300">{selectedCorp.primaryContact.authorizationType.replace(/_/g, ' ')}</span></div>
+                      )}
+                      {selectedCorp.primaryContact.authorizationRef && (
+                        <div className="font-mono">{language === 'ar' ? 'المرجع: ' : 'Ref: '}{selectedCorp.primaryContact.authorizationRef}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Client's Own Branch Network */}
+              {selectedCorp.branches && selectedCorp.branches.length > 0 && (
+                <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-2 text-xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider flex items-center gap-1.5">
+                    <MapPin className="w-3 h-3 text-blue-400" />
+                    {language === 'ar' ? 'فروع الشركة (مكاتب العميل)' : "Client's Own Branch Network"}
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedCorp.branches.map(branch => (
+                      <div key={branch.id} className="flex items-center justify-between text-[11px] text-zinc-300 p-1.5 rounded-lg bg-zinc-950/60">
+                        <span>
+                          {branch.branchName || '—'}
+                          {branch.isHeadOffice && <span className="ms-1.5 text-[9px] text-blue-400 font-mono">HQ</span>}
+                        </span>
+                        <span className="text-zinc-500">{branch.emirate}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
