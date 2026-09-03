@@ -1,30 +1,30 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
-import app from '../server.js';
-import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
-import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
-import { createManualDepositAtomic } from '../src/server/safeManualDepositCreate.js';
-import { recordAccountingAudit } from '../src/server/accountingAudit.js';
-import { issueNextNumber } from '../src/server/idGenerator.js';
-import { appendToAuditChain } from '../src/server/auditIntegrity.js';
-import { globalStore } from '../src/server/dataStore.js';
+import app from '../../server.js';
+import { assignPlateAtomically } from './atomicPlateAssignment.js';
+import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from './accountingApi.js';
+import { createManualDepositAtomic } from './safeManualDepositCreate.js';
+import { recordAccountingAudit } from './accountingAudit.js';
+import { issueNextNumber } from './idGenerator.js';
+import { appendToAuditChain } from './auditIntegrity.js';
+import { globalStore } from './dataStore.js';
 import {
   beginContractReturn,
   settleContractReturn,
   ContractReturnWorkflowError
-} from '../src/server/contractReturnWorkflow.js';
+} from './contractReturnWorkflow.js';
 import {
   issueAndRenderCorporateDocument,
   getCorporateDocumentMeta,
   type CorporateDocumentInput,
   type CorporateDocumentKind
-} from '../src/server/corporateDocumentEngine.js';
+} from './corporateDocumentEngine.js';
 import {
   DocumentIssuanceInProgressError,
   issueContextualDocument,
   previewContextualDocument,
   type ContextualDocumentSource
-} from '../src/server/contextualDocumentService.js';
+} from './contextualDocumentService.js';
 
 const CORPORATE_DOCUMENT_KINDS: CorporateDocumentKind[] = [
   'rental_contract', 'lpo', 'credit_note', 'fines_notice', 'debit_note',

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const handler = readFileSync(new URL('../api/handler.ts', import.meta.url), 'utf8');
+const handler = readFileSync(new URL('../src/server/vercelAppHandler.ts', import.meta.url), 'utf8');
 const contractOps = readFileSync(new URL('../src/server/contractOps.ts', import.meta.url), 'utf8');
 const reservationDraft = readFileSync(new URL('../src/server/reservationContractDraft.ts', import.meta.url), 'utf8');
 const kycEngine = readFileSync(new URL('../src/server/kycEngine.ts', import.meta.url), 'utf8');

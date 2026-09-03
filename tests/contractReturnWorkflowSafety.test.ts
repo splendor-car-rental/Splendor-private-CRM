@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const service = readFileSync(new URL('../src/server/contractReturnWorkflow.ts', import.meta.url), 'utf8');
-const handler = readFileSync(new URL('../api/handler.ts', import.meta.url), 'utf8');
+const handler = readFileSync(new URL('../src/server/vercelAppHandler.ts', import.meta.url), 'utf8');
 
 describe('contract return workflow safety', () => {
   it('does not free the vehicle at physical return intake', () => {

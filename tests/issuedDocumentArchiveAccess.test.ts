@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const apiHandler = readFileSync(new URL('../api/handler.ts', import.meta.url), 'utf8');
+const apiHandler = readFileSync(new URL('../src/server/vercelAppHandler.ts', import.meta.url), 'utf8');
 
 describe('immutable issued-document archive access', () => {
   it('intercepts issued-document reads before the generic upload proxy', () => {

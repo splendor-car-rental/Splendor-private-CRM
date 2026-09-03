@@ -60,6 +60,6 @@ export default async function safeTaxComplianceHandler(req: Request, res: Respon
     return reconciliationHandler(req, res);
   }
 
-  const { default: handler } = await import('./tax-compliance.js');
+  const { default: handler } = await import('../src/server/taxComplianceMasterApi.js');
   return handler(req, res);
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const api = readFileSync(new URL('../api/tax-compliance.ts', import.meta.url), 'utf8');
+const api = readFileSync(new URL('../src/server/taxComplianceMasterApi.ts', import.meta.url), 'utf8');
 const safeApi = readFileSync(new URL('../api/tax-compliance-safe.ts', import.meta.url), 'utf8');
 const vercel = readFileSync(new URL('../vercel.json', import.meta.url), 'utf8');
 const permissions = readFileSync(new URL('../src/config/permissions.ts', import.meta.url), 'utf8');
@@ -15,7 +15,7 @@ describe('Tax Compliance runtime boundary', () => {
     expect(vercel).toContain('"source": "/api/tax-compliance", "destination": "/api/tax-compliance-safe"');
     expect(safeApi).toContain('FIREBASE_SERVICE_ACCOUNT_KEY');
     expect(safeApi).toContain('ignoreUndefinedProperties: true');
-    expect(safeApi).toContain("import('./tax-compliance.js')");
+    expect(safeApi).toContain("import('../src/server/taxComplianceMasterApi.js')");
   });
 
   it('requires authentication, active staff, independent permissions, atomic audit evidence, and has no delete path', () => {

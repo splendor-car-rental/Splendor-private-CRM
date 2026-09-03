@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const apiEntrypoint = readFileSync(new URL('../api/index.ts', import.meta.url), 'utf8');
-const apiHandler = readFileSync(new URL('../api/handler.ts', import.meta.url), 'utf8');
+const apiHandler = readFileSync(new URL('../src/server/vercelAppHandler.ts', import.meta.url), 'utf8');
 const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
 const vercelConfig = readFileSync(new URL('../vercel.json', import.meta.url), 'utf8');
 const premiumCss = readFileSync(new URL('../src/premium-sapphire.css', import.meta.url), 'utf8');
@@ -14,7 +14,7 @@ const auth = readFileSync(new URL('../src/components/auth/AuthScreens.tsx', impo
 
 describe('production serverless entrypoint', () => {
   it('statically imports one Node ESM build artifact beside the Vercel entrypoint', () => {
-    expect(apiEntrypoint).toContain("import bundledHandler from './api-handler.mjs'");
+    expect(apiEntrypoint).toContain("import bundledHandler from '../dist/api-handler.mjs'");
     expect(apiEntrypoint).not.toContain('createRequire(');
     expect(apiEntrypoint).not.toContain("from '../server.ts'");
     expect(apiEntrypoint).not.toContain("from '../server.js'");
@@ -30,11 +30,11 @@ describe('production serverless entrypoint', () => {
   });
 
   it('builds the complete API handler as Node 22 ESM to support ESM-only runtime dependencies', () => {
-    expect(packageJson).toContain('esbuild api/handler.ts --bundle');
+    expect(packageJson).toContain('esbuild src/server/vercelAppHandler.ts --bundle');
     expect(packageJson).toContain('--target=node22 --format=esm');
-    expect(packageJson).toContain('--outfile=api/api-handler.mjs');
-    expect(apiHandler).toContain("import app from '../server.js';");
-    expect(vercelConfig).toContain('"includeFiles": "{api/api-handler.mjs,dist/**}"');
+    expect(packageJson).toContain('--outfile=dist/api-handler.mjs');
+    expect(apiHandler).toContain("import app from '../../server.js';");
+    expect(vercelConfig).toContain('"includeFiles": "dist/**"');
   });
 });
 

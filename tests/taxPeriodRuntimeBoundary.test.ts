@@ -8,7 +8,7 @@ describe('Tax Period runtime boundary', () => {
   it('keeps Tax Periods behind the existing isolated Tax Compliance route', () => {
     expect(safeApi).toContain("resource === 'periods'");
     expect(safeApi).toContain("import('../src/server/taxPeriodApi.js')");
-    expect(safeApi).toContain("import('./tax-compliance.js')");
+    expect(safeApi).toContain("import('../src/server/taxComplianceMasterApi.js')");
   });
 
   it('requires authentication and independent tax permissions', () => {

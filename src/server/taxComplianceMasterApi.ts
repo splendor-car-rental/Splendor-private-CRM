@@ -1,12 +1,12 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
-import { canTax } from '../src/config/taxCompliance.js';
+import { canTax } from '../config/taxCompliance.js';
 import {
   validateOfficialSourceAuthority,
   validateProfessionalValidation,
   validateRuleAcceptance,
   type TaxActor
-} from '../src/server/taxCompliancePolicy.js';
+} from './taxCompliancePolicy.js';
 import type {
   TaxMasterProfile,
   TaxOfficialSource,
@@ -14,8 +14,8 @@ import type {
   TaxProfessionalValidation,
   TaxRuleVersion,
   TaxSourceAuthority
-} from '../src/tax/types.js';
-import type { UserRole } from '../src/types/index.js';
+} from '../tax/types.js';
+import type { UserRole } from '../types/index.js';
 
 const PROFILE_COLLECTION = 'tax_master_profiles';
 const PROFILE_HISTORY_COLLECTION = 'tax_master_profile_versions';

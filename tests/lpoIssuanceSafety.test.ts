@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const service = readFileSync(new URL('../src/server/contextualDocumentService.ts', import.meta.url), 'utf8');
 const numbering = readFileSync(new URL('../src/server/idGenerator.ts', import.meta.url), 'utf8');
-const apiHandler = readFileSync(new URL('../api/handler.ts', import.meta.url), 'utf8');
+const apiHandler = readFileSync(new URL('../src/server/vercelAppHandler.ts', import.meta.url), 'utf8');
 
 describe('official LPO issuance safety', () => {
   it('uses only the durable authoritative purchase_orders collection', () => {
