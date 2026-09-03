@@ -10,6 +10,7 @@ import { formatDate, formatDateTime, formatPhoneNumber } from '../../lib/dateFor
 import { downloadElementAsPdf, printElementDirectly } from '../../lib/pdfDownloader';
 import { Modal } from '../common/Modal';
 import { OfficialLetterheadLayout } from '../common/OfficialLetterheadLayout';
+import { CorporateStampMark } from '../common/CorporateStampMark';
 
 interface ContractDocumentPrintModalProps {
   isOpen: boolean;
@@ -261,7 +262,8 @@ export const ContractDocumentPrintModal: React.FC<ContractDocumentPrintModalProp
                   <Check className="w-3 h-3" /> AUTHORIZED
                 </span>
               </div>
-              <div className="h-14 border border-dashed border-zinc-400 rounded-lg flex items-center justify-center bg-white p-2">
+              <div className="h-14 border border-dashed border-zinc-400 rounded-lg flex items-center justify-center gap-2 bg-white p-2">
+                <CorporateStampMark className="w-11 h-11 shrink-0" />
                 <span className="font-bold text-sm text-[#991b1b]">شركة سبلندر لتأجير السيارات ش.ذ.م.م</span>
               </div>
               <p className="text-[10px] text-zinc-600">SPLENDOR CAR RENTAL LLC • DUBAI</p>

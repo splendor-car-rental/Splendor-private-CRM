@@ -12,6 +12,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { formatDate, formatDateTime, formatPhoneNumber } from '../../lib/dateFormat';
 import { downloadElementAsPdf, printElementDirectly } from '../../lib/pdfDownloader';
 import { OfficialLetterheadLayout } from '../common/OfficialLetterheadLayout';
+import { CorporateStampMark } from '../common/CorporateStampMark';
 
 interface ContractExtensionModalProps {
   isOpen: boolean;
@@ -897,7 +898,8 @@ export const ContractExtensionModal: React.FC<ContractExtensionModalProps> = ({
 
                     <div className="space-y-1">
                       <p className="font-bold text-zinc-900 text-[10px]">ختم وتوقيع سبلندر (Splendor Signature)</p>
-                      <div className="h-8 flex items-end justify-center border-b-2 border-dashed border-zinc-400">
+                      <div className="h-8 flex items-end justify-center gap-1.5 border-b-2 border-dashed border-zinc-400">
+                        <CorporateStampMark className="w-6 h-6 shrink-0" />
                         <span className="text-[9px] text-[#991b1b] font-bold">شركة سبلندر لتأجير السيارات ش.ذ.م.م</span>
                       </div>
                     </div>
