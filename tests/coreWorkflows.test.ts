@@ -58,7 +58,7 @@ vi.mock('firebase-admin', () => {
     get: async () => {
       if (collectionName === 'users') {
         const u = usersDb.get(id);
-        return { exists: !!u, data: () => u, id };
+        return { exists: !!u, data: () => (u ? { status: 'active', ...u } : u), id };
       }
       const data = collectionOf(collectionName).get(id);
       return { exists: data !== undefined, data: () => data, id };

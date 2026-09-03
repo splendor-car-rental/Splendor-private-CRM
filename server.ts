@@ -341,10 +341,26 @@ function publicRateLimiter(maxRequestsPerMinute: number = 60) {
   };
 }
 
-/** Looks up the caller's role from their Firestore users/{uid} profile. */
+/**
+ * Looks up the caller's role from their Firestore users/{uid} profile --
+ * but only if that profile's own status is 'active'. A valid Firebase Auth
+ * session alone (requireAuth) says nothing about whether Splendor itself
+ * still considers this person an active staff member: this used to return
+ * the role unconditionally, so a deactivated/suspended/terminated account
+ * whose Firebase Auth session simply hadn't expired yet retained full
+ * role-based access to every route requireRole() guards -- the entire
+ * application surface except the small set of routes api/index.ts
+ * separately hardens with getVerifiedActiveStaff (src/server/
+ * activeStaffAuth.ts), which already enforces this correctly. Canonical
+ * check, matched exactly: `status === 'active'`, never `status || 'active'`
+ * (a missing/malformed status field must fail closed, not open).
+ */
 async function getRequesterRole(uid: string): Promise<string | null> {
   const snap = await admin.firestore().collection('users').doc(uid).get();
-  return snap.exists ? ((snap.data() as any)?.role ?? null) : null;
+  if (!snap.exists) return null;
+  const data = snap.data() as any;
+  if (data?.status !== 'active') return null;
+  return data?.role ?? null;
 }
 
 /**

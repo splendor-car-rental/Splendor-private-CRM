@@ -38,7 +38,7 @@ vi.mock('firebase-admin', () => {
     get: async () => {
       if (collectionName === 'users') {
         const u = usersDb.get(id);
-        return { exists: !!u, data: () => u, id };
+        return { exists: !!u, data: () => (u ? { status: 'active', ...u } : u), id };
       }
       const data = collectionOf(collectionName).get(id);
       return { exists: data !== undefined, data: () => data, id };
@@ -229,6 +229,38 @@ describe('Phase 6 — financial/fleet route authorization audit', () => {
       });
     });
   }
+});
+
+describe('deactivated staff never retain role-based access', () => {
+  // getRequesterRole() used to return a profile's role field unconditionally,
+  // ignoring status entirely -- so a suspended/terminated staff member whose
+  // Firebase Auth session simply hadn't expired yet retained full role-based
+  // access to every requireRole()-guarded route (effectively the whole
+  // application, aside from the small set of routes api/index.ts separately
+  // hardens with getVerifiedActiveStaff). Fixed by making getRequesterRole()
+  // itself check status === 'active', so every one of its callers benefits
+  // at once. This proves the fix, not just documents it.
+  const SUSPENDED_FINANCE_UID = 'suspended-finance-uid';
+
+  beforeAll(() => {
+    adminMock.usersDb.set(SUSPENDED_FINANCE_UID, { role: 'finance', name: 'Suspended Finance', status: 'suspended' } as any);
+  });
+
+  it('rejects a deactivated staff member with a valid role and a valid session', async () => {
+    const res = await request(app)
+      .post('/api/deposits')
+      .set(authAs(SUSPENDED_FINANCE_UID))
+      .send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('still allows the same role when the account is active', async () => {
+    const res = await request(app)
+      .post('/api/deposits')
+      .set(authAs(FINANCE_UID))
+      .send({});
+    expect(res.status).not.toBe(403);
+  });
 });
 
 describe('GET /api/fleet — Firestore source-of-truth read', () => {
