@@ -330,7 +330,7 @@ describe('Tax Period official-source and accepted-rule version freshness', () =>
     const period = await seedGovernedPeriod();
     await db.collection('tax_professional_validators').doc(GOVERNANCE_REGISTRY_ID).update({ status: 'inactive' });
     const error = await db.runTransaction(tx => validateCurrentPeriodGovernanceEvidence(tx, db, period));
-    expect(error).toContain('registry record is not active and eligible');
+    expect(error).toContain('Registry record is not active and eligible');
   });
 
   it('fails closed when version pins are absent', async () => {
