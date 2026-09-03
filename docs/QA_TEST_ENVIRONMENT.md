@@ -38,6 +38,27 @@ download (`POST /api/upload`, `GET /api/documents/file`) end-to-end,
 since both ultimately touch Firebase Storage. See the Phase 1 QA closure
 report for exactly what this affected.
 
+## Known limitation: the Auth emulator hits the same block, in a sandboxed
+## Claude Code session on claude.ai/code (confirmed 2026-09-03)
+
+`firebase.json` in this repo only configures the `firestore` emulator --
+there is no `emulators.auth` entry, so `firebase emulators:start --only
+auth,firestore` in a fresh checkout logs "Not starting the auth emulator,
+make sure you have run firebase init" and silently only starts Firestore.
+Adding the missing `auth` port config makes the CLI attempt to download
+the Auth emulator's own binary from the same `firebase-public.firebaseio.com`
+host the Storage emulator needs -- which a Claude Code **remote/sandboxed**
+session's egress policy blocks identically (confirmed: `connect_rejected`,
+organization policy, not transient). This means the real-browser login/UI
+verification flow this whole document describes cannot actually run
+start-to-finish in that kind of session -- only Firestore-only, no-login
+scenarios (most existing tests) work there. It has NOT been confirmed
+broken on a machine with normal outbound internet access (a developer's
+own laptop, a CI runner, or a non-sandboxed Claude Code environment) --
+try there first if you need this. If it turns out blocked everywhere,
+the emulator binaries can be vendored/cached once outside the sandbox and
+committed or mounted in, avoiding the runtime download entirely.
+
 ## Running it
 
 **The emulator project ID must be `splendor-private-crm`** — the exact
