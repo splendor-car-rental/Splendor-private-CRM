@@ -80,6 +80,49 @@ export function formatDateTimeLocalized(input: string | number | Date | undefine
   return `${datePart} - ${hours}:${minutes}`;
 }
 
+function isValidCalendarDate(day: number, month: number, year: number): boolean {
+  if (!Number.isInteger(day) || !Number.isInteger(month) || !Number.isInteger(year)) return false;
+  if (month < 1 || month > 12) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day >= 1 && day <= daysInMonth;
+}
+
+/**
+ * Parses user-entered DD/MM/YYYY (or DD-MM-YYYY, or an already-ISO
+ * YYYY-MM-DD) into a canonical YYYY-MM-DD date-only string, or null if the
+ * input isn't a real calendar date. Rejects e.g. "31/02/2026" outright
+ * rather than silently accepting it and letting a later `new Date()` call
+ * roll it over to March -- the same calendar-correctness standard the rest
+ * of this file (extractCalendarDate) already holds every date-only string
+ * to, using UTC arithmetic so this never depends on the runtime's timezone.
+ */
+export function parseDayMonthYearToIso(input: string | undefined | null): string | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    const year = parseInt(y, 10);
+    const month = parseInt(m, 10);
+    const day = parseInt(d, 10);
+    if (!isValidCalendarDate(day, month, year)) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmyMatch) {
+    const [, d, m, y] = dmyMatch;
+    const day = parseInt(d, 10);
+    const month = parseInt(m, 10);
+    const year = parseInt(y, 10);
+    if (!isValidCalendarDate(day, month, year)) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  return null;
+}
+
 /**
  * Ensures phone numbers display country code on the left without flipping in RTL.
  * E.g., "+971 50 511 0410"

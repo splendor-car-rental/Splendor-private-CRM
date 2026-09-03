@@ -86,3 +86,40 @@ describe('formatPhoneNumber()', () => {
     expect(formatPhoneNumber(undefined)).toBe('');
   });
 });
+
+describe('parseDayMonthYearToIso() -- DayMonthYearDateInput.tsx\'s parser', () => {
+  it('parses DD/MM/YYYY and DD-MM-YYYY into canonical YYYY-MM-DD', async () => {
+    const { parseDayMonthYearToIso } = await import('../src/lib/dateFormat');
+    expect(parseDayMonthYearToIso('05/01/2026')).toBe('2026-01-05');
+    expect(parseDayMonthYearToIso('31/12/2026')).toBe('2026-12-31');
+    expect(parseDayMonthYearToIso('05-01-2026')).toBe('2026-01-05');
+  });
+
+  it('passes an already-ISO YYYY-MM-DD string through unchanged (normalized)', async () => {
+    const { parseDayMonthYearToIso } = await import('../src/lib/dateFormat');
+    expect(parseDayMonthYearToIso('2026-01-05')).toBe('2026-01-05');
+    expect(parseDayMonthYearToIso('2026-1-5')).toBe('2026-01-05');
+  });
+
+  it('rejects a date that does not exist on the calendar, never silently rolling it over', async () => {
+    const { parseDayMonthYearToIso } = await import('../src/lib/dateFormat');
+    // 2026 is not a leap year -- February has 28 days.
+    expect(parseDayMonthYearToIso('29/02/2026')).toBeNull();
+    expect(parseDayMonthYearToIso('31/02/2026')).toBeNull();
+    expect(parseDayMonthYearToIso('31/04/2026')).toBeNull(); // April has 30 days
+  });
+
+  it('accepts a real leap-year February 29th', async () => {
+    const { parseDayMonthYearToIso } = await import('../src/lib/dateFormat');
+    expect(parseDayMonthYearToIso('29/02/2028')).toBe('2028-02-29'); // 2028 is a leap year
+  });
+
+  it('rejects an out-of-range month or garbage input', async () => {
+    const { parseDayMonthYearToIso } = await import('../src/lib/dateFormat');
+    expect(parseDayMonthYearToIso('05/13/2026')).toBeNull();
+    expect(parseDayMonthYearToIso('not a date')).toBeNull();
+    expect(parseDayMonthYearToIso('')).toBeNull();
+    expect(parseDayMonthYearToIso(null)).toBeNull();
+    expect(parseDayMonthYearToIso(undefined)).toBeNull();
+  });
+});
