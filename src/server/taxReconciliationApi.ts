@@ -46,7 +46,8 @@ async function authenticate(req: Request, res: Response): Promise<TaxActor | nul
     const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
     const data = profile.exists ? profile.data() as any : null;
     const role = String(data?.role || '') as UserRole;
-    if (!data || !USER_ROLES.has(role) || String(data?.status || 'active') !== 'active') {
+    // Fail closed: legacy/missing status is not an active staff account.
+    if (!data || !USER_ROLES.has(role) || String(data?.status || '') !== 'active') {
       res.status(403).json({ error: 'A valid active Splendor staff role is required.' });
       return null;
     }
@@ -130,7 +131,7 @@ function writeAuditInTransaction(
   });
 }
 
-async function captureReconciliation(req: Request, res: Response, actor: TaxActor) {
+export async function captureReconciliation(req: Request, res: Response, actor: TaxActor) {
   if (!requirePermission(actor, 'tax.prepare', res)) return;
   const periodId = cleanText(req.body?.periodId || req.query.periodId, 180);
   if (!periodId) return res.status(400).json({ error: 'periodId is required.' });
@@ -206,7 +207,7 @@ async function captureReconciliation(req: Request, res: Response, actor: TaxActo
   return res.status(201).json(result);
 }
 
-async function resolvePostingGapBlocker(req: Request, res: Response, actor: TaxActor) {
+export async function resolvePostingGapBlocker(req: Request, res: Response, actor: TaxActor) {
   if (!requirePermission(actor, 'tax.review', res)) return;
   const periodId = cleanText(req.body?.periodId || req.query.periodId, 180);
   if (!periodId) return res.status(400).json({ error: 'periodId is required.' });

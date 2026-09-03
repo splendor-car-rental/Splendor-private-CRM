@@ -162,6 +162,10 @@ export interface TaxPeriod {
   taxProfileVersionUpdatedAt: string;
   status: TaxPeriodStatus;
   ruleVersionIds: string[];
+  /** Exact accepted rule documents used when the period was created. */
+  ruleVersionUpdatedAtById?: Record<string, string>;
+  /** Exact official-source documents supporting those accepted rules. */
+  ruleSourceVersionUpdatedAtById?: Record<string, string>;
   preparationStartedBy?: string;
   preparationStartedByName?: string;
   preparationStartedAt?: string;

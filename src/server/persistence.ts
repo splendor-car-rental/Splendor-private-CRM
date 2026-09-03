@@ -32,16 +32,29 @@ function requireDb() {
 }
 
 /**
- * Fleet vehicles are operational/financial master records. Physical deletion
- * is permanently prohibited through shared persistence helpers. Retirement is
- * represented by the audited Vehicle lifecycle (ARCHIVED/SOLD/etc.), never by
- * removing the Firestore master document. This guard is intentionally below
- * individual routes so a future route cannot accidentally reintroduce the
- * destructive primitive.
+ * Fleet master data and Tax Compliance governance/audit records are never
+ * physically deleted through shared persistence helpers. Their controlled
+ * archive/supersession/status lifecycles preserve historical evidence. This
+ * guard sits below individual routes so future code cannot accidentally
+ * reintroduce the destructive primitive.
  */
+const PROTECTED_DELETE_COLLECTIONS = new Set([
+  'vehicles',
+  'tax_master_profiles',
+  'tax_master_profile_versions',
+  'tax_official_sources',
+  'tax_rule_versions',
+  'tax_periods',
+  'tax_period_exceptions',
+  'tax_reconciliation_snapshots',
+  'tax_reconciliation_states',
+  'tax_audit_events',
+  'tax_professional_validators'
+]);
+
 function assertDeleteAllowed(collection: string): void {
-  if (collection === 'vehicles') {
-    throw new PersistenceError('Physical deletion of Fleet vehicle master records is prohibited. Use the audited archive lifecycle.');
+  if (PROTECTED_DELETE_COLLECTIONS.has(collection)) {
+    throw new PersistenceError(`Physical deletion of protected master/audit records in ${collection} is prohibited. Use its controlled lifecycle.`);
   }
 }
 

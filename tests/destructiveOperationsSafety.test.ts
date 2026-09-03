@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { deleteDurable, runDurableBatch } from '../src/server/persistence';
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 
@@ -29,9 +30,17 @@ describe('destructive production-operation safety', () => {
 
   it('prohibits physical deletion of Fleet vehicle master records below route level', () => {
     const persistence = read('src/server/persistence.ts');
-    expect(persistence).toContain("if (collection === 'vehicles')");
-    expect(persistence).toContain('Physical deletion of Fleet vehicle master records is prohibited');
+    expect(persistence).toContain("'vehicles'");
+    expect(persistence).toContain('PROTECTED_DELETE_COLLECTIONS.has(collection)');
+    expect(persistence).toContain('Physical deletion of protected master/audit records');
     expect(persistence).toContain("if (op.type === 'delete') assertDeleteAllowed(op.collection)");
+  });
+
+  it('rejects tax-record deletion through both shared single and batch persistence primitives', async () => {
+    await expect(deleteDurable('tax_periods', 'TAXPERIOD-DELETE-ATTEMPT')).rejects.toThrow('Physical deletion');
+    await expect(runDurableBatch([
+      { type: 'delete', collection: 'tax_audit_events', id: 'AUDIT-DELETE-ATTEMPT' }
+    ])).rejects.toThrow('Physical deletion');
   });
 
   it('routes production Fleet DELETE requests to the non-destructive archive handler', () => {

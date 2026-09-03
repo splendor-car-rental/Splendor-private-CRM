@@ -48,11 +48,11 @@ Candidate invariants:
 
 ### 4. State-machine tests
 
-Target lifecycle:
+Current governed lifecycle:
 
-`Draft -> Prepared -> Independent Review -> Approved -> Locked -> Filed`
+`Draft -> Open -> Under Review -> Ready for Professional Review -> Professionally Validated -> Closed`
 
-Tests must reject illegal skips and backwards mutation of locked/filed records. Amendments must create linked controlled records rather than mutate prior filing history.
+Tests must reject illegal skips and backwards mutation of professionally validated/closed records. `Closed` must never be represented as `Filed`; no filing/submission route or `READY_FOR_FILING` state exists in the current runtime. Any future amendment or filing-history design requires a separately reviewed specification and must preserve prior evidence.
 
 ### 5. Fail-closed readiness tests
 
@@ -99,4 +99,4 @@ A Tax Compliance feature is not release-ready merely because TypeScript/build/CI
 
 ## Current implementation status
 
-This matrix is architectural. It does not assert that the Tax Compliance runtime currently exists or passes these future gates.
+The matrix remains Proposed. A limited governance runtime now exists, but this document does not assert filing readiness or professional validation of any UAE tax treatment.

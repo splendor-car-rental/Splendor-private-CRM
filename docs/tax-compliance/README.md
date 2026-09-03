@@ -30,15 +30,17 @@ Tax Compliance will be a distinct application domain rather than an informal fin
 
 These are product/architecture targets, not statements that the functions currently exist.
 
-## Required workflow
+## Current governed workflow
 
-The intended control workflow is:
+The implemented control workflow is:
 
-`Draft -> Prepared -> Independent Review -> Approved -> Locked -> Filed`
+`Draft -> Open -> Under Review -> Ready for Professional Review -> Professionally Validated -> Closed`
 
-Four-Eyes control is mandatory: the preparer must not be able to approve the same tax return or tax-period close.
+`Closed` is an internal controlled period-close state. It does **not** mean `Filed`. The current runtime deliberately exposes no filing/submission API and remains `NOT_READY_FOR_FILING`.
 
-Permissions must be independent from ordinary Finance permissions. Having access to operational finance must not automatically grant Tax Prepare, Tax Review, Tax Approve, Tax Lock, or Tax Filing permissions.
+Four-Eyes control is mandatory: the preparer must not be able to review or record professional validation for the same tax period.
+
+Permissions must be independent from ordinary Finance permissions. Having access to operational finance must not automatically grant Tax Prepare, Tax Review, or Tax Approve permissions. No Tax Filing permission or action exists in the current runtime.
 
 ## Fail-closed principle
 

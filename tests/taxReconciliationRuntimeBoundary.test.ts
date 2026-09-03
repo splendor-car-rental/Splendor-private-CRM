@@ -13,12 +13,15 @@ describe('Tax Reconciliation runtime boundary', () => {
     expect(safeApi).toContain("resource === 'reconciliations'");
     expect(safeApi).toContain("import('../src/server/taxReconciliationApi.js')");
     expect(runtime).toContain('verifyIdToken');
+    expect(runtime).toContain("String(data?.status || '') !== 'active'");
+    expect(runtime).not.toContain("String(data?.status || 'active')");
     expect(runtime).toContain("requirePermission(actor, 'tax.view'");
   });
 
   it('captures immutable evidence only from authoritative accounting journals and source records', () => {
     expect(evidenceRuntime).toContain("TAX_RECONCILIATION_JOURNAL_COLLECTION = 'accounting_journals'");
     expect(evidenceRuntime).toContain("journal.status === 'posted'");
+    expect(evidenceRuntime).toContain('postedPeriodJournals');
     expect(evidenceRuntime).toContain("tx.get(firestore.collection('invoices'))");
     expect(evidenceRuntime).toContain("tx.get(firestore.collection('payments'))");
     expect(evidenceRuntime).toContain("tx.get(firestore.collection('supplier_invoices'))");

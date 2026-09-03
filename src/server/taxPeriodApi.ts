@@ -208,6 +208,63 @@ function validateLinkedRules(period: TaxPeriod, rules: TaxRuleVersion[]): string
   return null;
 }
 
+type LinkedRuleEvidencePins = {
+  ruleVersionUpdatedAtById: Record<string, string>;
+  ruleSourceVersionUpdatedAtById: Record<string, string>;
+};
+
+async function validateAndPinLinkedRuleEvidence(
+  tx: admin.firestore.Transaction,
+  db: admin.firestore.Firestore,
+  period: TaxPeriod,
+  rules: TaxRuleVersion[],
+  expectedPins?: LinkedRuleEvidencePins
+): Promise<{ error: string | null; pins?: LinkedRuleEvidencePins }> {
+  const ruleVersionUpdatedAtById: Record<string, string> = {};
+  for (const rule of rules) {
+    const updatedAt = String(rule.updatedAt || '');
+    if (!updatedAt) return { error: `Accepted tax rule ${rule.id} has no immutable version timestamp.` };
+    if (expectedPins?.ruleVersionUpdatedAtById?.[rule.id] !== undefined && expectedPins.ruleVersionUpdatedAtById[rule.id] !== updatedAt) {
+      return { error: `Accepted tax rule ${rule.id} changed after this Tax Period was created.` };
+    }
+    if (expectedPins && !expectedPins.ruleVersionUpdatedAtById?.[rule.id]) {
+      return { error: `Tax Period is missing the pinned version timestamp for accepted rule ${rule.id}.` };
+    }
+    const validationError = validateProfessionalValidation(rule.professionalValidation);
+    if (validationError) return { error: `Accepted tax rule ${rule.id}: ${validationError}` };
+    const registryError = await validateProfessionalRegistryEvidence(tx, db, rule.professionalValidation!, period.domain);
+    if (registryError) return { error: `Accepted tax rule ${rule.id}: ${registryError}` };
+    ruleVersionUpdatedAtById[rule.id] = updatedAt;
+  }
+
+  const sourceIds = Array.from(new Set(rules.flatMap(rule => rule.sourceIds || [])));
+  if (sourceIds.length === 0) return { error: 'Accepted tax rules must remain bound to official source records.' };
+  const sourceSnaps = await Promise.all(sourceIds.map(id => tx.get(db.collection(SOURCE_COLLECTION).doc(id))));
+  const ruleSourceVersionUpdatedAtById: Record<string, string> = {};
+  for (let index = 0; index < sourceIds.length; index += 1) {
+    const sourceId = sourceIds[index];
+    const sourceSnap = sourceSnaps[index];
+    if (!sourceSnap.exists) return { error: `Official source ${sourceId} supporting an accepted tax rule no longer exists.` };
+    const source = { id: sourceSnap.id, ...sourceSnap.data() } as TaxOfficialSource;
+    if (!['validated', 'accepted'].includes(source.status)) {
+      return { error: `Official source ${sourceId} supporting an accepted tax rule is no longer validated/accepted.` };
+    }
+    const authorityError = validateOfficialSourceAuthority(source.authority, source.officialUrl);
+    if (authorityError) return { error: `Official source ${sourceId}: ${authorityError}` };
+    const updatedAt = String(source.updatedAt || '');
+    if (!updatedAt) return { error: `Official source ${sourceId} has no immutable version timestamp.` };
+    if (expectedPins?.ruleSourceVersionUpdatedAtById?.[sourceId] !== undefined && expectedPins.ruleSourceVersionUpdatedAtById[sourceId] !== updatedAt) {
+      return { error: `Official source ${sourceId} supporting an accepted tax rule changed after this Tax Period was created.` };
+    }
+    if (expectedPins && !expectedPins.ruleSourceVersionUpdatedAtById?.[sourceId]) {
+      return { error: `Tax Period is missing the pinned source version for accepted rule evidence ${sourceId}.` };
+    }
+    ruleSourceVersionUpdatedAtById[sourceId] = updatedAt;
+  }
+
+  return { error: null, pins: { ruleVersionUpdatedAtById, ruleSourceVersionUpdatedAtById } };
+}
+
 function accountingPeriodKeys(period: TaxPeriod): string[] {
   const start = new Date(`${period.periodStart.slice(0, 7)}-01T00:00:00.000Z`);
   const end = new Date(`${period.periodEnd.slice(0, 7)}-01T00:00:00.000Z`);
@@ -218,7 +275,7 @@ function accountingPeriodKeys(period: TaxPeriod): string[] {
   return keys;
 }
 
-async function validateCurrentPeriodGovernanceEvidence(
+export async function validateCurrentPeriodGovernanceEvidence(
   tx: admin.firestore.Transaction,
   db: admin.firestore.Firestore,
   period: TaxPeriod
@@ -233,7 +290,16 @@ async function validateCurrentPeriodGovernanceEvidence(
   const authorityError = validateOfficialSourceAuthority(source.authority, source.officialUrl);
   if (authorityError) return authorityError;
   const rules = ruleSnaps.filter(snapshot => snapshot.exists).map(snapshot => ({ id: snapshot.id, ...snapshot.data() } as TaxRuleVersion));
-  return validateLinkedRules(period, rules);
+  const ruleError = validateLinkedRules(period, rules);
+  if (ruleError) return ruleError;
+  if (!period.ruleVersionUpdatedAtById || !period.ruleSourceVersionUpdatedAtById) {
+    return 'Tax Period is missing exact accepted-rule/source version pins and cannot advance.';
+  }
+  const linkedEvidence = await validateAndPinLinkedRuleEvidence(tx, db, period, rules, {
+    ruleVersionUpdatedAtById: period.ruleVersionUpdatedAtById,
+    ruleSourceVersionUpdatedAtById: period.ruleSourceVersionUpdatedAtById
+  });
+  return linkedEvidence.error;
 }
 
 async function validateProfessionalRegistryEvidence(
@@ -399,9 +465,13 @@ async function createTaxPeriod(req: Request, res: Response, actor: TaxActor) {
     const ruleError = validateLinkedRules(period, rules);
     if (ruleError) throw new Error(ruleError);
 
-    tx.create(periodRef, period);
-    writeAuditInTransaction(tx, actor, period.id, 'create_draft', undefined, period, 'Evidence-bound Tax Period created in Draft status.');
-    return period;
+    const linkedEvidence = await validateAndPinLinkedRuleEvidence(tx, db, period, rules);
+    if (linkedEvidence.error || !linkedEvidence.pins) throw new Error(linkedEvidence.error || 'Accepted tax rule evidence could not be pinned.');
+    const pinnedPeriod: TaxPeriod = { ...period, ...linkedEvidence.pins };
+
+    tx.create(periodRef, pinnedPeriod);
+    writeAuditInTransaction(tx, actor, period.id, 'create_draft', undefined, pinnedPeriod, 'Evidence-bound Tax Period created in Draft status with exact accepted-rule and official-source versions pinned.');
+    return pinnedPeriod;
   }).catch(error => ({ error: error instanceof Error ? error.message : 'Tax period creation failed.' }));
 
   if ('error' in result) return res.status(400).json(result);

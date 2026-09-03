@@ -67,6 +67,9 @@ export function validateProfessionalValidation(value: TaxProfessionalValidation 
     return 'Professional validation date is required.';
   }
   if (value.validThrough && Number.isNaN(new Date(value.validThrough).getTime())) return 'Professional validation valid-through date is invalid.';
+  if (value.validThrough && new Date(value.validThrough).getTime() < new Date(value.validatedAt).getTime()) {
+    return 'Professional validation valid-through date cannot precede its validation date.';
+  }
   return null;
 }
 

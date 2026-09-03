@@ -27,15 +27,17 @@ A tax rule-set version must record:
 - automated test references
 - superseded rule-set version, if any
 
-## Immutability of filed/locked history
+## Immutability of closed history and future filing records
 
-Once a tax period is locked or filed:
+For the current runtime, once a tax period is professionally validated or closed:
 
 - its rule-set version is pinned;
 - its source IDs are pinned;
 - its prepared/reviewed/approved evidence is preserved;
-- later rule changes do not silently recompute the historic filing record;
-- corrections or amendments create new controlled records linked to the prior period/filing rather than rewriting history.
+- later rule/source changes invalidate downstream readiness instead of silently changing historic evidence;
+- `Closed` never means `Filed`, and no filing/submission API currently exists.
+
+If filing records or amendments are designed in a future approved stage, they must be immutable linked records rather than rewrites of closed period evidence.
 
 ## Prospective changes
 
@@ -58,11 +60,11 @@ Accepted tax rules require:
 
 The eventual implementation should make the following impossible through ordinary application flows:
 
-1. A filed tax period with no pinned rule-set version.
+1. A closed period or future filed record with no pinned rule-set version.
 2. An Accepted tax rule with no official source reference.
 3. An Accepted tax rule with no professional validator.
 4. Silent mutation of a locked period's calculated filing evidence.
-5. Reuse of a later rule version to overwrite previously filed calculations.
-6. A tax amendment with no link to the filing/period it corrects.
+5. Reuse of a later rule version to overwrite previously validated/closed calculations.
+6. A future tax amendment with no link to the filing/period it corrects.
 
 These are architecture invariants, not yet claims that the runtime implements them.

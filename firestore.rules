@@ -94,6 +94,8 @@ service cloud.firestore {
     match /tax_periods/{id} { allow read: if isStaff(); allow write: if false; }
     match /tax_period_exceptions/{id} { allow read: if isStaff(); allow write: if false; }
     match /tax_reconciliation_snapshots/{id} { allow read: if isStaff(); allow write: if false; }
+    // Internal serial-allocation state is never a browser concern.
+    match /tax_reconciliation_states/{id} { allow read, write: if false; }
     match /tax_audit_events/{id} { allow read: if isStaff(); allow write: if false; }
     match /tax_professional_validators/{id} { allow read: if isStaff(); allow write: if false; }
 

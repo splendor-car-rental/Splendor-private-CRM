@@ -157,6 +157,10 @@ describe('Tax period lifecycle policy', () => {
     };
     expect(validateRecordPeriodProfessionalValidation(ready, admin, professionalValidation)).toBeNull();
     expect(validateRecordPeriodProfessionalValidation({ ...ready, blockingExceptionCount: 1 }, admin, professionalValidation)).toContain('Blocking exceptions');
+    expect(validateRecordPeriodProfessionalValidation(ready, admin, {
+      ...professionalValidation,
+      validThrough: '2099-01-01T00:00:00.000Z'
+    })).toContain('cannot precede its validation date');
 
     const validated: TaxPeriod = {
       ...ready,

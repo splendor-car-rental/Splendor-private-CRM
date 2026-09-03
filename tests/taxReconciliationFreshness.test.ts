@@ -8,9 +8,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { generateKeyPairSync, randomUUID } from 'crypto';
 import type { JournalEntry } from '../src/accounting/types';
-import type { TaxPeriod } from '../src/tax/types';
+import type { TaxOfficialSource, TaxPeriod, TaxRuleVersion } from '../src/tax/types';
 import { journalEvidenceHash } from '../src/server/taxReconciliationEvidence';
-import { validateAuthoritativeReconciliationFreshness } from '../src/server/taxPeriodApi';
+import { validateAuthoritativeReconciliationFreshness, validateCurrentPeriodGovernanceEvidence } from '../src/server/taxPeriodApi';
 
 let admin: typeof import('firebase-admin');
 let app: any;
@@ -20,13 +20,20 @@ const PROJECT_ID = process.env.GCLOUD_PROJECT || 'demo-splendor-crm-rules-test';
 const COLLECTIONS = [
   'tax_periods',
   'tax_reconciliation_snapshots',
+  'tax_reconciliation_states',
   'tax_period_exceptions',
+  'tax_official_sources',
+  'tax_rule_versions',
+  'tax_professional_validators',
   'accounting_journals',
   'invoices',
   'payments',
   'deposits',
   'supplier_invoices',
-  'bank_transactions'
+  'bank_transactions',
+  'charges',
+  'documents',
+  'issued_documents'
 ];
 
 beforeAll(async () => {
@@ -205,4 +212,131 @@ describe('Tax Reconciliation authoritative freshness gate', () => {
       expect(persisted.status).toBe('under_review');
     }
   }, 30000);
+});
+
+const GOVERNANCE_SOURCE_ID = 'SRC-VAT-GOVERNANCE';
+const DEADLINE_SOURCE_ID = 'SRC-VAT-DEADLINE';
+const GOVERNANCE_RULE_ID = 'TAXRULE-VAT-GOVERNANCE-V1';
+const GOVERNANCE_REGISTRY_ID = 'PROFESSIONAL-REGISTRY-1';
+const GOVERNANCE_EVIDENCE_ID = 'DOC-PROFESSIONAL-EVIDENCE-1';
+const SOURCE_UPDATED_AT = '2098-12-01T00:00:00.000Z';
+const RULE_UPDATED_AT = '2098-12-02T00:00:00.000Z';
+
+async function seedGovernedPeriod(): Promise<TaxPeriod> {
+  const source: TaxOfficialSource = {
+    id: GOVERNANCE_SOURCE_ID,
+    domain: 'VAT',
+    authority: 'FTA',
+    officialTitle: 'Synthetic official-source record for emulator testing only',
+    officialUrl: 'https://tax.gov.ae/en/test-only',
+    effectiveFrom: '2098-01-01',
+    topics: ['synthetic-test'],
+    interpretationRequired: true,
+    status: 'validated',
+    retrievedAt: SOURCE_UPDATED_AT,
+    createdBy: 'SOURCE-PREPARER',
+    createdByName: 'Source Preparer',
+    createdAt: SOURCE_UPDATED_AT,
+    validatedBy: 'SOURCE-REVIEWER',
+    validatedByName: 'Source Reviewer',
+    validatedAt: SOURCE_UPDATED_AT,
+    updatedAt: SOURCE_UPDATED_AT
+  };
+  const deadlineSource: TaxOfficialSource = {
+    ...source,
+    id: DEADLINE_SOURCE_ID,
+    officialTitle: 'Synthetic deadline source for emulator testing only'
+  };
+  const rule: TaxRuleVersion = {
+    id: GOVERNANCE_RULE_ID,
+    domain: 'VAT',
+    code: 'VAT-GOVERNANCE',
+    version: '1',
+    title: 'Synthetic accepted rule for emulator governance testing only',
+    description: 'Contains no legal or tax interpretation.',
+    status: 'accepted',
+    effectiveFrom: '2098-01-01',
+    effectiveTo: '2099-12-31',
+    sourceIds: [GOVERNANCE_SOURCE_ID],
+    interpretationRequired: true,
+    proposedBy: 'RULE-PREPARER',
+    proposedByName: 'Rule Preparer',
+    proposedAt: RULE_UPDATED_AT,
+    professionalValidation: {
+      validatorRegistryId: GOVERNANCE_REGISTRY_ID,
+      validatorName: 'Synthetic External Reviewer',
+      validatorCapacity: 'UAE_TAX_PROFESSIONAL',
+      validationEvidenceDocumentId: GOVERNANCE_EVIDENCE_ID,
+      scope: 'Synthetic emulator-only governance test; no tax interpretation.',
+      validatedAt: RULE_UPDATED_AT
+    },
+    professionalValidationRecordedBy: 'RULE-REVIEWER',
+    professionalValidationRecordedByName: 'Rule Reviewer',
+    professionalValidationRecordedAt: RULE_UPDATED_AT,
+    acceptedBy: 'RULE-APPROVER',
+    acceptedByName: 'Rule Approver',
+    acceptedAt: RULE_UPDATED_AT,
+    updatedAt: RULE_UPDATED_AT
+  };
+  const period: TaxPeriod = {
+    ...basePeriod(`TAXPERIOD-GOVERNANCE-${randomUUID()}`, journalEvidenceHash([])),
+    deadlineSourceId: DEADLINE_SOURCE_ID,
+    deadlineSourceVersionUpdatedAt: SOURCE_UPDATED_AT,
+    ruleVersionIds: [GOVERNANCE_RULE_ID],
+    ruleVersionUpdatedAtById: { [GOVERNANCE_RULE_ID]: RULE_UPDATED_AT },
+    ruleSourceVersionUpdatedAtById: { [GOVERNANCE_SOURCE_ID]: SOURCE_UPDATED_AT }
+  };
+
+  await Promise.all([
+    db.collection('tax_official_sources').doc(GOVERNANCE_SOURCE_ID).set(source),
+    db.collection('tax_official_sources').doc(DEADLINE_SOURCE_ID).set(deadlineSource),
+    db.collection('tax_rule_versions').doc(GOVERNANCE_RULE_ID).set(rule),
+    db.collection('tax_professional_validators').doc(GOVERNANCE_REGISTRY_ID).set({
+      status: 'active',
+      validatorCapacity: 'UAE_TAX_PROFESSIONAL',
+      validatorName: 'Synthetic External Reviewer',
+      domains: ['VAT']
+    }),
+    db.collection('documents').doc(GOVERNANCE_EVIDENCE_ID).set({
+      name: 'Synthetic professional evidence marker',
+      createdAt: RULE_UPDATED_AT
+    })
+  ]);
+  return period;
+}
+
+describe('Tax Period official-source and accepted-rule version freshness', () => {
+  it('accepts unchanged, exactly pinned governance evidence', async () => {
+    const period = await seedGovernedPeriod();
+    const error = await db.runTransaction(tx => validateCurrentPeriodGovernanceEvidence(tx, db, period));
+    expect(error).toBeNull();
+  });
+
+  it('rejects an accepted rule document changed after the period pin was captured', async () => {
+    const period = await seedGovernedPeriod();
+    await db.collection('tax_rule_versions').doc(GOVERNANCE_RULE_ID).update({ updatedAt: '2099-02-02T00:00:00.000Z' });
+    const error = await db.runTransaction(tx => validateCurrentPeriodGovernanceEvidence(tx, db, period));
+    expect(error).toContain(`Accepted tax rule ${GOVERNANCE_RULE_ID} changed`);
+  });
+
+  it('rejects a supporting official source changed after the period pin was captured', async () => {
+    const period = await seedGovernedPeriod();
+    await db.collection('tax_official_sources').doc(GOVERNANCE_SOURCE_ID).update({ updatedAt: '2099-02-03T00:00:00.000Z' });
+    const error = await db.runTransaction(tx => validateCurrentPeriodGovernanceEvidence(tx, db, period));
+    expect(error).toContain(`Official source ${GOVERNANCE_SOURCE_ID} supporting an accepted tax rule changed`);
+  });
+
+  it('rejects accepted-rule evidence after the professional registry is deactivated', async () => {
+    const period = await seedGovernedPeriod();
+    await db.collection('tax_professional_validators').doc(GOVERNANCE_REGISTRY_ID).update({ status: 'inactive' });
+    const error = await db.runTransaction(tx => validateCurrentPeriodGovernanceEvidence(tx, db, period));
+    expect(error).toContain('registry record is not active and eligible');
+  });
+
+  it('fails closed when version pins are absent', async () => {
+    const period = await seedGovernedPeriod();
+    delete period.ruleVersionUpdatedAtById;
+    const error = await db.runTransaction(tx => validateCurrentPeriodGovernanceEvidence(tx, db, period));
+    expect(error).toContain('missing exact accepted-rule/source version pins');
+  });
 });

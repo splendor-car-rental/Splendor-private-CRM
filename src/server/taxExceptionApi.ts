@@ -115,7 +115,7 @@ function exceptionFingerprint(input: {
   return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex').slice(0, 32).toUpperCase();
 }
 
-async function createException(req: Request, res: Response, actor: TaxActor) {
+export async function createException(req: Request, res: Response, actor: TaxActor) {
   if (!canRaiseException(actor)) return res.status(403).json({ error: 'Missing required Tax Compliance prepare/review permission.' });
   const periodId = cleanText(req.body?.periodId, 180);
   const category = cleanText(req.body?.category, 80) as TaxBlockingExceptionCategory;
@@ -174,7 +174,7 @@ async function createException(req: Request, res: Response, actor: TaxActor) {
   return res.status(result.replayed ? 200 : 201).json(result.exception);
 }
 
-async function resolveException(req: Request, res: Response, actor: TaxActor) {
+export async function resolveException(req: Request, res: Response, actor: TaxActor) {
   if (!requirePermission(actor, 'tax.review', res)) return;
   const exceptionId = cleanText(req.body?.exceptionId || req.query.exceptionId, 180);
   const resolutionNote = cleanText(req.body?.resolutionNote, 3000);

@@ -24,6 +24,8 @@ describe('Tax Period runtime boundary', () => {
     expect(runtime).toContain('runTransaction');
     expect(runtime).toContain('validateTaxPeriodDraft');
     expect(runtime).toContain('deadlineSourceVersionUpdatedAt');
+    expect(runtime).toContain('ruleVersionUpdatedAtById');
+    expect(runtime).toContain('ruleSourceVersionUpdatedAtById');
     expect(runtime).toContain('taxProfileVersionUpdatedAt');
     expect(runtime).toContain('periodsOverlap');
     expect(runtime).toContain('Only accepted immutable tax rule versions may be bound to a tax period.');

@@ -23,6 +23,7 @@ const CEO_UID = 'test-ceo-uid';
 const FINANCE_UID = 'test-finance-uid';
 const OPERATIONS_UID = 'test-ops-uid';
 const NO_ROLE_UID = 'test-unprovisioned-uid';
+const LEGACY_STATUSLESS_UID = 'test-statusless-finance-uid';
 
 let testEnv: RulesTestEnvironment;
 
@@ -41,9 +42,11 @@ beforeAll(async () => {
     await setDoc(doc(db, 'users', CEO_UID), { role: 'ceo', status: 'active', name: 'Test CEO' });
     await setDoc(doc(db, 'users', FINANCE_UID), { role: 'finance', status: 'active', name: 'Test Finance' });
     await setDoc(doc(db, 'users', OPERATIONS_UID), { role: 'operations', status: 'active', name: 'Test Ops' });
+    await setDoc(doc(db, 'users', LEGACY_STATUSLESS_UID), { role: 'finance', name: 'Legacy Statusless Finance' });
     await setDoc(doc(db, 'customers', 'CUS-SEED-01'), { name: 'Seed Customer' });
     await setDoc(doc(db, 'toll_transactions', 'TOLL-SEED-01'), { amount: 4, plate: 'DXB TEST 1' });
     await setDoc(doc(db, 'reservations', 'RES-SEED-01'), { vehicleId: 'VEH-SEED-01' });
+    await setDoc(doc(db, 'tax_reconciliation_states', 'TAXPERIOD-SEED-01'), { periodId: 'TAXPERIOD-SEED-01', lastVersion: 1 });
   });
 });
 
@@ -148,5 +151,20 @@ describe('S10 — unrelated CRM collections remain readable while writes stay se
     const opsDb = testEnv.authenticatedContext(OPERATIONS_UID, {}).firestore();
     await assertSucceeds(getDoc(doc(opsDb, 'reservations', 'RES-SEED-01')));
     await assertFails(setDoc(doc(opsDb, 'reservations', 'RES-TEST-DIRECT-WRITE'), { vehicleId: 'VEH-TEST' }));
+  });
+});
+
+describe('S11 — Tax Reconciliation internal state is never client-accessible', () => {
+  test('even active finance cannot read or mutate server-only reconciliation state', async () => {
+    const financeDb = testEnv.authenticatedContext(FINANCE_UID, {}).firestore();
+    const ref = doc(financeDb, 'tax_reconciliation_states', 'TAXPERIOD-SEED-01');
+    await assertFails(getDoc(ref));
+    await assertFails(setDoc(ref, { periodId: 'TAXPERIOD-SEED-01', lastVersion: 999 }));
+    await assertFails(deleteDoc(ref));
+  });
+
+  test('a legacy profile with no explicit active status cannot read reconciliation state', async () => {
+    const legacyDb = testEnv.authenticatedContext(LEGACY_STATUSLESS_UID, {}).firestore();
+    await assertFails(getDoc(doc(legacyDb, 'tax_reconciliation_states', 'TAXPERIOD-SEED-01')));
   });
 });

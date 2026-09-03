@@ -59,10 +59,14 @@ export function buildPostingGaps(
   charges: any[] = []
 ): TaxReconciliationPostingGapEvidence[] {
   const key = (sourceType: string, sourceId: string, sourceAction: string) => `${sourceType}:${sourceId}:${sourceAction}`;
-  const journalKeys = new Set(allPeriodJournals.map(journal => key(journal.sourceType, journal.sourceId, journal.sourceAction)));
-  const journalById = new Map(allPeriodJournals.map(journal => [journal.id, journal]));
+  // Reconciliation is explicitly a POSTED-ledger control. A draft, reversed,
+  // blocked, or otherwise non-posted journal must never suppress a real
+  // operational posting gap or count as deposit-lifecycle evidence.
+  const postedPeriodJournals = allPeriodJournals.filter(journal => journal.status === 'posted');
+  const journalKeys = new Set(postedPeriodJournals.map(journal => key(journal.sourceType, journal.sourceId, journal.sourceAction)));
+  const journalById = new Map(postedPeriodJournals.map(journal => [journal.id, journal]));
   const depositJournals = new Map<string, JournalEntry[]>();
-  for (const journal of allPeriodJournals) {
+  for (const journal of postedPeriodJournals) {
     if (journal.sourceType !== 'Deposit') continue;
     depositJournals.set(journal.sourceId, [...(depositJournals.get(journal.sourceId) || []), journal]);
   }
@@ -128,7 +132,7 @@ export function buildPostingGaps(
     }
     const journal = journalById.get(journalId);
     const amount = reconciliationMoney(transaction.credit || transaction.debit || 0);
-    if (!journal || journal.status !== 'posted') {
+    if (!journal) {
       addGap('BankTransaction', transaction.id, transaction.date, transaction.description || `Bank transaction ${transaction.id}`, amount, 'Linked accounting journal is missing from the authoritative period ledger or is not posted.');
       continue;
     }
