@@ -7,6 +7,7 @@ import {
   validateRuleAcceptance,
   type TaxActor
 } from './taxCompliancePolicy.js';
+import { planOfficialSourceSupersession, planTaxRuleSupersession } from './taxVersionSupersession.js';
 import type {
   TaxMasterProfile,
   TaxOfficialSource,
@@ -437,17 +438,44 @@ export default async function handler(req: Request, res: Response) {
       if (previous.createdBy === actor.uid) throw new Error('Four-Eyes control prevents the source creator from validating the same source.');
       const authorityError = validateOfficialSourceAuthority(previous.authority, previous.officialUrl);
       if (authorityError) throw new Error(authorityError);
+      if (previous.status === 'validated' || previous.status === 'accepted') {
+        throw new Error('A validated/accepted official source version is immutable. Register a new source version instead of re-validating it.');
+      }
       if (previous.status === 'superseded' || previous.status === 'deprecated') throw new Error('A retired source cannot be validated.');
+
+      const supersededSourceIds = Array.from(new Set(previous.supersedesSourceIds || []));
+      const supersededRefs = supersededSourceIds.map(id => db.collection(SOURCE_COLLECTION).doc(id));
+      const supersededSnaps = await Promise.all(supersededRefs.map(sourceRef => tx.get(sourceRef)));
+      const supersededSources = supersededSnaps
+        .filter(sourceSnap => sourceSnap.exists)
+        .map(sourceSnap => ({ id: sourceSnap.id, ...sourceSnap.data() } as TaxOfficialSource));
       const now = new Date().toISOString();
       const next: TaxOfficialSource = {
         ...previous,
-        status: previous.status === 'accepted' ? 'accepted' : 'validated',
+        status: 'validated',
         validatedBy: actor.uid,
         validatedByName: actor.name,
         validatedAt: now,
         validationReason: reason,
         updatedAt: now
       };
+      const supersessionPlan = planOfficialSourceSupersession(next, supersededSources, now);
+      if (supersessionPlan.error) throw new Error(supersessionPlan.error);
+
+      for (const mutation of supersessionPlan.mutations) {
+        const predecessorRef = db.collection(SOURCE_COLLECTION).doc(mutation.previous.id);
+        tx.set(predecessorRef, mutation.next, { merge: false });
+        writeAuditInTransaction(
+          tx,
+          actor,
+          'TaxOfficialSource',
+          mutation.previous.id,
+          'supersede',
+          mutation.previous,
+          mutation.next,
+          `Official source version superseded by ${sourceId}. Effective/publication dates remain preserved exactly as captured.`
+        );
+      }
       tx.set(ref, next, { merge: false });
       writeAuditInTransaction(tx, actor, 'TaxOfficialSource', sourceId, 'validate', previous, next, reason);
       return next;
@@ -532,6 +560,13 @@ export default async function handler(req: Request, res: Response) {
         ? await validateProfessionalRegistryEvidence(tx, db, previous.professionalValidation, previous.domain)
         : 'Professional UAE tax validation is required before a tax rule can be accepted.';
       if (professionalError) throw new Error(professionalError);
+      const predecessorRef = previous.supersedesRuleId
+        ? db.collection(RULE_COLLECTION).doc(previous.supersedesRuleId)
+        : null;
+      const predecessorSnap = predecessorRef ? await tx.get(predecessorRef) : null;
+      const predecessor = predecessorSnap?.exists
+        ? ({ id: predecessorSnap.id, ...predecessorSnap.data() } as TaxRuleVersion)
+        : null;
       const acceptanceError = validateRuleAcceptance(previous, sources, actor);
       if (acceptanceError) throw new Error(acceptanceError);
       const now = new Date().toISOString();
@@ -543,6 +578,21 @@ export default async function handler(req: Request, res: Response) {
         acceptedAt: now,
         updatedAt: now
       };
+      const supersessionPlan = planTaxRuleSupersession(next, predecessor, now);
+      if (supersessionPlan.error) throw new Error(supersessionPlan.error);
+      if (supersessionPlan.mutation) {
+        tx.set(db.collection(RULE_COLLECTION).doc(supersessionPlan.mutation.previous.id), supersessionPlan.mutation.next, { merge: false });
+        writeAuditInTransaction(
+          tx,
+          actor,
+          'TaxRuleVersion',
+          supersessionPlan.mutation.previous.id,
+          'supersede',
+          supersessionPlan.mutation.previous,
+          supersessionPlan.mutation.next,
+          `Accepted tax rule version superseded by ${ruleId}. Effective dates and source evidence remain preserved exactly as recorded.`
+        );
+      }
       tx.set(ref, next, { merge: false });
       writeAuditInTransaction(tx, actor, 'TaxRuleVersion', ruleId, 'accept', previous, next, reason);
       return next;
