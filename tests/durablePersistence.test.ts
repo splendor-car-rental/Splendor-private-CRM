@@ -289,20 +289,25 @@ describe('createContractDurable — server-authoritative pricing + idempotency (
     expect(contractsSnap.size).toBe(1);
   });
 
-  it('atomically updates the vehicle status and the customer lifetime value together with the contract', async () => {
+  it('persists an unsigned draft without operational or financial side effects before handover', async () => {
     await seedVehicleAndCustomer();
     const outcome = await createContractDurable({
       vehicleId: 'VEH-CONTRACT-1', customerId: 'CUS-CONTRACT-1',
       startDateTime: '2026-09-01T10:00:00.000Z', endDateTime: '2026-09-02T10:00:00.000Z', status: 'active'
     });
 
+    const contractDoc = await db.collection('contracts').doc(outcome.contract.id).get();
     const vehicleDoc = await db.collection('vehicles').doc('VEH-CONTRACT-1').get();
     const customerDoc = await db.collection('customers').doc('CUS-CONTRACT-1').get();
 
-    expect(vehicleDoc.data()?.status).toBe('rented');
-    expect(vehicleDoc.data()?.currentContractId).toBe(outcome.contract.id);
-    expect(customerDoc.data()?.totalRentals).toBe(1);
-    expect(customerDoc.data()?.lifetimeValue).toBeCloseTo(outcome.contract.grandTotal);
+    expect(contractDoc.exists).toBe(true);
+    expect(contractDoc.data()?.status).toBe('draft');
+    expect(contractDoc.data()?.termsAccepted).toBe(false);
+    expect(contractDoc.data()?.depositStatus).toBe('pending');
+    expect(vehicleDoc.data()?.status).toBe('available');
+    expect(vehicleDoc.data()?.currentContractId).toBeUndefined();
+    expect(customerDoc.data()?.totalRentals).toBe(0);
+    expect(customerDoc.data()?.lifetimeValue).toBe(0);
   });
 
   it('rejects contract creation for an unknown vehicle without writing anything', async () => {

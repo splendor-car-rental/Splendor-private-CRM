@@ -5,24 +5,23 @@ import { PersistenceError } from './persistence';
 import { vatPortion } from '../config/tax';
 import type { AuditLog, Contract, Customer, Vehicle } from '../types';
 
-// Server-authoritative "instant contract" creation (POST /api/contracts).
+// Server-authoritative rental-contract draft creation (POST /api/contracts).
 //
-// Contract creation is NOT the authoritative event for operational rental
-// metrics. A contract can exist before physical handover, and a retry or an
-// alternate reservation-to-contract entry path must not change the meaning
-// of `totalRentals` or `lifetimeValue`.
+// A newly-created contract is intentionally NON-OPERATIVE. Creating the
+// document must never itself mean that KYC passed, a security deposit was
+// actually collected, terms were signed, a vehicle was handed over, or a
+// rental became revenue. Those are distinct lifecycle events and must be
+// proven by their own authoritative records before the handover transition.
 //
-// The clean-recovery invariant for #36 is therefore:
-// - contract creation may create the durable contract and preserve the
-//   existing vehicle reservation/rented compatibility behavior;
-// - it MUST NOT increment customer totalRentals;
-// - it MUST NOT recognize customer lifetimeValue;
-// - handover is the single operational rental-count event;
-// - financial closure is the single lifetime-value recognition event.
+// This function therefore does four things only:
+//   1. validates the vehicle/customer and requested rental period;
+//   2. checks the requested window against already committed rentals;
+//   3. computes the commercial figures server-side from the vehicle master;
+//   4. creates an immutable/audited DRAFT contract idempotently.
 //
-// Pricing and availability remain server-authoritative and this function
-// remains idempotent, so this change removes the metric side effect without
-// weakening the existing contract-creation protections.
+// It deliberately does NOT mutate vehicle operational status and does NOT
+// increment customer rental/LTV metrics. Those mutations belong to handover
+// and return/settlement, respectively.
 
 export class ContractValidationError extends PersistenceError {
   constructor(message: string) {
@@ -41,6 +40,11 @@ export interface CreateContractInput {
   mileageAllowancePerDay?: number;
   extraKmRate?: number;
   depositReleaseDays?: number;
+  /**
+   * Retained for backwards-compatible request typing only. The caller is not
+   * allowed to choose the lifecycle state during creation; the server always
+   * creates a DRAFT.
+   */
   status?: string;
   notes?: string;
   actorId?: string;
@@ -52,13 +56,18 @@ export interface CreateContractInput {
 export interface CreateContractResult {
   contract: Contract;
   auditEntry: AuditLog;
-  vehicleUpdate: { status: string; currentCustomerId: string; currentContractId: string };
-  /** Contract creation no longer mutates customer operational/financial metrics. */
+  /** Kept so server.ts can remain backwards compatible; draft creation no longer mutates the vehicle. */
+  vehicleUpdate: Record<string, never>;
+  /** Kept so server.ts can remain backwards compatible; draft creation no longer mutates customer metrics. */
   customerUpdate: Record<string, never>;
   replayed: boolean;
 }
 
 export async function createContractDurable(input: CreateContractInput): Promise<CreateContractResult> {
+  // Ids are issued via their own atomic transactions (on numbering_configs
+  // documents, unrelated to the vehicle/customer/contract documents this
+  // function's own transaction touches) before that transaction opens --
+  // Firestore does not support nesting one transaction inside another.
   const contractId = await issueNextNumber('Contract');
   const auditId = await issueNextNumber('AuditLog');
 
@@ -90,8 +99,8 @@ export async function createContractDurable(input: CreateContractInput): Promise
         tx.get(db.collection('contracts').where('vehicleId', '==', input.vehicleId))
       ]);
 
-      // --- server-authoritative pricing: the vehicle's own record decides
-      // the rate, never a client-supplied figure ---
+      // --- server-authoritative pricing: the vehicle master decides the
+      // rate; client-supplied price fields are not part of this input. ---
       const dailyRate = vehicle.dailyRate;
       const rentalTotal = dailyRate * days;
       const vatAmount = vatPortion(rentalTotal);
@@ -99,6 +108,8 @@ export async function createContractDurable(input: CreateContractInput): Promise
       const depositAmount = vehicle.minDeposit || 5000;
 
       // --- availability check, inside the same transaction as the write ---
+      // A draft itself is not an operational hold. Only reservations and
+      // contract states that have crossed a commitment gate block the window.
       const conflicts: unknown[] = [];
       if (vehicle.status === 'maintenance' || vehicle.status === 'unavailable') {
         conflicts.push({ type: 'status_block', message: `Vehicle is currently marked as ${vehicle.status}` });
@@ -114,21 +125,19 @@ export async function createContractDurable(input: CreateContractInput): Promise
       }
       for (const doc of conSnap.docs) {
         const c = doc.data() as any;
-        if (c.status !== 'active') continue;
+        if (!['approved', 'signed', 'active'].includes(c.status)) continue;
         const cStart = new Date(c.startDateTime).getTime();
         const cEnd = new Date(c.endDateTime).getTime();
         if (startTime <= cEnd && endTime >= cStart) {
-          conflicts.push({ type: 'active_contract', id: doc.id, contractNumber: c.contractNumber, customer: c.customerName });
+          conflicts.push({ type: 'committed_contract', id: doc.id, contractNumber: c.contractNumber, customer: c.customerName, status: c.status });
         }
       }
       if (conflicts.length > 0) {
         throw new AvailabilityConflictError('Vehicle has a scheduling conflict for the requested dates.', conflicts);
       }
 
-      // --- writes ---
+      // --- draft-only write ---
       const now = new Date().toISOString();
-      const status = (input.status || 'active') as Contract['status'];
-
       const contract: Contract = {
         id: contractId,
         contractNumber: contractId,
@@ -152,20 +161,20 @@ export async function createContractDurable(input: CreateContractInput): Promise
         mileageAllowancePerDay: input.mileageAllowancePerDay || 200,
         extraKmRate: input.extraKmRate || 15,
         depositReleaseDays: input.depositReleaseDays || 21,
-        status,
+        status: 'draft',
         paymentStatus: 'unpaid',
-        depositStatus: 'held',
-        termsAccepted: true,
-        notes: input.notes || 'Instant VIP rental agreement',
+        // This is a requirement/value expectation, not evidence that money
+        // has been collected. Deposit evidence lives in `deposits`.
+        depositStatus: 'pending',
+        // Contract creation is not signature acceptance. The later signing
+        // transition must provide the actual evidence.
+        termsAccepted: false,
+        notes: input.notes || 'Rental agreement draft',
         createdAt: now,
         updatedAt: now
       };
 
-      const vehicleUpdate = {
-        status: status === 'active' ? 'rented' : 'reserved',
-        currentCustomerId: contract.customerId,
-        currentContractId: contract.id
-      };
+      const vehicleUpdate: Record<string, never> = {};
       const customerUpdate: Record<string, never> = {};
 
       const auditEntry: AuditLog = {
@@ -177,15 +186,11 @@ export async function createContractDurable(input: CreateContractInput): Promise
         entityType: 'Contract',
         entityId: contractId,
         action: 'create',
-        newValue: `Issued instant contract ${contractId} for ${contract.customerName} (${grandTotal.toLocaleString()} AED)`,
-        reason: 'Executive instant contract creation; customer rental/LTV metrics are deferred to their authoritative lifecycle events'
+        newValue: `Created draft contract ${contractId} for ${contract.customerName} (${grandTotal.toLocaleString()} AED)`,
+        reason: 'Draft rental agreement created; no operational handover or financial collection implied'
       } as AuditLog;
 
       tx.create(db.collection('contracts').doc(contractId), contract as unknown as Record<string, unknown>);
-      tx.set(vehicleRef, { ...vehicleUpdate, updatedAt: now }, { merge: true });
-      // Intentionally no customer metric write here. Reservation-derived
-      // contract creation already behaves this way; both entry paths are now
-      // consistent and handover owns totalRentals.
       tx.create(db.collection('audit_logs').doc(auditId), auditEntry as unknown as Record<string, unknown>);
 
       return { contract, auditEntry, vehicleUpdate, customerUpdate };
