@@ -718,7 +718,14 @@ export interface Reservation {
   updatedAt: string;
 }
 
-export type ContractStatus = 'draft' | 'review' | 'approved' | 'signed' | 'active' | 'completed' | 'cancelled';
+/**
+ * `settlement_pending`: the vehicle has been physically returned (evidence
+ * recorded) but the contract is not yet financially closed -- no final
+ * invoice/charges/deposit settlement has happened. Only the final closure
+ * event (POST /api/contracts/:id/close) moves a contract from here to
+ * `completed`; physical return alone never does (Issue #36).
+ */
+export type ContractStatus = 'draft' | 'review' | 'approved' | 'signed' | 'active' | 'settlement_pending' | 'completed' | 'cancelled';
 
 export interface VehicleDamageMarker {
   id: string;

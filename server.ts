@@ -2562,24 +2562,28 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
       const snap = await tx.get(contractRef);
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
-      if (contract.status === 'completed') throw new PersistenceError('This contract has already been returned.');
+      if (contract.status === 'settlement_pending' || contract.status === 'completed') {
+        throw new PersistenceError('This contract has already been returned.');
+      }
       if (contract.status !== 'active') {
         throw new PersistenceError(`This contract is ${contract.status}, not active, and cannot be returned yet.`);
       }
 
       const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
       const vehicleSnap = await tx.get(vehicleRef);
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const customerSnap = await tx.get(customerRef);
 
-      const updated = { ...contract, returnDetails: returnData, status: 'completed', updatedAt: now };
+      // Physical return records evidence and stops the rental clock, but is
+      // NOT financial closure (Issue #36): the vehicle stays unavailable
+      // (a pending settlement/inspection dispute could still change the
+      // final charges) and the customer's lifetimeValue is not recognized
+      // yet -- only POST /api/contracts/:id/close does that, exactly once.
+      const updated = { ...contract, returnDetails: returnData, status: 'settlement_pending', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
 
       if (vehicleSnap.exists) {
         const v = vehicleSnap.data() as any;
         const vehicleUpdate: Record<string, unknown> = {
-          status: 'available', currentCustomerId: null, currentContractId: null,
-          totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now
+          status: 'unavailable', currentCustomerId: null, currentContractId: null, updatedAt: now
         };
         if (returnData.endMileage) {
           vehicleUpdate.mileage = returnData.endMileage;
@@ -2590,10 +2594,6 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
           Object.assign(vehicleUpdate, computeMaintenanceScheduleUpdate(v, returnData.endMileage));
         }
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
-      }
-
-      if (customerSnap.exists) {
-        tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
       }
 
       let charge: any = null;
@@ -2630,17 +2630,14 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   if (index !== -1) globalStore.contracts[index] = updatedContract;
   const vehicle = globalStore.vehicles.find(v => v.id === updatedContract.vehicleId);
   if (vehicle) {
-    vehicle.status = 'available';
+    vehicle.status = 'unavailable';
     vehicle.currentCustomerId = undefined;
     vehicle.currentContractId = undefined;
     if (returnData.endMileage) {
       Object.assign(vehicle, computeMaintenanceScheduleUpdate(vehicle, returnData.endMileage));
       vehicle.mileage = returnData.endMileage;
     }
-    vehicle.totalRevenue += updatedContract.grandTotal;
   }
-  const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
-  if (customer) customer.lifetimeValue += updatedContract.grandTotal;
   if (chargeDoc) globalStore.charges.push(chargeDoc);
 
   await recordAudit({
@@ -2651,18 +2648,90 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
     entityId: updatedContract.id,
     action: 'status_change',
     previousValue: 'Status: Active',
-    newValue: `Status: Completed (Vehicle Return Verified. Additional Charges: ${returnData.totalAdditionalCharges} AED)`,
-    reason: 'Vehicle return inspection finalized'
+    newValue: `Status: Settlement Pending (Vehicle Return Verified. Additional Charges: ${returnData.totalAdditionalCharges} AED). Awaiting financial closure.`,
+    reason: 'Vehicle return inspection finalized -- vehicle held unavailable pending settlement, revenue not yet recognized'
   });
 
   try {
     await dispatchNotificationEvent('contract_return',
-      `Vehicle returned and contract ${updatedContract.id} closed for ${updatedContract.customerName}.`,
-      `تم استلام المركبة وإغلاق العقد ${updatedContract.id} للعميل ${updatedContract.customerName}.`
+      `Vehicle returned for contract ${updatedContract.id} (${updatedContract.customerName}) -- awaiting financial closure.`,
+      `تم استلام المركبة لعقد ${updatedContract.id} (${updatedContract.customerName}) -- بانتظار التسوية المالية النهائية.`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (contract_return):', err);
   }
+
+  res.json({ success: true, contract: updatedContract });
+}));
+
+// Final financial closure (Issue #36): the ONLY event that recognizes a
+// completed rental's revenue. Physical return (above) only ever moves a
+// contract to 'settlement_pending' -- this is a distinct, explicit action a
+// human takes once the return-time charges are settled, so lifetimeValue
+// and vehicle.totalRevenue are counted exactly once, at the moment the
+// business actually considers the rental closed.
+app.post('/api/contracts/:id/close', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const { actorId, actorName } = req.body || {};
+  const now = new Date().toISOString();
+  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
+
+  let updatedContract: any;
+  try {
+    updatedContract = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(contractRef);
+      if (!snap.exists) throw new PersistenceError('Contract not found');
+      const contract = snap.data() as any;
+      if (contract.status === 'completed') throw new PersistenceError('This contract has already been financially closed.');
+      if (contract.status !== 'settlement_pending') {
+        throw new PersistenceError(`This contract is ${contract.status}, not settlement_pending, and cannot be closed yet.`);
+      }
+
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+
+      const updated = { ...contract, status: 'completed', updatedAt: now };
+      tx.set(contractRef, updated, { merge: true });
+
+      if (vehicleSnap.exists) {
+        const v = vehicleSnap.data() as any;
+        tx.set(vehicleRef, { status: 'available', totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
+      }
+      if (customerSnap.exists) {
+        tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
+      }
+
+      return updated;
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Contract not found' || err.message.startsWith('This contract'))) {
+      return res.status(err.message === 'Contract not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
+  if (index !== -1) globalStore.contracts[index] = updatedContract;
+  const vehicle = globalStore.vehicles.find(v => v.id === updatedContract.vehicleId);
+  if (vehicle) {
+    vehicle.status = 'available';
+    vehicle.totalRevenue += updatedContract.grandTotal;
+  }
+  const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
+  if (customer) customer.lifetimeValue += updatedContract.grandTotal;
+
+  await recordAudit({
+    userId: actorId || 'USR-002',
+    userName: actorName || 'Finance',
+    userRole: 'finance',
+    entityType: 'Contract',
+    entityId: updatedContract.id,
+    action: 'status_change',
+    previousValue: 'Status: Settlement Pending',
+    newValue: `Status: Completed (Financial closure -- ${updatedContract.grandTotal.toLocaleString()} AED recognized, vehicle released).`,
+    reason: 'Final financial closure -- return-time charges settled'
+  });
 
   res.json({ success: true, contract: updatedContract });
 }));

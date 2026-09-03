@@ -249,9 +249,15 @@ describe('POST /api/contracts/:id/handover', () => {
 });
 
 describe('POST /api/contracts/:id/return', () => {
-  it('completes an active contract and frees the vehicle', async () => {
-    seedContract('CON-RETURN-1', { status: 'active' });
-    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', status: 'rented' });
+  // Issue #36: physical return is NOT financial closure. It moves the
+  // contract to settlement_pending (never straight to completed), holds
+  // the vehicle unavailable (never immediately available again), and must
+  // never itself recognize the customer's lifetimeValue -- only the
+  // separate /close event does that, exactly once.
+  it('moves an active contract to settlement_pending, holds the vehicle unavailable, and does not recognize LTV yet', async () => {
+    seedContract('CON-RETURN-1', { status: 'active', grandTotal: 4200 });
+    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', status: 'rented', totalRevenue: 0 });
+    seedDoc('customers', 'CUS-CW-1', { id: 'CUS-CW-1', lifetimeValue: 0 });
 
     const res = await request(app)
       .post('/api/contracts/CON-RETURN-1/return')
@@ -259,7 +265,9 @@ describe('POST /api/contracts/:id/return', () => {
       .send({ returnData: { endMileage: 1200, fuelLevel: 'full' } });
 
     expect(res.status).toBe(200);
-    expect(res.body.contract.status).toBe('completed');
+    expect(res.body.contract.status).toBe('settlement_pending');
+    expect(adminMock.store.get('vehicles')?.get('VEH-CW-1').status).toBe('unavailable');
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1')?.lifetimeValue || 0).toBe(0);
   });
 
   it('rejects returning a contract that was never handed over (still signed, not active)', async () => {
@@ -268,6 +276,89 @@ describe('POST /api/contracts/:id/return', () => {
       .post('/api/contracts/CON-RETURN-2/return')
       .set(authAs(OPS_UID))
       .send({ returnData: {} });
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects returning a contract that has already been returned (settlement_pending)', async () => {
+    seedContract('CON-RETURN-3', { status: 'settlement_pending' });
+    const res = await request(app)
+      .post('/api/contracts/CON-RETURN-3/return')
+      .set(authAs(OPS_UID))
+      .send({ returnData: {} });
+    expect(res.status).toBe(409);
+  });
+});
+
+describe('POST /api/contracts/:id/close', () => {
+  it('financially closes a settlement_pending contract exactly once: recognizes LTV/revenue and frees the vehicle', async () => {
+    seedContract('CON-CLOSE-1', { status: 'settlement_pending', grandTotal: 4200 });
+    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', status: 'unavailable', totalRevenue: 1000 });
+    seedDoc('customers', 'CUS-CW-1', { id: 'CUS-CW-1', lifetimeValue: 500 });
+
+    const res = await request(app)
+      .post('/api/contracts/CON-CLOSE-1/close')
+      .set(authAs(FINANCE_UID))
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.contract.status).toBe('completed');
+    expect(adminMock.store.get('vehicles')?.get('VEH-CW-1').status).toBe('available');
+    expect(adminMock.store.get('vehicles')?.get('VEH-CW-1').totalRevenue).toBe(1000 + 4200);
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1').lifetimeValue).toBe(500 + 4200);
+  });
+
+  it('rejects closing a contract that has not been returned yet (still active)', async () => {
+    seedContract('CON-CLOSE-2', { status: 'active' });
+    const res = await request(app)
+      .post('/api/contracts/CON-CLOSE-2/close')
+      .set(authAs(FINANCE_UID))
+      .send({});
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects double-closing an already-completed contract (no double LTV recognition)', async () => {
+    seedContract('CON-CLOSE-3', { status: 'completed' });
+    const res = await request(app)
+      .post('/api/contracts/CON-CLOSE-3/close')
+      .set(authAs(FINANCE_UID))
+      .send({});
+    expect(res.status).toBe(409);
+  });
+});
+
+describe('POST /api/reservations/:id/create-contract', () => {
+  // Issue #36: both contract-entry paths (direct creation, covered in
+  // tests/durablePersistence.test.ts, and this reservation-derived path)
+  // must be consistent -- neither increments totalRentals/lifetimeValue at
+  // creation. Only handover (totalRentals) and /close (lifetimeValue) do.
+  it('creates a draft contract from a reservation without incrementing rental/LTV metrics', async () => {
+    seedDoc('reservations', 'RES-CW-1', {
+      id: 'RES-CW-1', customerId: 'CUS-CW-1', customerName: 'CW Test Customer', customerPhone: '+9715000000',
+      vehicleId: 'VEH-CW-1', vehicleName: 'Test GT', vehiclePlate: 'A 11111',
+      pickupDateTime: '2026-02-01T10:00:00.000Z', returnDateTime: '2026-02-03T10:00:00.000Z',
+      pickupLocation: 'Dubai', returnLocation: 'Dubai', dailyRate: 1000, totalAmount: 2100, depositAmount: 3000,
+      notes: '', status: 'confirmed'
+    });
+    seedDoc('customers', 'CUS-CW-1', { id: 'CUS-CW-1', totalRentals: 2, lifetimeValue: 8000 });
+    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', vin: 'VIN-CW-1' });
+
+    const res = await request(app)
+      .post('/api/reservations/RES-CW-1/create-contract')
+      .set(authAs(OPS_UID))
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.contract.status).toBe('draft');
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1').totalRentals).toBe(2);
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1').lifetimeValue).toBe(8000);
+  });
+
+  it('rejects creating a second contract from a reservation that already has one', async () => {
+    seedDoc('reservations', 'RES-CW-2', { id: 'RES-CW-2', contractId: 'CON-EXISTING', customerId: 'CUS-CW-1', vehicleId: 'VEH-CW-1' });
+    const res = await request(app)
+      .post('/api/reservations/RES-CW-2/create-contract')
+      .set(authAs(OPS_UID))
+      .send({});
     expect(res.status).toBe(409);
   });
 });
