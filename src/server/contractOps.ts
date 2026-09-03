@@ -2,7 +2,7 @@ import { runIdempotent } from './idempotency';
 import { AvailabilityConflictError } from './availability';
 import { issueNextNumber } from './idGenerator';
 import { PersistenceError } from './persistence';
-import { vatPortion } from '../config/tax';
+import { calculateVatOnNet } from '../config/tax';
 import type { AuditLog, Contract, Customer, Vehicle } from '../types';
 
 // Server-authoritative rental-contract draft creation (POST /api/contracts).
@@ -103,7 +103,7 @@ export async function createContractDurable(input: CreateContractInput): Promise
       // rate; client-supplied price fields are not part of this input. ---
       const dailyRate = vehicle.dailyRate;
       const rentalTotal = dailyRate * days;
-      const vatAmount = vatPortion(rentalTotal);
+      const vatAmount = calculateVatOnNet(rentalTotal);
       const grandTotal = rentalTotal + vatAmount;
       const depositAmount = vehicle.minDeposit || 5000;
 

@@ -1,4 +1,4 @@
-import { UAE_VAT_RATE, vatPortion } from '../config/tax';
+import { UAE_VAT_RATE, calculateVatOnNet } from '../config/tax';
 
 export interface ContractExtensionActor {
   uid: string;
@@ -87,7 +87,7 @@ export async function executeContractExtensionTransaction(
     }
 
     const periodRentalAmount = money(rate * extraDays);
-    const vatAmount = money(vatPortion(periodRentalAmount));
+    const vatAmount = money(calculateVatOnNet(periodRentalAmount));
     const totalExtensionAmount = money(periodRentalAmount + vatAmount);
     const issueDate = String(input.issueDate || now.slice(0, 10));
     const addendumSeq = String((Array.isArray(contract.extensions) ? contract.extensions.length : 0) + 1).padStart(4, '0');

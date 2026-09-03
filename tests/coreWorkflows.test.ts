@@ -351,6 +351,15 @@ describe('POST /api/reservations/:id/create-contract', () => {
     expect(res.body.contract.status).toBe('draft');
     expect(adminMock.store.get('customers')?.get('CUS-CW-1').totalRentals).toBe(2);
     expect(adminMock.store.get('customers')?.get('CUS-CW-1').lifetimeValue).toBe(8000);
+    // Tax/VAT governance fix: the reservation's totalAmount (2100) is
+    // VAT-inclusive -- correctly backing VAT out of it gives a clean
+    // 2000 net / 100 VAT split. Before the fix, this route mistakenly
+    // applied the net-only 5% formula to the gross 2100 figure, yielding
+    // vatAmount 105 / rentalTotal 1995 -- silently overstating VAT
+    // collected and understating rental revenue on every such contract.
+    expect(res.body.contract.rentalTotal).toBeCloseTo(2000, 8);
+    expect(res.body.contract.vatAmount).toBeCloseTo(100, 8);
+    expect(res.body.contract.grandTotal).toBe(2100);
   });
 
   it('rejects creating a second contract from a reservation that already has one', async () => {

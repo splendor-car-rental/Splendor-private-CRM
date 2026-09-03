@@ -3,7 +3,7 @@ import { FileSignature, Shield, Car, User, Calendar, DollarSign, Sparkles, Check
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Modal } from '../common/Modal';
-import { vatPortion } from '../../config/tax';
+import { calculateVatOnNet } from '../../config/tax';
 
 interface AddContractModalProps {
   isOpen: boolean;
@@ -42,7 +42,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
   const diffDays = Math.max(1, Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24)));
   const dailyRate = selectedVehicle?.dailyRate || 3500;
   const rentalTotal = dailyRate * diffDays;
-  const vatAmount = vatPortion(rentalTotal);
+  const vatAmount = calculateVatOnNet(rentalTotal);
   const grandTotal = rentalTotal + vatAmount;
   const depositAmount = selectedVehicle?.minDeposit || 10000;
 

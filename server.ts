@@ -7,7 +7,7 @@ import { DataStore, globalStore } from './src/server/dataStore';
 import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
-import { vatPortion, applyVat } from './src/config/tax';
+import { calculateVatOnNet, extractVatFromGross, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
@@ -2032,7 +2032,7 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
     : requestedDiscountAmount;
   const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
   const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
-  const vatAmount = vatPortion(subtotal);
+  const vatAmount = calculateVatOnNet(subtotal);
   const grandTotal = subtotal + vatAmount;
 
   const quote = {
@@ -2107,7 +2107,7 @@ registerApprovalHandler('Quotation', 'discount_override', async (request: Procur
     const discountAmount = Math.min(requestedDiscountAmount, preDiscountSubtotal);
     const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
     const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
-    const vatAmount = vatPortion(subtotal);
+    const vatAmount = calculateVatOnNet(subtotal);
     const grandTotal = subtotal + vatAmount;
     const patch = {
       discountAmount, discountPercentage, vatAmount, grandTotal,
@@ -2319,12 +2319,15 @@ app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'o
       const customer = customerSnap.exists ? (customerSnap.data() as any) : null;
       const vehicle = vehicleSnap.exists ? (vehicleSnap.data() as any) : null;
 
-      // reserv.totalAmount is VAT-inclusive; vatPortion() backs out the
-      // configured rate instead of a raw 5/105 literal, so this stays
-      // correct if the VAT rate in src/config/tax.ts ever changes (Phase
-      // 23.0 audit finding: this used to drift from every other
-      // money-touching route, which all already used the shared helper).
-      const vatAmount = vatPortion(reserv.totalAmount);
+      // reserv.totalAmount is VAT-inclusive (the frontend sends
+      // applyVat(dailyRate * days) when creating the reservation) --
+      // extractVatFromGross() correctly backs the VAT portion out of a
+      // gross figure (gross * rate/(1+rate)). This route used to call
+      // calculateVatOnNet()/vatPortion() here instead, which computes
+      // gross * rate -- a different, larger number that overstates VAT
+      // collected and understates net rental revenue on every contract
+      // created from a reservation (Tax/VAT governance audit finding).
+      const vatAmount = extractVatFromGross(reserv.totalAmount);
       const rentalTotal = reserv.totalAmount - vatAmount;
 
       const contract = {
@@ -2634,7 +2637,7 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
           id: chargeId,
           type: 'other',
           amount: returnData.totalAdditionalCharges,
-          vatAmount: vatPortion(returnData.totalAdditionalCharges),
+          vatAmount: calculateVatOnNet(returnData.totalAdditionalCharges),
           totalAmount: applyVat(returnData.totalAdditionalCharges),
           relatedContractId: contract.id,
           customerId: contract.customerId,
@@ -3720,7 +3723,7 @@ app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'),
 
       const extraDays = Math.ceil((newEndMs - oldEndMs) / 86400000);
       const extraRental = extraDays * contract.dailyRate;
-      const extraVat = vatPortion(extraRental);
+      const extraVat = calculateVatOnNet(extraRental);
       const updated = {
         ...contract,
         endDateTime: newEndDateTime,
@@ -3777,7 +3780,7 @@ app.get('/api/charges', (req, res) => {
 app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('financialAdjustments'), asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Charge');
   const amount = Number(req.body.amount) || 0;
-  const vat = vatPortion(amount);
+  const vat = calculateVatOnNet(amount);
   const charge = {
     ...req.body,
     id: newId,

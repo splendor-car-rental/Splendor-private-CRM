@@ -1,5 +1,5 @@
 import { getRule, getRuleValue } from './businessRules';
-import { applyVat, vatPortion } from '../config/tax';
+import { applyVat, calculateVatOnNet } from '../config/tax';
 import type { LtoFinancialOffer, LtoInstallmentStatus } from '../types';
 
 /**
@@ -89,7 +89,7 @@ export function computeLtoFinancialOffer(input: LtoOfferInput): LtoFinancialOffe
   const monthlyMarkupPortion = Math.round((totalMarkup / input.termMonths) * 100) / 100;
   const monthlyInstallment = Math.round((monthlyPrincipalPortion + monthlyMarkupPortion) * 100) / 100;
 
-  const vatAmount = vatPortion(processingFeeAed);
+  const vatAmount = calculateVatOnNet(processingFeeAed);
   const totalContractValue = Math.round((input.downPayment + monthlyInstallment * input.termMonths + finalPayment + applyVat(processingFeeAed)) * 100) / 100;
 
   return {
