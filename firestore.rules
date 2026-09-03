@@ -1,12 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // SPLENDOR PRIVATE CRM — server-authoritative Firestore boundary.
-    // Critical business mutations are performed by the Express API through
-    // Firebase Admin SDK. Admin SDK writes bypass these client rules.
-    // Browser access is limited to authenticated, provisioned staff reads
-    // and narrowly-scoped self-profile fields.
-
+    // SPLENDOR PRIVATE CRM — browser Firestore is read-mostly and fail-closed.
+    // Authoritative mutations are server-side through Firebase Admin.
     function isSignedIn() {
       return request.auth != null;
     }
@@ -16,12 +12,17 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    function callerProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
     function callerRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return callerProfile().role;
     }
 
     function isStaff() {
       return hasProfile()
+        && callerProfile().status == 'active'
         && callerRole() in ['ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'];
     }
 
@@ -29,24 +30,24 @@ service cloud.firestore {
       return isStaff() && callerRole() in roles;
     }
 
-    // Staff directory is readable by provisioned staff. Users cannot create,
-    // replace, delete, or change role/status through the client SDK.
     match /users/{uid} {
+      // A signed-in user may read their own profile so the application can
+      // explain disabled/missing provisioning; directory access needs active staff.
       allow read: if isStaff() || (isSignedIn() && request.auth.uid == uid);
-      allow create: if false;
-      allow delete: if false;
+      allow create, delete: if false;
       allow update: if isStaff()
         && request.auth.uid == uid
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['name', 'nameAr', 'phone', 'avatar']);
     }
 
+    // Audit history is management evidence, not a general staff feed.
     match /audit_logs/{logId} {
-      allow read: if isStaff();
+      allow read: if hasRole(['ceo', 'admin']);
       allow write: if false;
     }
 
-    // Client-readable operational data. All mutations go through the API.
+    // Core operational records: active staff may read; browser mutations denied.
     match /vehicles/{id} { allow read: if isStaff(); allow write: if false; }
     match /customers/{id} { allow read: if isStaff(); allow write: if false; }
     match /leads/{id} { allow read: if isStaff(); allow write: if false; }
@@ -58,8 +59,6 @@ service cloud.firestore {
     match /deposits/{id} { allow read: if isStaff(); allow write: if false; }
     match /payments/{id} { allow read: if isStaff(); allow write: if false; }
     match /invoices/{id} { allow read: if isStaff(); allow write: if false; }
-    match /bank_batches/{id} { allow read: if isStaff(); allow write: if false; }
-    match /bank_transactions/{id} { allow read: if isStaff(); allow write: if false; }
     match /tasks/{id} { allow read: if isStaff(); allow write: if false; }
     match /communications/{id} { allow read: if isStaff(); allow write: if false; }
     match /documents/{id} { allow read: if isStaff(); allow write: if false; }
@@ -71,22 +70,25 @@ service cloud.firestore {
     match /whatsapp_message_log/{id} { allow read: if isStaff(); allow write: if false; }
     match /customer_notification_configs/{id} { allow read: if isStaff(); allow write: if false; }
     match /settings/{id} { allow read: if isStaff(); allow write: if false; }
-    match /toll_transactions/{id} {
-      allow read: if isStaff();
-      allow create, update, delete: if false;
-    }
-    match /toll_import_batches/{id} {
-      allow read: if isStaff();
-      allow create, update, delete: if false;
-    }
 
-    // Lease-to-Own is also server-authoritative. These collections are
-    // explicitly readable for CRM screens but never writable from the browser.
-    match /lto_applications/{id} { allow read: if isStaff(); allow write: if false; }
-    match /lto_installments/{id} { allow read: if isStaff(); allow write: if false; }
-    match /lto_settlement_requests/{id} { allow read: if isStaff(); allow write: if false; }
+    // Finance data is least-privilege even for reads.
+    match /bank_batches/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+    match /bank_transactions/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+    match /company_bank_accounts/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+    match /accounting_journals/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+    match /accounting_financial_notes/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
 
-    // New collections default to DENY because there is intentionally no
-    // recursive catch-all rule.
+    // Corporate credit/account master data is limited to management, sales and finance.
+    match /corporate_accounts/{id} { allow read: if hasRole(['ceo', 'admin', 'sales', 'finance']); allow write: if false; }
+    match /corporate_branches/{id} { allow read: if hasRole(['ceo', 'admin', 'sales', 'finance']); allow write: if false; }
+
+    match /toll_transactions/{id} { allow read: if isStaff(); allow write: if false; }
+    match /toll_import_batches/{id} { allow read: if isStaff(); allow write: if false; }
+
+    match /lto_applications/{id} { allow read: if hasRole(['ceo', 'admin', 'operations', 'sales', 'finance']); allow write: if false; }
+    match /lto_installments/{id} { allow read: if hasRole(['ceo', 'admin', 'operations', 'sales', 'finance']); allow write: if false; }
+    match /lto_settlement_requests/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+
+    // No recursive catch-all: every unknown/new collection is denied by default.
   }
 }
