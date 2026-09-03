@@ -93,6 +93,7 @@ import {
   type ProcurementApprovalRequest, type ProcurementApprovalActor
 } from './src/server/procurementApprovals';
 import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
+import { getTaxPeriodView, listTaxPeriods, prepareTaxPeriod, requestTaxPeriodReview, TaxPeriodError } from './src/server/taxPeriods';
 import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance';
 import {
   startInspection, updateInspectionDetails, addDamageMarker, reviewDamageLiability,
@@ -8618,6 +8619,55 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
     // float balance changed between request and decision) -- surface that
     // as a normal 400, not an unhandled 500.
     if (error instanceof PersistenceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ----------------------------------------------------
+// TAX / VAT GOVERNANCE (Splendor OS 3.0, P2) -- a review-and-sign-off
+// workflow over figures buildVatSummary already computes correctly. There
+// is deliberately no filing/submit route and no DELETE here: see
+// src/server/taxPeriods.ts's file header for why. Review decisions go
+// through the generic POST /api/procurement/approvals/:id/decide route
+// above (entityType 'TaxPeriod', action 'review_tax_period'), reusing the
+// same Four-Eyes engine as every other approval in this codebase.
+// ----------------------------------------------------
+app.get('/api/tax/periods', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  res.json(await listTaxPeriods());
+}));
+
+app.get('/api/tax/periods/:periodKey', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  try {
+    res.json(await getTaxPeriodView(req.params.periodKey));
+  } catch (error: any) {
+    if (error instanceof TaxPeriodError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tax/periods/:periodKey/prepare', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await prepareTaxPeriod(req.params.periodKey, { uid: actor.uid, name: actor.name, role: actor.role as any }, recordAudit));
+  } catch (error: any) {
+    if (error instanceof TaxPeriodError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tax/periods/:periodKey/request-review', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const reason = String(req.body?.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'A reason is required to request this period\'s review.' });
+  try {
+    const { taxPeriod, approvalRequestId } = await requestTaxPeriodReview(
+      req.params.periodKey, { uid: actor.uid, name: actor.name, role: actor.role as any }, reason, recordAudit
+    );
+    res.status(201).json({ taxPeriod, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof TaxPeriodError) return res.status(409).json({ error: error.message });
     throw error;
   }
 }));
