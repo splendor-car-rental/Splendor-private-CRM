@@ -142,7 +142,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
       isOpen={isOpen}
       onClose={onClose}
       title={language === 'ar' ? 'تسجيل عميل VIP جديد' : 'Register New VIP Client'}
-      subtitle={language === 'ar' ? 'حفظ فوري في سحابة سبلندر مع التزامن اللحظي في لوحة القيادة' : 'Instant Splendor Cloud database sync & real-time live telemetry'}
+      subtitle={language === 'ar' ? 'حفظ فوري في قاعدة البيانات مع تحديث لحظي في لوحة القيادة' : 'Instant database save with real-time dashboard updates'}
       maxWidth="4xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">

@@ -102,7 +102,7 @@ export const AddContractModal: React.FC<AddContractModalProps> = ({ isOpen, onCl
       isOpen={isOpen}
       onClose={onClose}
       title={language === 'ar' ? 'إصدار عقد إيجار لحظي فوري' : 'Issue Instant Rental Contract'}
-      subtitle={language === 'ar' ? 'توليد العقد المعتمد وربطه مباشرة بسحابة سبلندر وتحديث أرقام لوحة القيادة فوراً' : 'Instant binding contract creation with zero-reload Splendor Cloud sync'}
+      subtitle={language === 'ar' ? 'توليد العقد المعتمد وحفظه فوراً في قاعدة البيانات مع تحديث لوحة القيادة تلقائياً' : 'Instant binding contract creation, saved immediately with live dashboard updates'}
       maxWidth="4xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">

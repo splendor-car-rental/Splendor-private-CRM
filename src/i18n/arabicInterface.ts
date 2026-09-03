@@ -194,7 +194,6 @@ const EXACT_UI_TRANSLATIONS: Record<string, string> = {
 const PHRASE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bSPLENDOR CAR RENTAL L\.L\.C\b/gi, 'شركة سبلندر لتأجير السيارات ذ.م.م'],
   [/\bSPLENDOR CAR RENTAL\b/gi, 'سبلندر لتأجير السيارات'],
-  [/\bSplendor Cloud\b/gi, 'سحابة سبلندر'],
   [/\bSplendor OS\b/gi, 'نظام سبلندر'],
   [/\bPurchase Orders?\b/gi, 'أوامر التوريد'],
   [/\bBank Reconciliation\b/gi, 'المطابقة البنكية'],

@@ -1059,11 +1059,11 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
           </div>
         </div>
 
-        {/* Live Cloud Status Banner */}
+        {/* Live Database Status Banner */}
         <div className="flex items-center justify-between px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#071328] via-[#0B1E3B] to-[#071328] border border-blue-900/50 text-xs text-blue-200">
           <div className="flex items-center gap-2.5">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-            <span className="font-semibold">{isAr ? 'نظام سبلندر الملكي السحابي متصل:' : 'Splendor Cloud Active:'}</span>
+            <span className="font-semibold">{isAr ? 'قاعدة البيانات متصلة:' : 'Database Connected:'}</span>
             <span className="text-blue-300 font-mono text-[11px] bg-blue-950/60 px-2 py-0.5 rounded-md border border-blue-800/40">
               {firebaseSyncState.projectId || 'production-splendor-db'}
             </span>
