@@ -29,12 +29,13 @@ function ensureRequestPath(req: Request): Request {
   const rawUrl = typeof target.url === 'string' && target.url.length > 0
     ? target.url
     : (typeof target.originalUrl === 'string' && target.originalUrl.length > 0 ? target.originalUrl : '/');
-  let pathname = '/';
-  try {
-    pathname = new URL(rawUrl, 'http://splendor.internal').pathname || '/';
-  } catch {
-    pathname = rawUrl.split('?')[0] || '/';
-  }
+  const pathname = (() => {
+    try {
+      return new URL(rawUrl, 'http://splendor.internal').pathname || '/';
+    } catch {
+      return rawUrl.split('?')[0] || '/';
+    }
+  })();
 
   Object.defineProperty(target, 'path', {
     configurable: true,
