@@ -7761,6 +7761,7 @@ app.post('/api/debts/:id/settlements', requireRole('ceo', 'admin', 'finance'), a
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || undefined) as string | undefined;
 
   try {
     const debt = await addDebtSettlement({
@@ -7770,13 +7771,20 @@ app.post('/api/debts/:id/settlements', requireRole('ceo', 'admin', 'finance'), a
       amount: body.amount,
       recordedBy: actor.uid,
       recordedByName: actor.name,
-      recordedByRole: actor.role as any
+      recordedByRole: actor.role as any,
+      idempotencyKey
     }, recordAudit);
     const index = globalStore.debts.findIndex(d => d.id === debt.id);
     if (index !== -1) globalStore.debts[index] = debt;
     res.json(debt);
   } catch (error: any) {
-    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    if (error instanceof PersistenceError) {
+      const lowered = String(error.message).toLowerCase();
+      const status = lowered.includes('not found') ? 404
+        : lowered.includes('idempotency-key') || lowered.includes('already') ? 409
+          : 400;
+      return res.status(status).json({ error: error.message });
+    }
     throw error;
   }
 }));
