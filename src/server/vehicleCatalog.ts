@@ -60,7 +60,9 @@ export async function listModelsForManufacturer(manufacturerId: string): Promise
     const seedIds = new Set(seedModels.map((m) => m.id));
     return [...seedModels, ...approved.filter((m) => !seedIds.has(m.id))];
   } catch (error) {
-    console.warn(`[vehicle-catalog] approved model extensions unavailable for ${manufacturerId}; serving static master models`, error);
+    // Do not interpolate request-controlled manufacturer ids into log format
+    // strings. The operational fallback does not need the raw identifier.
+    console.warn('[vehicle-catalog] approved model extensions unavailable; serving static master models', error);
     return seedModels;
   }
 }
