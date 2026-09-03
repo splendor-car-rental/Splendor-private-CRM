@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { executeContractExtensionTransaction } from '../src/server/contractExtensionRecovery';
 
 type Ref = { kind: 'doc' | 'query'; collection: string; id?: string };
+const recoverySource = readFileSync(new URL('../src/server/contractExtensionRecovery.ts', import.meta.url), 'utf8');
 
 function snapshot(id: string, data: Record<string, unknown> | null) {
   return { id, exists: data !== null, data: () => data };
@@ -89,6 +91,11 @@ describe('contract extension clean recovery', () => {
     expect(result.contract.rentalTotal).toBe(5000);
     expect(result.contract.vatAmount).toBe(250);
     expect(result.contract.grandTotal).toBe(5250);
+  });
+
+  it('does not duplicate legacy bank account or IBAN literals into the clean recovery source', () => {
+    expect(recoverySource).not.toMatch(/accountNumber:\s*['"][0-9]+['"]/);
+    expect(recoverySource).not.toMatch(/iban:\s*['"][A-Z]{2}[0-9A-Z]+['"]/);
   });
 
   it('rejects an invalid or non-forward extension without writing', async () => {

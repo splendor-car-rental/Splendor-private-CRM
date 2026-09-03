@@ -94,6 +94,14 @@ export async function executeContractExtensionTransaction(
     const addendumNumber = `EXT-${new Date(now).getUTCFullYear()}-${addendumSeq}`;
     const paymentMethod = String(input.paymentMethod || 'credit_card');
 
+    // Never copy a bank account/IBAN literal into a recovery source file.
+    // If authoritative bank details are already attached to the contract or
+    // an earlier accepted addendum, preserve them; otherwise document
+    // conformity (#41) must supply a governed source instead of guessing.
+    const previousExtensions = Array.isArray(contract.extensions) ? contract.extensions : [];
+    const latestExtension = previousExtensions.length ? previousExtensions[previousExtensions.length - 1] : null;
+    const bankDetails = contract.extensionBankDetails || contract.bankDetails || latestExtension?.bankDetails;
+
     const addendumRecord = {
       id: input.addendumId,
       addendumNumber,
@@ -115,11 +123,7 @@ export async function executeContractExtensionTransaction(
       totalExtensionAmount,
       paymentMethod,
       paymentMethodLabel: input.paymentMethodLabel || paymentMethod,
-      bankDetails: {
-        bankName: 'بنك الإمارات دبي الوطني (Emirates NBD)',
-        accountNumber: '1015963340001',
-        iban: 'AE220260001015963340001'
-      },
+      ...(bankDetails ? { bankDetails } : {}),
       notes: input.notes || `Contract extension for ${extraDays} day(s).`,
       createdBy: input.actor.uid,
       createdByName: input.actor.name,
@@ -134,7 +138,7 @@ export async function executeContractExtensionTransaction(
       rentalTotal: money(Number(contract.rentalTotal || 0) + periodRentalAmount),
       vatAmount: money(Number(contract.vatAmount || 0) + vatAmount),
       grandTotal: money(Number(contract.grandTotal || 0) + totalExtensionAmount),
-      extensions: [...(Array.isArray(contract.extensions) ? contract.extensions : []), addendumRecord],
+      extensions: [...previousExtensions, addendumRecord],
       updatedAt: now
     };
 
