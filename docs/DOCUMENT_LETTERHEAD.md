@@ -1,23 +1,51 @@
 # Document Letterhead
 
-Every official document this system generates — LTO contracts
-(`leaseToOwnContractDocument.ts`) and everything in
-`corporateDocumentEngine.ts` (LPOs, tax invoices, payment receipts,
-account statements, official letters, contract extension addenda,
-quotations, credit/debit notes, fines notices, vehicle record/exit
-documents) — shares one pair of real letterhead assets:
-`src/server/assets/ltoLetterheadAsset.ts`
-(`LTO_LETTERHEAD_HEADER_JPEG_BASE64`, `LTO_LETTERHEAD_FOOTER_PNG_BASE64`).
+This system renders official documents through two separate paths, and
+both must use the real approved letterhead:
+
+1. **Server-side PDF generation** (LTO contracts via
+   `leaseToOwnContractDocument.ts`, and everything in
+   `corporateDocumentEngine.ts` — LPOs, tax invoices, payment receipts,
+   account statements, official letters, contract extension addenda,
+   quotations, credit/debit notes, fines notices, vehicle record/exit
+   documents) — shares one pair of real letterhead assets:
+   `src/server/assets/ltoLetterheadAsset.ts`
+   (`LTO_LETTERHEAD_HEADER_JPEG_BASE64`, `LTO_LETTERHEAD_FOOTER_PNG_BASE64`).
+2. **Client-side browser print/PDF export** (`OfficialLetterheadLayout.tsx`,
+   used by `ContractDocumentPrintModal.tsx`, `TaxInvoicePrintModal.tsx`,
+   `OfficialQuotationPrintModal.tsx`, and `ContractExtensionModal.tsx` —
+   rendered live in the browser, then exported via `window.print()` or
+   `html2canvas`/`jsPDF` in `src/lib/pdfDownloader.ts`) — uses the same
+   real header/footer images, served as static files from `public/`
+   (`splendor-letterhead-header.jpg`, `splendor-letterhead-footer.png`)
+   rather than inlined as base64, so the client JS bundle doesn't carry
+   them.
+
+Both paths are extracted from the same official source PDF and must be
+kept in sync if the letterhead is ever replaced.
 
 ## History
 
-From the system's inception through 2026-09-03, both constants held a
-1x1 transparent-green placeholder pixel instead of real artwork — every
-document generated in that window rendered with a solid green bar where
-the approved Splendor header (Dubai skyline banner) and footer (contact
-info bar) should have been. This was not caught by code review, since
-the base64 string looked like valid image data at a glance; it was only
-found by actually rendering a sample PDF and looking at it.
+From the system's inception through 2026-09-03, both server-side
+constants held a 1x1 transparent-green placeholder pixel instead of
+real artwork — every document generated in that window rendered with a
+solid green bar where the approved Splendor header (Dubai skyline
+banner) and footer (contact info bar) should have been. This was not
+caught by code review, since the base64 string looked like valid image
+data at a glance; it was only found by actually rendering a sample PDF
+and looking at it.
+
+The client-side path (`OfficialLetterheadLayout.tsx`) had a different,
+related problem: rather than a placeholder, it hand-drew an approximate
+recreation of the letterhead in JSX/CSS (a stock Dubai banner image with
+overlaid text, not the real scanned artwork), and additionally let a
+user upload an arbitrary image to replace it entirely (a "custom
+letterhead" mode, stored in `localStorage`). Both violate the
+requirement that the approved header/footer is immutable content, never
+redrawn or replaced. Fixed together with the server-side placeholder,
+once the real asset was available: the hand-drawn recreation was
+replaced with the real image, and the user-upload override was removed
+entirely.
 
 The user supplied the real letterhead (master blank template plus
 several real filled document samples, all sharing the same approved
