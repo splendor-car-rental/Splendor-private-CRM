@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { composeApprovedCorporateDocument, type ApprovedCompositionAudit } from './approvedDocumentComposer';
 import { getCorporateDocumentMeta, type CorporateDocumentInput, type CorporateDocumentKind } from './corporateDocumentEngine';
 import { issueNextNumber } from './idGenerator';
+import { validateInvoiceTaxEvidence } from './taxDocumentEvidence';
+import type { TaxOfficialSource, TaxRuleVersion } from '../tax/types';
 
 export type ContextualDocumentSourceType =
   | 'contract'
@@ -191,16 +193,43 @@ async function hydrateExtension(source: ContextualDocumentSource): Promise<Hydra
   };
 }
 
+async function loadInvoiceTaxEvidence(invoice: any) {
+  const items = Array.isArray(invoice?.items) ? invoice.items : [];
+  const ruleIds = Array.from(new Set(items.map((line: any) => String(line?.taxRuleVersionId || '').trim()).filter(Boolean)));
+  const ruleSnaps = await Promise.all(ruleIds.map(id => firestore().collection('tax_rule_versions').doc(id).get()));
+  const rules = ruleSnaps
+    .filter(snapshot => snapshot.exists)
+    .map(snapshot => ({ id: snapshot.id, ...snapshot.data() } as TaxRuleVersion));
+  const sourceIds = Array.from(new Set(rules.flatMap(rule => rule.sourceIds || [])));
+  const sourceSnaps = await Promise.all(sourceIds.map(id => firestore().collection('tax_official_sources').doc(id).get()));
+  const sources = sourceSnaps
+    .filter(snapshot => snapshot.exists)
+    .map(snapshot => ({ id: snapshot.id, ...snapshot.data() } as TaxOfficialSource));
+  const validation = validateInvoiceTaxEvidence(invoice, rules, sources);
+  if (validation.error) throw new Error(validation.error);
+  return { ...validation, rules, sources };
+}
+
 async function hydrateInvoice(source: ContextualDocumentSource, kind: 'tax_invoice' | 'simplified_tax_invoice'): Promise<HydratedDocument> {
   if (source.type !== 'invoice') throw new Error('Invoice document must be bound to an invoice record.');
   const invoice = await requiredDoc('invoices', source.id);
   const customer = invoice.customerId ? await requiredDoc('customers', invoice.customerId) : null;
   const contract = invoice.contractId ? await requiredDoc('contracts', invoice.contractId) : null;
   const vehicle = contract?.vehicleId ? await requiredDoc('vehicles', contract.vehicleId) : null;
+  const taxEvidence = await loadInvoiceTaxEvidence(invoice);
   const serial = String(invoice.invoiceNumber || invoice.id);
   return {
     serial, relatedEntityType: 'invoice', relatedEntityId: invoice.id, relatedEntityName: serial,
-    sourceSnapshot: { invoice, customer, contract, vehicle },
+    sourceSnapshot: {
+      invoice,
+      customer,
+      contract,
+      vehicle,
+      taxEvidence: {
+        ruleVersionIds: taxEvidence.rules.map(rule => rule.id),
+        officialSourceIds: taxEvidence.sources.map(sourceRecord => sourceRecord.id)
+      }
+    },
     input: {
       kind, serial, date: dateOnly(invoice.issueDate),
       customer: customer ? customerPayload(customer) : { name: invoice.customerName }, vehicle: vehiclePayload(vehicle, contract),
@@ -208,17 +237,27 @@ async function hydrateInvoice(source: ContextualDocumentSource, kind: 'tax_invoi
         contractNumber: contract?.contractNumber || invoice.contractId,
         supplyDate: invoice.supplyDate || invoice.issueDate,
         rentalPeriod: contract ? `${dateOnly(contract.startDateTime)} - ${dateOnly(contract.endDateTime)}` : '',
-        subtotal: invoice.subtotal || 0, discount: invoice.discountAmount || 0,
-        taxable: Math.max(0, Number(invoice.subtotal || 0) - Number(invoice.discountAmount || 0)),
-        vat: invoice.vatAmount || 0, total: invoice.totalAmount || 0
+        subtotal: invoice.subtotal,
+        discount: invoice.discountAmount ?? 0,
+        taxable: Math.max(0, Number(invoice.subtotal) - Number(invoice.discountAmount ?? 0)),
+        vat: invoice.vatAmount,
+        total: invoice.totalAmount
       },
-      rows: (invoice.items || []).map((line: any, index: number) => ({
-        no: index + 1, description: line.description || line.name || line.type || '', quantity: line.quantity || 1,
-        unitPrice: line.unitPrice || line.rate || line.amount || 0,
-        subtotal: line.subtotal || line.amountBeforeVat || line.amount || 0,
-        vatRate: line.vatRate ?? 5, vatAmount: line.vatAmount || 0,
-        total: line.total || line.totalAmount || line.amount || 0
-      }))
+      rows: (invoice.items || []).map((line: any, index: number) => {
+        const evidence = taxEvidence.lineEvidence[index];
+        return {
+          no: index + 1,
+          description: line.description || line.name || line.type || '',
+          quantity: line.quantity ?? 1,
+          unitPrice: line.unitPrice ?? line.rate ?? line.amount ?? 0,
+          subtotal: line.subtotal ?? line.amountBeforeVat ?? line.amount ?? 0,
+          taxClassification: evidence.taxClassification,
+          taxRuleVersionId: evidence.taxRuleVersionId,
+          vatRate: evidence.vatRate,
+          vatAmount: evidence.vatAmount,
+          total: line.total ?? line.totalAmount ?? line.amount ?? 0
+        };
+      })
     }
   };
 }
