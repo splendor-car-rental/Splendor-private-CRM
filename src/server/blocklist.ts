@@ -85,13 +85,30 @@ export function normalizeBlocklistIdentifier(type: ExtendedBlocklistIdentifierTy
   return raw.toUpperCase().replace(/[\s-]+/g, '');
 }
 
+function cleanProfileField(value: unknown): string | undefined {
+  const cleaned = typeof value === 'string' ? value.trim() : '';
+  return cleaned || undefined;
+}
+
 function normalizeProfile(input?: BlocklistProfile): BlocklistProfile | undefined {
   if (!input) return undefined;
-  const output: BlocklistProfile = {};
-  for (const [key, value] of Object.entries(input)) {
-    const cleaned = typeof value === 'string' ? value.trim() : '';
-    if (cleaned) (output as Record<string, string>)[key] = cleaned;
-  }
+  // Explicit field projection prevents request-controlled property names from
+  // ever becoming object keys (including prototype-pollution keys such as
+  // __proto__/constructor/prototype). Unknown profile fields are discarded.
+  const output: BlocklistProfile = {
+    ...(cleanProfileField(input.fullName) ? { fullName: cleanProfileField(input.fullName) } : {}),
+    ...(cleanProfileField(input.nationality) ? { nationality: cleanProfileField(input.nationality) } : {}),
+    ...(cleanProfileField(input.dateOfBirth) ? { dateOfBirth: cleanProfileField(input.dateOfBirth) } : {}),
+    ...(cleanProfileField(input.phone) ? { phone: cleanProfileField(input.phone) } : {}),
+    ...(cleanProfileField(input.email) ? { email: cleanProfileField(input.email) } : {}),
+    ...(cleanProfileField(input.address) ? { address: cleanProfileField(input.address) } : {}),
+    ...(cleanProfileField(input.legalName) ? { legalName: cleanProfileField(input.legalName) } : {}),
+    ...(cleanProfileField(input.tradeName) ? { tradeName: cleanProfileField(input.tradeName) } : {}),
+    ...(cleanProfileField(input.registrationCountry) ? { registrationCountry: cleanProfileField(input.registrationCountry) } : {}),
+    ...(cleanProfileField(input.managerName) ? { managerName: cleanProfileField(input.managerName) } : {}),
+    ...(cleanProfileField(input.managerPhone) ? { managerPhone: cleanProfileField(input.managerPhone) } : {}),
+    ...(cleanProfileField(input.notes) ? { notes: cleanProfileField(input.notes) } : {})
+  };
   return Object.keys(output).length ? output : undefined;
 }
 
