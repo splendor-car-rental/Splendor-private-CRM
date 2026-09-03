@@ -15,6 +15,7 @@ import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/serv
 import { parseBankStatementExcel, parseBankStatementCsv, type ParsedBankStatementFile, type ParsedBankStatementRow } from './src/server/bankStatementParsers';
 import { classifyBankRow, findUnmatchedCrmPayments } from './src/server/bankReconciliation';
 import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
+import { assignPlateAtomically } from './src/server/atomicPlateAssignment';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
 import { NOTIFICATION_EVENTS } from './src/config/notificationEvents';
@@ -1419,20 +1420,33 @@ app.delete('/api/fleet/holds/:id', asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
-// Plate Assignment & Transfer with Historical Audit Trail
+// Plate Assignment & Transfer with Historical Audit Trail. Delegates to the
+// same assignPlateAtomically() the Vercel serverless boundary (api/index.ts)
+// already uses for this exact path -- previously this route ran a second,
+// non-transactional implementation (SplendorConnectEngine.assignPlateToVehicle)
+// that also trusted a client-supplied assignedBy/assignedByName as the
+// actor's identity. api/index.ts shadows this route in production (it
+// intercepts POST /api/fleet/:id/assign-plate before falling through to this
+// Express app), so the gap only ever showed up running this app directly
+// (local dev's `tsx server.ts`, or a test hitting this app) -- but a route
+// only being safe through one specific entrypoint is exactly the kind of
+// split-brain this stabilization pass exists to close.
 app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
-  const { plateNumber, plateCity, reason, assignedBy, assignedByName, effectiveDate } = req.body;
+  const { plateNumber, plateCity, reason, effectiveDate } = req.body;
   if (!plateNumber || !plateCity) {
     return res.status(400).json({ error: 'Plate number and city are required' });
   }
 
-  const result = await SplendorConnectEngine.assignPlateToVehicle({
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+
+  const result = await assignPlateAtomically({
     vehicleId: req.params.id,
     newPlateNumber: plateNumber,
     newPlateCity: plateCity,
     reason: reason || 'Plate updated by fleet operations',
-    assignedBy: assignedBy || 'USR-002',
-    assignedByName: assignedByName || 'Fleet Manager',
+    assignedBy: actor.uid,
+    assignedByName: actor.name,
     effectiveDate
   });
 

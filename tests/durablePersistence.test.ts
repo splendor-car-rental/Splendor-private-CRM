@@ -42,6 +42,7 @@ let issueNextNumber: typeof import('../src/server/idGenerator').issueNextNumber;
 let reserveVehicleSlot: typeof import('../src/server/availability').reserveVehicleSlot;
 let AvailabilityConflictError: typeof import('../src/server/availability').AvailabilityConflictError;
 let createContractDurable: typeof import('../src/server/contractOps').createContractDurable;
+let assignPlateAtomically: typeof import('../src/server/atomicPlateAssignment').assignPlateAtomically;
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT || 'demo-splendor-crm-rules-test';
 
@@ -78,6 +79,7 @@ beforeAll(async () => {
   ({ issueNextNumber } = await import('../src/server/idGenerator'));
   ({ reserveVehicleSlot, AvailabilityConflictError } = await import('../src/server/availability'));
   ({ createContractDurable } = await import('../src/server/contractOps'));
+  ({ assignPlateAtomically } = await import('../src/server/atomicPlateAssignment'));
 });
 
 afterAll(async () => {
@@ -317,5 +319,91 @@ describe('createContractDurable — server-authoritative pricing + idempotency (
     ).rejects.toThrow(/Vehicle not found/);
     const snap = await db.collection('contracts').get();
     expect(snap.size).toBe(0);
+  });
+});
+
+// assignPlateAtomically is the single authoritative implementation both
+// api/index.ts (the Vercel serverless boundary, always used in production)
+// and server.ts's POST /api/fleet/:id/assign-plate route now call -- these
+// prove the actual transactional/query-filtering behavior a mocked
+// firebase-admin can't (the displacement query needs a real Firestore
+// engine to filter correctly), matching the P0 financial/operational
+// atomicity audit's explicit "no duplicate active plate assignment" check.
+describe('assignPlateAtomically — atomic plate assignment & transfer', () => {
+  async function seedPlateVehicle(id: string, overrides: Record<string, unknown> = {}) {
+    await db.collection('vehicles').doc(id).set({
+      id, make: 'Bentley', model: 'Continental', vin: `VIN-${id}`,
+      plateNumber: '', plateCity: '', plateHistory: [], ...overrides
+    });
+  }
+
+  it('assigns a fresh plate to a vehicle with no prior holder and records history + audit evidence', async () => {
+    await seedPlateVehicle('VEH-PLATE-1');
+    const result = await assignPlateAtomically({
+      vehicleId: 'VEH-PLATE-1', newPlateNumber: 'Z 55555', newPlateCity: 'Dubai',
+      reason: 'Initial registration', assignedBy: 'USR-FLEET-1', assignedByName: 'Fleet Test User'
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.vehicle?.plateNumber).toBe('Z 55555');
+
+    const vehicleDoc = await db.collection('vehicles').doc('VEH-PLATE-1').get();
+    expect(vehicleDoc.data()?.plateNumber).toBe('Z 55555');
+    expect(vehicleDoc.data()?.plateHistory).toHaveLength(1);
+    expect(vehicleDoc.data()?.plateHistory[0].isCurrent).toBe(true);
+
+    const auditSnap = await db.collection('audit_logs').where('entityId', '==', 'VEH-PLATE-1').get();
+    expect(auditSnap.size).toBe(1);
+  });
+
+  it('displaces the plate from whichever OTHER vehicle currently holds it, atomically, in one transaction', async () => {
+    await seedPlateVehicle('VEH-PLATE-2', {
+      plateNumber: 'A 99999', plateCity: 'Dubai',
+      plateHistory: [{ id: 'PLT-OLD', plateNumber: 'A 99999', plateCity: 'Dubai', vehicleId: 'VEH-PLATE-2', isCurrent: true, startDate: '2026-01-01T00:00:00.000Z' }]
+    });
+    await seedPlateVehicle('VEH-PLATE-3');
+
+    const result = await assignPlateAtomically({
+      vehicleId: 'VEH-PLATE-3', newPlateNumber: 'A 99999', newPlateCity: 'Dubai',
+      reason: 'Transfer from retiring vehicle', assignedBy: 'USR-FLEET-1', assignedByName: 'Fleet Test User'
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.displacedVehicle?.id).toBe('VEH-PLATE-2');
+
+    const newHolder = await db.collection('vehicles').doc('VEH-PLATE-3').get();
+    expect(newHolder.data()?.plateNumber).toBe('A 99999');
+
+    const oldHolder = await db.collection('vehicles').doc('VEH-PLATE-2').get();
+    expect(oldHolder.data()?.plateNumber).toBe('PENDING-PLATE');
+    expect(oldHolder.data()?.plateHistory[0].isCurrent).toBe(false);
+
+    // Exactly one vehicle may ever hold this exact plate+city at once --
+    // proven against the real Firestore query the transaction itself uses.
+    const holders = await db.collection('vehicles').where('plateNumber', '==', 'A 99999').where('plateCity', '==', 'Dubai').get();
+    expect(holders.size).toBe(1);
+  });
+
+  it('never leaves two vehicles holding the same plate even under real concurrent contention', async () => {
+    await seedPlateVehicle('VEH-PLATE-4');
+    await seedPlateVehicle('VEH-PLATE-5');
+
+    await Promise.all([
+      assignPlateAtomically({ vehicleId: 'VEH-PLATE-4', newPlateNumber: 'C 77777', newPlateCity: 'Abu Dhabi', reason: 'Concurrent test', assignedBy: 'USR-FLEET-1', assignedByName: 'Fleet Test User' }),
+      assignPlateAtomically({ vehicleId: 'VEH-PLATE-5', newPlateNumber: 'C 77777', newPlateCity: 'Abu Dhabi', reason: 'Concurrent test', assignedBy: 'USR-FLEET-1', assignedByName: 'Fleet Test User' })
+    ]);
+
+    const holders = await db.collection('vehicles').where('plateNumber', '==', 'C 77777').where('plateCity', '==', 'Abu Dhabi').get();
+    expect(holders.size).toBe(1);
+  }, 20000);
+
+  it('fails without writing anything when the target vehicle does not exist', async () => {
+    const result = await assignPlateAtomically({
+      vehicleId: 'VEH-DOES-NOT-EXIST', newPlateNumber: 'D 11111', newPlateCity: 'Sharjah',
+      reason: 'Should not apply', assignedBy: 'USR-FLEET-1', assignedByName: 'Fleet Test User'
+    });
+    expect(result.success).toBe(false);
+    const auditSnap = await db.collection('audit_logs').get();
+    expect(auditSnap.size).toBe(0);
   });
 });
