@@ -21,7 +21,7 @@ export const ContractsOpsView: React.FC = () => {
   const isAr = language === 'ar';
   const {
     contracts, vehicles, processHandover, processReturn, closeContract,
-    selectedContractId, setSelectedContractId, setSelectedCustomerId, setActiveView
+    selectedContractId, setSelectedContractId
   } = useCRM();
   const [isClosing, setIsClosing] = useState(false);
 
