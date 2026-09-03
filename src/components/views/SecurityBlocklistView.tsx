@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ShieldAlert, Plus, Check, X, Loader2, Undo2 } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
+import { formatDateTime } from '../../lib/dateFormat';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
@@ -211,9 +212,9 @@ export const SecurityBlocklistView: React.FC = () => {
                 {entry.conditionalNote && (
                   <p className="text-amber-400 mt-1">{language === 'ar' ? 'الشرط:' : 'Condition:'} {entry.conditionalNote}</p>
                 )}
-                <p className="text-zinc-600 text-[10px] mt-1.5">{entry.createdByName} · {new Date(entry.createdAt).toLocaleString()}</p>
+                <p className="text-zinc-600 text-[10px] mt-1.5">{entry.createdByName} · {formatDateTime(entry.createdAt)}</p>
                 {entry.status === 'removed' && entry.removedByName && (
-                  <p className="text-zinc-600 text-[10px]">{language === 'ar' ? 'أُزيل بواسطة:' : 'Removed by:'} {entry.removedByName} · {entry.removedAt && new Date(entry.removedAt).toLocaleString()}</p>
+                  <p className="text-zinc-600 text-[10px]">{language === 'ar' ? 'أُزيل بواسطة:' : 'Removed by:'} {entry.removedByName} · {entry.removedAt ? formatDateTime(entry.removedAt) : '—'}</p>
                 )}
                 {canManage && entry.status === 'active' && !hasPendingUnblock && (
                   <button
