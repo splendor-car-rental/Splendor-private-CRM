@@ -34,7 +34,8 @@ service cloud.firestore {
       // A signed-in user may read their own profile so the application can
       // explain disabled/missing provisioning; directory access needs active staff.
       allow read: if isStaff() || (isSignedIn() && request.auth.uid == uid);
-      allow create, delete: if false;
+      allow create: if false;
+      allow delete: if false;
       allow update: if isStaff()
         && request.auth.uid == uid
         && request.resource.data.diff(resource.data).affectedKeys()
