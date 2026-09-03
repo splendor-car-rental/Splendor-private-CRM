@@ -26,7 +26,11 @@ describe('Vercel serverless runtime packaging', () => {
 
   it('packages the generated API bundle with both Vercel entry functions that depend on it', () => {
     const config = JSON.parse(read('vercel.json'));
+    const ci = read('.github/workflows/ci.yml');
     expect(config.functions['api/index.ts']?.includeFiles).toContain('dist/**');
     expect(config.functions['api/customers-guard.ts']?.includeFiles).toContain('dist/**');
+    expect(ci).toContain('test -s dist/api-handler.mjs');
+    expect(ci).toContain("import('./dist/api-handler.mjs')");
+    expect(ci).not.toContain('api/api-handler.mjs');
   });
 });
