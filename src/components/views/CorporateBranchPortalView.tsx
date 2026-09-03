@@ -20,8 +20,6 @@ export const CorporateBranchPortalView: React.FC = () => {
   const { currentUser } = useAuth();
   const {
     corporateAccounts,
-    contracts,
-    vehicles,
     updateCorporateAccount,
     deleteCorporateAccount
   } = useCRM();
