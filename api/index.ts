@@ -28,7 +28,8 @@ async function getExpressApp(): Promise<ExpressApp> {
 const CORPORATE_DOCUMENT_KINDS: CorporateDocumentKind[] = [
   'lpo', 'credit_note', 'fines_notice', 'debit_note', 'contract_extension',
   'payment_receipt', 'tax_invoice', 'simplified_tax_invoice', 'official_letter',
-  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation'
+  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation',
+  'payment_demand_notice', 'fleet_document_renewal_schedule', 'damage_claim_notice'
 ];
 
 const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
@@ -44,7 +45,10 @@ const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
   vehicle_record_card: ['ceo', 'admin', 'operations', 'fleet'],
   vehicle_exit_permit: ['ceo', 'admin', 'operations', 'fleet'],
   account_statement: ['ceo', 'admin', 'finance', 'operations', 'sales'],
-  quotation: ['ceo', 'admin', 'sales', 'operations']
+  quotation: ['ceo', 'admin', 'sales', 'operations'],
+  payment_demand_notice: ['ceo', 'admin', 'finance'],
+  fleet_document_renewal_schedule: ['ceo', 'admin', 'fleet', 'operations'],
+  damage_claim_notice: ['ceo', 'admin', 'operations', 'finance']
 };
 
 async function verifiedStaff(req: Request, res: Response, roles: readonly string[]) {

@@ -11,6 +11,7 @@ import { Modal } from '../common/Modal';
 import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { AddCorporateAccountModal } from './AddCorporateAccountModal';
+import { ALL_COUNTRIES } from '../../lib/customerData';
 
 interface AddCustomerModalProps {
   isOpen: boolean;
@@ -451,11 +452,18 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
           </div>
           <div>
             <label className="block text-xs font-medium text-zinc-300 mb-1.5">{isAr ? 'الجنسية' : 'Nationality'}</label>
-            <input
-              type="text" value={form.nationality}
+            <select
+              value={form.nationality}
               onChange={e => handleFieldChange('nationality', e.target.value)}
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
-            />
+            >
+              {!ALL_COUNTRIES.some(c => c.nationalityEn === form.nationality) && form.nationality && (
+                <option value={form.nationality}>{form.nationality}</option>
+              )}
+              {ALL_COUNTRIES.map(c => (
+                <option key={c.iso} value={c.nationalityEn}>{isAr ? c.nationalityAr : c.nationalityEn}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -472,9 +480,9 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
                 onChange={e => handleFieldChange('idType', e.target.value)}
                 className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
               >
-                <option value="emirates_id">Emirates ID (الهوية الإماراتية)</option>
-                <option value="passport">Passport (جواز سفر دولي)</option>
-                <option value="gcc_id">GCC National ID (هوية خليجية)</option>
+                <option value="emirates_id">{isAr ? 'الهوية الإماراتية' : 'Emirates ID'}</option>
+                <option value="passport">{isAr ? 'جواز سفر دولي' : 'Passport'}</option>
+                <option value="gcc_id">{isAr ? 'هوية خليجية' : 'GCC National ID'}</option>
               </select>
             </div>
             <div>

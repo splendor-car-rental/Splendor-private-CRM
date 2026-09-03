@@ -10,7 +10,6 @@ import { Header } from './components/layout/Header';
 import { PWAInstallBanner } from './components/pwa/PWAInstallBanner';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
-import { ApprovedFormsLibrary } from './components/common/ApprovedFormsLibrary';
 import { ArabicInterfaceGuard } from './components/common/ArabicInterfaceGuard';
 
 // Views
@@ -125,8 +124,6 @@ const MainLayout: React.FC = () => {
           </ErrorBoundary>
         </main>
       </div>
-
-      <ApprovedFormsLibrary />
     </div>
   );
 };

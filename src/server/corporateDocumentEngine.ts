@@ -24,7 +24,10 @@ export type CorporateDocumentKind =
   | 'vehicle_record_card'
   | 'vehicle_exit_permit'
   | 'account_statement'
-  | 'quotation';
+  | 'quotation'
+  | 'payment_demand_notice'
+  | 'fleet_document_renewal_schedule'
+  | 'damage_claim_notice';
 
 export interface CorporateDocumentInput {
   kind: CorporateDocumentKind;
@@ -59,7 +62,10 @@ const META: Record<CorporateDocumentKind, { ar: string; en: string; numbering: s
   vehicle_record_card: { ar: 'بطاقة مركبة', en: 'VEHICLE RECORD CARD', numbering: 'document' },
   vehicle_exit_permit: { ar: 'تصريح خروج مركبة خارج الدولة', en: 'VEHICLE EXIT PERMIT', numbering: 'document' },
   account_statement: { ar: 'كشف حساب', en: 'ACCOUNT STATEMENT', numbering: 'accountstatement' },
-  quotation: { ar: 'عرض سعر', en: 'QUOTATION', numbering: 'quotation' }
+  quotation: { ar: 'عرض سعر', en: 'QUOTATION', numbering: 'quotation' },
+  payment_demand_notice: { ar: 'إنذار بالسداد', en: 'PAYMENT DEMAND NOTICE', numbering: 'document' },
+  fleet_document_renewal_schedule: { ar: 'جدول تجديد وثائق الأسطول', en: 'FLEET DOCUMENT RENEWAL SCHEDULE', numbering: 'document' },
+  damage_claim_notice: { ar: 'مطالبة أضرار', en: 'DAMAGE CLAIM NOTICE', numbering: 'document' }
 };
 
 function text(value: unknown): string {
@@ -130,6 +136,12 @@ function renderBody(input: CorporateDocumentInput, serial: string): string {
       return `<div class="statement-top"><div class="statement-title"><h1>كشف حساب</h1><div class="statement-en">ACCOUNT STATEMENT</div><div class="as-of">حتى تاريخ ${text(f.asOfDate || input.date) || '—'}</div></div><div class="statement-info">${fieldsBlock({ 'رقم عقد الإيجار': f.contractNumber, 'تاريخ العقد': f.contractDate, 'اسم العميل': customer.name, 'نوع السيارة': vehicle.name, 'رقم اللوحة': vehicle.plateNumber })}</div></div>${rows.length ? table(['م', 'التاريخ', 'البيان', 'مستحق (مدين)', 'مدفوع (دائن)', 'الرصيد'], rows, ['no', 'date', 'description', 'debit', 'credit', 'balance']) : ''}<div class="statement-bottom"><div class="statement-notes"><h3>ملاحظات</h3><p>الأقساط تستحق في اليوم الأول من كل شهر حسب شروط العقد الموقع بين الطرفين.</p><p>جميع مبالغ سالك والمخالفات والمواقف هي على عاتق المستأجر وفقاً لبنود العقد.</p><p>${text((input.notes || [])[0]) || 'يرجى مراجعة الكشف والتواصل مع الشركة في حال وجود أي استفسار.'}</p></div><div class="amount-due"><div class="amount-title">إجمالي المبلغ المستحق</div><div class="amount-value">${money(f.totalDue)} AED</div><div class="amount-label">رقم إيصال</div><div class="receipt-ref">${text(f.receiptNumber) || '—'}</div><p>يرجى سداد المبلغ المستحق خلال 3 أيام من تاريخ الكشف.</p></div></div><div class="statement-thanks">نشكر لكم على ثقتكم واختياركم سبلندر لتأجير السيارات، ونسعد دائماً بخدمتكم.</div>`;
     case 'quotation':
       return `${heading}<h2>بيانات العميل والمركبة</h2>${fieldsBlock({ 'اسم العميل': customer.name, 'الهاتف': customer.phone, 'البريد الإلكتروني': customer.email, 'نوع السيارة': vehicle.name, 'رقم اللوحة': vehicle.plateNumber, 'تاريخ ووقت الاستلام': f.startDate, 'تاريخ ووقت التسليم': f.endDate, 'مدة الإيجار': f.durationDays ? `${f.durationDays} يوم / Days` : '', 'صلاحية العرض حتى': f.validUntil })}<h2>تفاصيل التسعير | PRICING DETAILS</h2>${rows.length ? table(['م', 'البيان', 'المدة / الكمية', 'سعر الوحدة', 'الإجمالي'], rows, ['no', 'description', 'quantity', 'unitPrice', 'total']) : ''}${summaryBox([['قيمة الإيجار الأساسية', f.baseTotal], ['الخدمات الإضافية', f.extraServicesTotal], ['الخصم', f.discountAmount]], ['الإجمالي قبل الضريبة', f.subtotal])}${summaryBox([['ضريبة القيمة المضافة (5%)', f.vatAmount], ['مبلغ التأمين', f.securityDeposit]], ['الإجمالي النهائي شامل الضريبة', f.grandTotal])}${notesBlock(input.notes)}<section class="prose"><h3>الشروط والملاحظات</h3><p>${text(f.termsAndConditions || input.body || 'هذا العرض صالح للفترة المحددة أعلاه، ويخضع لتوافر المركبة وشروط وأحكام الإيجار المعتمدة لدى سبلندر لتأجير السيارات.')}</p></section><div class="signature-grid"><div>توقيع العميل: ____________________</div><div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div></div>`;
+    case 'payment_demand_notice':
+      return `${heading}<h2>بيانات العميل والعقد</h2>${fieldsBlock({ 'اسم العميل': customer.name, 'رقم عقد الإيجار': f.contractNumber, 'رقم اللوحة': vehicle.plateNumber, 'تاريخ استحقاق السداد': f.dueDate })}${summaryBox([['إجمالي المبلغ المستحق', f.totalDue]], ['المبلغ الواجب سداده خلال المهلة المحددة', f.totalDue])}<section class="prose"><h3>إنذار بالسداد</h3><p>${text(input.body || 'نحيطكم علمًا بوجود مبلغ مستحق على حسابكم لدى سبلندر لتأجير السيارات كما هو مبين أعلاه. يرجى المبادرة بسداد كامل المبلغ المستحق خلال المهلة المحددة أعلاه، وإلا فإن الشركة ستضطر لاتخاذ كافة الإجراءات القانونية اللازمة لتحصيل حقوقها دون أي إشعار آخر.')}</p></section>${notesBlock(input.notes)}<div class="signature-grid"><div>إقرار العميل بالاستلام: ____________________</div><div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div></div>`;
+    case 'fleet_document_renewal_schedule':
+      return `${heading}<h2>جدول تجديد وثائق الأسطول</h2>${rows.length ? table(['م', 'رقم اللوحة', 'نوع المركبة', 'نوع الوثيقة', 'تاريخ الانتهاء', 'الحالة'], rows, ['no', 'plateNumber', 'vehicleName', 'documentType', 'expiryDate', 'status']) : ''}${notesBlock(input.notes)}<div class="signature-grid"><div>إعداد قسم الأسطول: ____________________</div><div>اعتماد الإدارة: ____________________</div></div>`;
+    case 'damage_claim_notice':
+      return `${heading}<h2>بيانات العميل والعقد والمركبة</h2>${fieldsBlock({ 'اسم العميل': customer.name, 'رقم عقد الإيجار': f.contractNumber, 'رقم اللوحة': vehicle.plateNumber, 'تاريخ الاستلام': f.returnDate })}${rows.length ? table(['م', 'وصف الضرر', 'موقع الضرر', 'تكلفة الإصلاح', 'ملاحظات'], rows, ['no', 'description', 'location', 'cost', 'notes']) : ''}${summaryBox([['إجمالي تكلفة الأضرار', f.damagesTotal], ['رسوم إدارية', f.adminFees]], ['إجمالي المطالبة المستحقة', f.total])}${notesBlock(input.notes)}<div class="signature-grid"><div>إقرار العميل بالاستلام: ____________________</div><div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div></div>`;
   }
 }
 
