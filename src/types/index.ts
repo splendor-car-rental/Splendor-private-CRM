@@ -18,7 +18,7 @@ export type CustomerType = 'individual' | 'corporate' | 'vip';
 export type CustomerStatus = 'active' | 'inactive' | 'blocklisted' | 'vip';
 
 // ---- Security Blocklist / Watchlist (Splendor Master Rule Set, Module 03) ----
-export type BlocklistIdentifierType = 'passport' | 'emirates_id' | 'gcc_id';
+export type BlocklistIdentifierType = 'passport' | 'emirates_id' | 'gcc_id' | 'trade_license';
 export type BlocklistTier = 'full' | 'conditional';
 export type BlocklistBanType = 'permanent' | 'temporary';
 

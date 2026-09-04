@@ -21,6 +21,14 @@
 
 import { readSheet } from 'read-excel-file/node';
 import type { Row } from 'read-excel-file/node';
+import { readLegacyXlsGrid } from './legacyXlsReader.js';
+
+/** OLE2/BIFF8 compound-file signature -- see bankImportGuard.ts's detectBankImportFileKind, which classifies both this and OOXML as kind 'excel'; this is the finer-grained check parseBankStatementExcel needs to route to the right reader. Many UAE bank portals still export account statements in this legacy format. */
+function isLegacyXlsBuffer(buffer: Buffer): boolean {
+  return buffer.length >= 8
+    && buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0
+    && buffer[4] === 0xa1 && buffer[5] === 0xb1 && buffer[6] === 0x1a && buffer[7] === 0xe1;
+}
 
 export interface ParsedBankStatementRow {
   date: string; // ISO yyyy-mm-dd
@@ -172,8 +180,19 @@ export function parseGridToBankRows(grid: string[][]): ParsedBankStatementFile {
   return { rows, meta: { accountNumber, bankName }, warnings };
 }
 
-/** Reads the first sheet of an uploaded Excel workbook as a plain string grid. */
+/**
+ * Reads the first sheet of an uploaded Excel workbook as a plain string
+ * grid. Legacy .xls (OLE2/BIFF8 -- still common from older UAE bank export
+ * tools) is routed to legacyXlsReader.ts's dependency-free reader instead
+ * of read-excel-file, which only understands modern .xlsx (OOXML). See
+ * tollFileParsers.ts's identical fix for the equivalent Salik import bug
+ * and legacyXlsReader.ts's module doc for why this doesn't just use
+ * xlsx/SheetJS.
+ */
 export async function parseBankStatementExcel(buffer: Buffer): Promise<ParsedBankStatementFile> {
+  if (isLegacyXlsBuffer(buffer)) {
+    return parseGridToBankRows(readLegacyXlsGrid(buffer));
+  }
   const sheetRows: Row[] = await readSheet(buffer);
   const grid = sheetRows.map(row => row.map(cellToString));
   return parseGridToBankRows(grid);

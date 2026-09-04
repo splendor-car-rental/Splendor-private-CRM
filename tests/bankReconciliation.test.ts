@@ -272,6 +272,33 @@ describe('parseBankStatementExcel', () => {
     const result = await parseBankStatementExcel(bufferFromAoa(aoa));
     expect(result.rows[0].date).toBe('2026-08-15');
   });
+
+  // Many UAE bank portals still export account statements as legacy .xls
+  // (OLE2/BIFF8), which read-excel-file cannot read at all -- the same gap
+  // fixed for Salik toll imports in src/server/legacyXlsReader.ts. `xlsx`
+  // is used here ONLY as a devDependency to build a trusted legacy .xls
+  // fixture (bookType: 'biff8'), mirroring the safe-use pattern already
+  // established in tests/legacyXlsReader.test.ts; it never parses anything.
+  function legacyXlsBufferFromAoa(aoa: any[][]): Buffer {
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Statement');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'biff8' }) as Buffer;
+  }
+
+  it('parses a genuine legacy .xls bank statement export', async () => {
+    const aoa = [
+      ['Account No: AE090260009988776655'],
+      ['Date', 'Description', 'Reference', 'Debit', 'Credit', 'Balance'],
+      ['12-Aug-2026', 'SALARY CREDIT', 'REF-555', '', 8000, 45000],
+      ['13-Aug-2026', 'ATM WITHDRAWAL', 'REF-556', 500, '', 44500]
+    ];
+    const result = await parseBankStatementExcel(legacyXlsBufferFromAoa(aoa));
+    expect(result.meta.accountNumber).toContain('AE09');
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]).toMatchObject({ date: '2026-08-12', reference: 'REF-555', credit: 8000 });
+    expect(result.rows[1]).toMatchObject({ date: '2026-08-13', reference: 'REF-556', debit: 500 });
+  });
 });
 
 // ---------------------------------------------------------------------

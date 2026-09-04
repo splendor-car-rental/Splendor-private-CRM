@@ -865,6 +865,28 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     expect(create.body.idExpiryDate).toBe('2030-01-01');
     expect(create.body.incidentDate).toBe('2026-01-15');
   });
+
+  it('supports a corporate/company block by trade license number, matching how a corporate account registers, and rejects a new corporate account on the same license', async () => {
+    const create = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'trade_license', identifierValue: 'cn-1234567', customerName: 'Blocked Trading LLC', tier: 'full', reason: 'Unpaid corporate fleet invoices' });
+    expect(create.status).toBe(201);
+    expect(create.body.identifierValue).toBe('CN-1234567'); // normalized uppercase, same as individual identifiers
+
+    const blockedAccount = await request(app)
+      .post('/api/corporate-accounts')
+      .set(authAs(SALES_UID))
+      .send({ legalName: 'Blocked Trading LLC', tradeLicenseNumber: 'CN-1234567', primaryContact: { name: 'Manager', email: 'm@blocked.example', phone: '+971500000010', designation: 'Manager' } });
+    expect(blockedAccount.status).toBe(403);
+
+    // A different trade license number for a similarly-named company is NOT blocked -- never matched by name alone.
+    const differentLicense = await request(app)
+      .post('/api/corporate-accounts')
+      .set(authAs(SALES_UID))
+      .send({ legalName: 'Blocked Trading LLC', tradeLicenseNumber: 'CN-9999999', primaryContact: { name: 'Manager', email: 'm2@notblocked.example', phone: '+971500000011', designation: 'Manager' } });
+    expect(differentLicense.status).toBe(201);
+  });
 });
 
 describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () => {
