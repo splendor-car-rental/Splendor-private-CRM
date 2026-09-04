@@ -35,6 +35,7 @@ export interface CreateBlocklistEntryInput {
   identifierValue: string;
   identifierCountry?: string;
   customerName?: string;
+  nationality?: string;
   tier: BlocklistTier;
   reason: string;
   conditionalNote?: string;
@@ -53,6 +54,9 @@ export async function createBlocklistEntry(input: CreateBlocklistEntryInput, rec
   if (!input.reason || !input.reason.trim()) {
     throw new BlocklistError('A reason is required to block a customer.');
   }
+  if (!input.customerName || !input.customerName.trim()) {
+    throw new BlocklistError('The customer\'s full name is required, matching customer-registration policy -- it is recorded for display only and is never used to match a block (RULE-B01).');
+  }
   if (input.tier === 'conditional' && (!input.conditionalNote || !input.conditionalNote.trim())) {
     throw new BlocklistError('A conditional block requires a note describing what is required to proceed (e.g. a raised deposit amount, or which manager must authorize an exception).');
   }
@@ -65,6 +69,7 @@ export async function createBlocklistEntry(input: CreateBlocklistEntryInput, rec
     identifierValue: normalizeIdentifier(input.identifierValue),
     identifierCountry: input.identifierType === 'passport' ? normalizeIdentifier(input.identifierCountry!) : undefined,
     customerName: input.customerName,
+    nationality: input.nationality,
     tier: input.tier,
     reason: input.reason,
     conditionalNote: input.conditionalNote,

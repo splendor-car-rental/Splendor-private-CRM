@@ -8,6 +8,7 @@ import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { uploadFile, formatFileSize } from '../../lib/upload';
+import { ALL_COUNTRIES } from '../../lib/customerData';
 import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier } from '../../types';
 
 /**
@@ -196,7 +197,7 @@ export const SecurityBlocklistView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <ShieldAlert className={`w-3.5 h-3.5 ${entry.status === 'active' ? 'text-rose-400' : 'text-zinc-600'}`} />
                     <p className="font-semibold text-zinc-100 font-mono">
-                      {entry.identifierType === 'passport' ? (language === 'ar' ? 'جواز سفر' : 'Passport') : (language === 'ar' ? 'هوية إماراتية' : 'Emirates ID')}: {entry.identifierValue}
+                      {entry.identifierType === 'passport' ? (language === 'ar' ? 'جواز سفر' : 'Passport') : entry.identifierType === 'gcc_id' ? (language === 'ar' ? 'هوية خليجية' : 'GCC National ID') : (language === 'ar' ? 'هوية إماراتية' : 'Emirates ID')}: {entry.identifierValue}
                       {entry.identifierCountry ? ` (${entry.identifierCountry})` : ''}
                     </p>
                     <Badge variant={entry.tier === 'full' ? 'rose' : 'amber'} size="sm">
@@ -208,7 +209,7 @@ export const SecurityBlocklistView: React.FC = () => {
                   </div>
                   <p className="text-zinc-500 font-mono">{entry.id}</p>
                 </div>
-                {entry.customerName && <p className="text-zinc-400 mt-1">{entry.customerName}</p>}
+                {entry.customerName && <p className="text-zinc-400 mt-1">{entry.customerName}{entry.nationality ? ` · ${entry.nationality}` : ''}</p>}
                 <p className="text-zinc-300 mt-1.5">{entry.reason}</p>
                 {entry.conditionalNote && (
                   <p className="text-amber-400 mt-1">{language === 'ar' ? 'الشرط:' : 'Condition:'} {entry.conditionalNote}</p>
@@ -251,6 +252,7 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
   const [identifierValue, setIdentifierValue] = useState('');
   const [identifierCountry, setIdentifierCountry] = useState('');
   const [customerName, setCustomerName] = useState('');
+  const [nationality, setNationality] = useState('Emirati');
   const [tier, setTier] = useState<BlocklistTier>('full');
   const [conditionalNote, setConditionalNote] = useState('');
   const [reason, setReason] = useState('');
@@ -261,12 +263,12 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
   useEffect(() => {
     if (isOpen) {
       setIdentifierType('emirates_id'); setIdentifierValue(''); setIdentifierCountry('');
-      setCustomerName(''); setTier('full'); setConditionalNote(''); setReason('');
+      setCustomerName(''); setNationality('Emirati'); setTier('full'); setConditionalNote(''); setReason('');
       setCreatedEntry(null);
     }
   }, [isOpen]);
 
-  const valid = identifierValue.trim() && reason.trim() && (identifierType !== 'passport' || identifierCountry.trim()) && (tier !== 'conditional' || conditionalNote.trim());
+  const valid = identifierValue.trim() && customerName.trim() && reason.trim() && (identifierType !== 'passport' || identifierCountry.trim()) && (tier !== 'conditional' || conditionalNote.trim());
 
   // Real, evidence-based duplicate check against the active entries already
   // loaded -- matched only by the exact identifier pair (same rule the
@@ -292,7 +294,7 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           identifierType, identifierValue, identifierCountry: identifierType === 'passport' ? identifierCountry : undefined,
-          customerName: customerName || undefined, tier, conditionalNote: tier === 'conditional' ? conditionalNote : undefined, reason
+          customerName: customerName.trim(), nationality, tier, conditionalNote: tier === 'conditional' ? conditionalNote : undefined, reason
         })
       });
       const data = await res.json();
@@ -388,10 +390,11 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
           <select value={identifierType} onChange={e => setIdentifierType(e.target.value as BlocklistIdentifierType)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
             <option value="emirates_id">{language === 'ar' ? 'هوية إماراتية' : 'Emirates ID'}</option>
             <option value="passport">{language === 'ar' ? 'جواز سفر' : 'Passport'}</option>
+            <option value="gcc_id">{language === 'ar' ? 'هوية خليجية' : 'GCC National ID'}</option>
           </select>
         </div>
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{identifierType === 'passport' ? (language === 'ar' ? 'رقم الجواز *' : 'Passport number *') : (language === 'ar' ? 'رقم الهوية *' : 'Emirates ID number *')}</label>
+          <label className="block text-zinc-400 font-medium mb-1">{identifierType === 'passport' ? (language === 'ar' ? 'رقم الجواز *' : 'Passport number *') : identifierType === 'gcc_id' ? (language === 'ar' ? 'رقم الهوية الخليجية *' : 'GCC National ID number *') : (language === 'ar' ? 'رقم الهوية *' : 'Emirates ID number *')}</label>
           <input required value={identifierValue} onChange={e => setIdentifierValue(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
         </div>
         {identifierType === 'passport' && (
@@ -402,8 +405,17 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
           </div>
         )}
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'اسم العميل (للعرض فقط)' : 'Customer name (display only)'}</label>
-          <input value={customerName} onChange={e => setCustomerName(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'اسم العميل الكامل *' : 'Customer full name *'}</label>
+          <input required value={customerName} onChange={e => setCustomerName(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <p className="text-[10px] text-zinc-500 mt-1">{language === 'ar' ? 'مطلوب مطابقةً لسياسة تسجيل العميل الجديد -- لكنه يُسجَّل للعرض فقط ولا يُستخدم أبداً كمعيار للمطابقة (قاعدة B01).' : 'Required to match customer-registration policy -- recorded for display only and never used to match a block (RULE-B01).'}</p>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الجنسية' : 'Nationality'}</label>
+          <select value={nationality} onChange={e => setNationality(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            {ALL_COUNTRIES.map(c => (
+              <option key={c.iso} value={c.nationalityEn}>{language === 'ar' ? c.nationalityAr : c.nationalityEn}</option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'مستوى الحظر *' : 'Block tier *'}</label>

@@ -18,7 +18,7 @@ export type CustomerType = 'individual' | 'corporate' | 'vip';
 export type CustomerStatus = 'active' | 'inactive' | 'blocklisted' | 'vip';
 
 // ---- Security Blocklist / Watchlist (Splendor Master Rule Set, Module 03) ----
-export type BlocklistIdentifierType = 'passport' | 'emirates_id';
+export type BlocklistIdentifierType = 'passport' | 'emirates_id' | 'gcc_id';
 export type BlocklistTier = 'full' | 'conditional';
 
 export interface BlocklistEntry {
@@ -27,6 +27,7 @@ export interface BlocklistEntry {
   identifierValue: string; // normalized uppercase -- never matched by name
   identifierCountry?: string; // required, and only meaningful, when identifierType === 'passport'
   customerName?: string; // display only -- never used as the match key (RULE-B01)
+  nationality?: string; // display only -- never used as the match key (RULE-B01)
   tier: BlocklistTier;
   reason: string;
   conditionalNote?: string; // required when tier === 'conditional': what's needed to proceed (raised deposit, manager sign-off, etc.)

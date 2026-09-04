@@ -5688,6 +5688,7 @@ app.post('/api/blocklist', requireRole('ceo', 'admin', 'operations'), asyncHandl
       identifierValue: body.identifierValue,
       identifierCountry: body.identifierCountry,
       customerName: body.customerName,
+      nationality: body.nationality,
       tier: body.tier,
       reason: body.reason,
       conditionalNote: body.conditionalNote,

@@ -727,7 +727,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     const create = await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', tier: 'full', reason: 'Fraud attempt on a prior booking' });
+      .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', customerName: 'Blocked Person', tier: 'full', reason: 'Fraud attempt on a prior booking' });
     expect(create.status).toBe(201);
     expect(create.body.identifierValue).toBe('P9988776'); // normalized uppercase
 
@@ -755,7 +755,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'passport', identifierValue: 'P3333333', identifierCountry: 'Germany', tier: 'full', reason: 'Unpaid fines' });
+      .send({ identifierType: 'passport', identifierValue: 'P3333333', identifierCountry: 'Germany', customerName: 'Someone Else', tier: 'full', reason: 'Unpaid fines' });
 
     const sameNumberDifferentCountry = await request(app)
       .post('/api/customers')
@@ -768,7 +768,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'emirates_id', identifierValue: '784-1111-1111111-1', tier: 'conditional', conditionalNote: 'Requires a 5,000 AED raised deposit and operations-manager sign-off.', reason: 'Minor prior damage dispute, resolved' });
+      .send({ identifierType: 'emirates_id', identifierValue: '784-1111-1111111-1', customerName: 'Conditional Customer', tier: 'conditional', conditionalNote: 'Requires a 5,000 AED raised deposit and operations-manager sign-off.', reason: 'Minor prior damage dispute, resolved' });
 
     const res = await request(app)
       .post('/api/customers')
@@ -782,7 +782,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     const create = await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'emirates_id', identifierValue: '784-2222-2222222-2', tier: 'full', reason: 'Reckless driving' });
+      .send({ identifierType: 'emirates_id', identifierValue: '784-2222-2222222-2', customerName: 'Unblocked Customer', tier: 'full', reason: 'Reckless driving' });
 
     const unblockReq = await request(app)
       .post(`/api/blocklist/${create.body.id}/unblock-requests`)
