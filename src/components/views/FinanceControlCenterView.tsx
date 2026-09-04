@@ -264,8 +264,6 @@ export const FinanceControlCenterView: React.FC = () => {
   // (a customer payment, invoice or deposit) into a posted ledger entry that
   // feeds the P&L, VAT and tax-filing reports, instead of that step being
   // invisible and undiscoverable.
-  const gapIsPostable = (gap: PostingGap) => gap.sourceType === 'Invoice' || gap.sourceType === 'Payment' || gap.sourceType === 'Deposit';
-
   const openGapPost = (gap: PostingGap) => {
     setSelectedGap(gap);
     setGapPostAccountCode(gap.sourceType === 'Invoice' ? (revenueAccounts[0]?.code || '4000') : (settlementAccounts[0]?.code || '1100'));
