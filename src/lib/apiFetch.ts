@@ -22,6 +22,7 @@ function isCriticalFinancialWrite(url: string, method: string): boolean {
   })();
   return path === '/api/payments'
     || path === '/api/deposits'
+    || path === '/api/blocklist'
     || path === '/api/purchase-orders'
     || path === '/api/accounting/credit-notes'
     || path === '/api/accounting/debit-notes'
@@ -66,7 +67,8 @@ function attachStableIdempotencyKey(input: RequestInfo | URL, init: RequestInit,
  * `/api/*` backend. Attaches the current Firebase user's ID token as a
  * Bearer Authorization header so the server can verify who is calling it.
  *
- * Critical finance POSTs share a short-lived Idempotency-Key only while the
+ * Critical, duplicate-sensitive POSTs (payments, deposits, purchase orders,
+ * blocklist entries, ...) share a short-lived Idempotency-Key only while the
  * outcome is ambiguous. Concurrent double-clicks and retries after network
  * errors/5xx reuse the key; once a definitive <500 response is received the
  * key is released, so a later intentional identical transaction is not

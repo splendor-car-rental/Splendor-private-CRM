@@ -20,6 +20,7 @@ export type CustomerStatus = 'active' | 'inactive' | 'blocklisted' | 'vip';
 // ---- Security Blocklist / Watchlist (Splendor Master Rule Set, Module 03) ----
 export type BlocklistIdentifierType = 'passport' | 'emirates_id' | 'gcc_id';
 export type BlocklistTier = 'full' | 'conditional';
+export type BlocklistBanType = 'permanent' | 'temporary';
 
 export interface BlocklistEntry {
   id: string; // BLK-000001
@@ -28,9 +29,14 @@ export interface BlocklistEntry {
   identifierCountry?: string; // required, and only meaningful, when identifierType === 'passport'
   customerName?: string; // display only -- never used as the match key (RULE-B01)
   nationality?: string; // display only -- never used as the match key (RULE-B01)
+  mobile?: string; // display only -- never used as the match key (RULE-B01)
+  idExpiryDate?: string; // the blocked identity document's own expiry -- display/context only
+  incidentDate?: string; // when the incident that triggered the ban occurred
   tier: BlocklistTier;
   reason: string;
   conditionalNote?: string; // required when tier === 'conditional': what's needed to proceed (raised deposit, manager sign-off, etc.)
+  banType: BlocklistBanType;
+  expiryDate?: string; // required when banType === 'temporary': the ban's own end date, subject to human review at/after this date -- never auto-removed
   status: 'active' | 'removed';
   createdBy: string;
   createdByName: string;

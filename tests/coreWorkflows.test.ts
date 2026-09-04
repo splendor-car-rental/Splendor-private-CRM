@@ -819,6 +819,52 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
       .send({ identifierType: 'emirates_id', identifierValue: '784-9999-9999999-9', tier: 'full', reason: 'Attempted' });
     expect(res.status).toBe(403);
   });
+
+  it('a retried "register a new ban" request with the same Idempotency-Key never creates a duplicate entry', async () => {
+    const payload = { identifierType: 'emirates_id', identifierValue: '784-3333-3333333-3', customerName: 'Retried Ban', tier: 'full', reason: 'Reckless driving' };
+    const first = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .set('Idempotency-Key', 'blk-retry-key-1')
+      .send(payload);
+    expect(first.status).toBe(201);
+
+    const retry = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .set('Idempotency-Key', 'blk-retry-key-1')
+      .send(payload);
+    expect(retry.status).toBe(200);
+    expect(retry.body.id).toBe(first.body.id); // same entry replayed, not a second one created
+
+    const list = await request(app).get('/api/blocklist').set(authAs(OPS_UID));
+    const matches = list.body.filter((e: any) => e.identifierValue === '784-3333-3333333-3');
+    expect(matches).toHaveLength(1);
+  });
+
+  it('a temporary ban requires an expiry date, and stores the new descriptive fields', async () => {
+    const missingExpiry = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({ identifierType: 'emirates_id', identifierValue: '784-4444-4444444-4', customerName: 'No Expiry', tier: 'full', reason: 'Late return', banType: 'temporary' });
+    expect(missingExpiry.status).toBe(400);
+    expect(missingExpiry.body.error).toMatch(/expiry date/i);
+
+    const create = await request(app)
+      .post('/api/blocklist')
+      .set(authAs(OPS_UID))
+      .send({
+        identifierType: 'emirates_id', identifierValue: '784-5555-5555555-5', customerName: 'Temp Ban',
+        mobile: '+971 50 123 4567', idExpiryDate: '2030-01-01', incidentDate: '2026-01-15',
+        tier: 'full', reason: 'Late return', banType: 'temporary', expiryDate: '2026-06-15'
+      });
+    expect(create.status).toBe(201);
+    expect(create.body.banType).toBe('temporary');
+    expect(create.body.expiryDate).toBe('2026-06-15');
+    expect(create.body.mobile).toBe('+971 50 123 4567');
+    expect(create.body.idExpiryDate).toBe('2030-01-01');
+    expect(create.body.incidentDate).toBe('2026-01-15');
+  });
 });
 
 describe('Quotation discount ceiling (RULE-P01, Splendor Master Rule Set)', () => {

@@ -18,6 +18,7 @@ import {
   listFinanceExpenses,
   listFinancialNotes,
   listJournals,
+  listManualJournalRequests,
   listPayables,
   listPeriods,
   postInvoiceToAccounting,
@@ -150,6 +151,9 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
 
     if (resource === 'journals') {
       if (req.method === 'GET' && !id) return res.json(await listJournals(Number(req.query.limit) || 1000));
+      if (req.method === 'GET' && id === 'manual' && !action) {
+        return res.json(await listManualJournalRequests());
+      }
       if (req.method === 'POST' && id === 'manual' && !action) {
         const body = req.body || {};
         return res.status(201).json(await requestManualJournal({

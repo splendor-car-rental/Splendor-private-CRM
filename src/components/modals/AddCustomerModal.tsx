@@ -9,6 +9,9 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Customer } from '../../types';
 import { Modal } from '../common/Modal';
 import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
+import { EmiratesIdInput } from '../common/EmiratesIdInput';
+import { LicenseIssuingAuthorityInput } from '../common/LicenseIssuingAuthorityInput';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { AddCorporateAccountModal } from './AddCorporateAccountModal';
 import { ALL_COUNTRIES } from '../../lib/customerData';
@@ -195,7 +198,9 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
     if (!form.fullName.trim()) { setError(isAr ? 'الاسم الكامل مطلوب' : 'Full name is required.'); return; }
     if (!form.phone.trim()) { setError(isAr ? 'رقم الهاتف مطلوب' : 'Phone number is required.'); return; }
     if (!form.idNumber.trim()) { setError(isAr ? 'رقم الهوية أو جواز السفر مطلوب' : 'ID or passport number is required.'); return; }
-    if (!form.licenseNumber.trim()) { setError(isAr ? 'رقم رخصة القيادة مطلوب' : 'Driving license number is required.'); return; }
+    // Driving license number is required only when the customer actually has
+    // one on file -- a customer who has not yet obtained/renewed a license
+    // is still exempted from registration entirely if this were mandatory.
 
     setSubmitting(true);
     try {
@@ -436,15 +441,13 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">{isAr ? 'رقم الهاتف' : 'Phone Number'} *</label>
-            <input
-              type="tel" required value={form.phone}
-              onChange={e => handleFieldChange('phone', e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none font-mono"
-              placeholder="+971 50 123 4567"
-            />
-          </div>
+          <PhoneNumberInput
+            label={isAr ? 'رقم الهاتف' : 'Phone Number'}
+            required
+            value={form.phone}
+            onChange={v => handleFieldChange('phone', v)}
+            isAr={isAr}
+          />
           <div>
             <label className="block text-xs font-medium text-zinc-300 mb-1.5">{isAr ? 'البريد الإلكتروني' : 'Email Address'}</label>
             <input
@@ -489,15 +492,25 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
                 <option value="gcc_id">{isAr ? 'هوية خليجية' : 'GCC National ID'}</option>
               </select>
             </div>
-            <div>
-              <label className="block text-[11px] text-zinc-400 mb-1">{isAr ? 'رقم الوثيقة' : 'Document Number'} *</label>
-              <input
-                type="text" required value={form.idNumber}
-                onChange={e => handleFieldChange('idNumber', e.target.value)}
-                className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:border-[#D4AF37]/60 focus:outline-none font-mono"
-                placeholder="784-XXXX-XXXXXXX-X"
+            {form.idType === 'emirates_id' ? (
+              <EmiratesIdInput
+                label={isAr ? 'رقم الوثيقة' : 'Document Number'}
+                required
+                value={form.idNumber}
+                onChange={v => handleFieldChange('idNumber', v)}
+                isAr={isAr}
               />
-            </div>
+            ) : (
+              <div>
+                <label className="block text-[11px] text-zinc-400 mb-1">{isAr ? 'رقم الوثيقة' : 'Document Number'} *</label>
+                <input
+                  type="text" required value={form.idNumber}
+                  onChange={e => handleFieldChange('idNumber', e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:border-[#D4AF37]/60 focus:outline-none font-mono"
+                  placeholder={isAr ? 'رقم الوثيقة' : 'Document number'}
+                />
+              </div>
+            )}
             <DayMonthYearDateInput
               label={isAr ? 'تاريخ الميلاد' : 'Date of Birth'}
               value={form.dateOfBirth}
@@ -528,25 +541,38 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
             <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
             {isAr ? 'رخصة القيادة:' : 'Driving License:'}
           </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
-              <label className="block text-[11px] text-zinc-400 mb-1">{isAr ? 'رقم الرخصة' : 'License Number'} *</label>
+              <label className="block text-[11px] text-zinc-400 mb-1">{isAr ? 'بلد الإصدار' : 'License Country'}</label>
+              <select
+                value={form.country}
+                onChange={e => handleFieldChange('country', e.target.value)}
+                className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
+              >
+                {ALL_COUNTRIES.map(c => (
+                  <option key={c.iso} value={c.name}>{isAr ? c.nameAr : c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] text-zinc-400 mb-1">
+                {isAr ? 'رقم الرخصة' : 'License Number'}
+                <span className="text-zinc-500 font-normal ml-1">{isAr ? '(اختياري إن لم تصدر بعد)' : '(optional if not yet issued)'}</span>
+              </label>
               <input
-                type="text" required value={form.licenseNumber}
+                type="text" value={form.licenseNumber}
                 onChange={e => handleFieldChange('licenseNumber', e.target.value)}
                 className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:border-[#D4AF37]/60 focus:outline-none font-mono"
                 placeholder="DXB-XXXXXXX"
               />
             </div>
-            <div>
-              <label className="block text-[11px] text-zinc-400 mb-1">{isAr ? 'جهة الإصدار' : 'Issued By'}</label>
-              <input
-                type="text" value={form.licenseIssuedBy}
-                onChange={e => handleFieldChange('licenseIssuedBy', e.target.value)}
-                className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
-                placeholder="RTA Dubai"
-              />
-            </div>
+            <LicenseIssuingAuthorityInput
+              label={isAr ? 'جهة الإصدار' : 'Issued By'}
+              value={form.licenseIssuedBy}
+              onChange={v => handleFieldChange('licenseIssuedBy', v)}
+              licenseCountry={form.country}
+              isAr={isAr}
+            />
             <DayMonthYearDateInput
               label={isAr ? 'تاريخ الإصدار' : 'Issue Date'}
               value={form.licenseIssueDate}
