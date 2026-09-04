@@ -19,7 +19,7 @@ import { SplendorConnectEngine } from './src/server/splendorConnectEngine.js';
 import { assignPlateAtomically } from './src/server/atomicPlateAssignment.js';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine.js';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp.js';
-import { NOTIFICATION_EVENTS } from './src/config/notificationEvents.js';
+import { NOTIFICATION_EVENTS, CUSTOMER_NOTIFICATION_EVENTS } from './src/config/notificationEvents.js';
 import { issueNextNumber } from './src/server/idGenerator.js';
 import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence.js';
 import { asyncHandler } from './src/server/asyncHandler.js';
@@ -8928,7 +8928,7 @@ const FIRESTORE_COLLECTION_BY_FIELD: Record<string, string> = {
   lateFeeWaivers: 'late_fee_waivers'
 };
 
-async function hydrateStoreFromFirestore() {
+export async function hydrateStoreFromFirestore() {
   if (admin.apps.length === 0) {
     console.warn('[hydrate] Skipping Firestore hydration -- FIREBASE_SERVICE_ACCOUNT_KEY not configured.');
     return;
@@ -8952,6 +8952,30 @@ async function hydrateStoreFromFirestore() {
         // For system configuration collections, preserve system defaults if Firestore collection is empty
         if ((field === 'customFields' || field === 'numberingConfigs' || field === 'paymentMethods') && snap.empty) {
           // Keep default system definitions
+        } else if (field === 'notificationEventConfigs') {
+          // Same "static definitions are the source of truth for which keys
+          // exist" principle as customFields/numberingConfigs/paymentMethods
+          // above, but merged rather than empty-only: NOTIFICATION_EVENTS
+          // gets new entries added over time as CRM features grow, and a
+          // persisted Firestore snapshot only ever has whatever keys existed
+          // the last time this collection was written. A blind replace here
+          // silently drops every event added since then from
+          // globalStore.notificationEventConfigs, so PATCH
+          // /api/notification-configs/:eventKey 404s with "Unknown
+          // notification event" for any current event the UI renders a
+          // toggle for -- reproduced live for customer_created,
+          // customer_blocklisted and customer_document_expiring. Backfill
+          // any missing key with its default config; keep the persisted
+          // enabled/recipients state for keys that do exist.
+          const byKey = new Map(records.map((r: any) => [r.eventKey, r]));
+          (globalStore as any)[field] = NOTIFICATION_EVENTS.map(e => byKey.get(e.key) || {
+            eventKey: e.key, enabled: true, broadcastToGroup: false, staffRecipientIds: []
+          });
+        } else if (field === 'customerNotificationConfigs') {
+          const byKey = new Map(records.map((r: any) => [r.eventKey, r]));
+          (globalStore as any)[field] = CUSTOMER_NOTIFICATION_EVENTS.map(e => byKey.get(e.key) || {
+            eventKey: e.key, enabled: true
+          });
         } else {
           // Empty collections result in an empty dataset - never fall back to demo records
           (globalStore as any)[field] = records;
