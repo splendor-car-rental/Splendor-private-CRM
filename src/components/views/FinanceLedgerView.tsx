@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { 
-  Receipt, Plus, Search, DollarSign, Landmark, 
-  CheckCircle2, ArrowDownLeft, ArrowUpRight, ShieldCheck, 
+import React, { useEffect, useState } from 'react';
+import {
+  Receipt, Plus, Search, DollarSign, Landmark,
+  CheckCircle2, ArrowDownLeft, ArrowUpRight, ShieldCheck,
   FileText, Clock, RefreshCw, AlertCircle, Printer, Eye
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
@@ -12,7 +12,12 @@ import { formatDate } from '../../lib/dateFormat';
 import { TaxInvoicePrintModal } from '../operations/TaxInvoicePrintModal';
 import { Invoice } from '../../types';
 
-export const FinanceLedgerView: React.FC = () => {
+interface FinanceLedgerViewProps {
+  /** Incremented by the parent's header "Record Revenue / Customer Payment" button so this view can open its own payment modal immediately, instead of the button only switching tabs to a table with no visible reaction. */
+  autoOpenPaymentSignal?: number;
+}
+
+export const FinanceLedgerView: React.FC<FinanceLedgerViewProps> = ({ autoOpenPaymentSignal }) => {
   const { language, t } = useLanguage();
   const isAr = language === 'ar';
   const {
@@ -35,15 +40,16 @@ export const FinanceLedgerView: React.FC = () => {
   const [depositReasonInput, setDepositReasonInput] = useState('');
   const [depositChargeIdInput, setDepositChargeIdInput] = useState('');
 
-  const [paymentForm, setPaymentForm] = useState({
+  const EMPTY_PAYMENT_FORM = {
     customerId: '',
     customerName: '',
     invoiceId: '',
-    amount: 10000,
+    amount: 0,
     method: 'bank_transfer' as const,
-    referenceNumber: 'TXN-NBD-' + Math.floor(Math.random() * 900000 + 100000),
-    notes: 'Direct wire transfer received via Emirates NBD.'
-  });
+    referenceNumber: '',
+    notes: ''
+  };
+  const [paymentForm, setPaymentForm] = useState(EMPTY_PAYMENT_FORM);
 
   const handleCustomerSelect = (custId: string) => {
     const cust = customers.find(c => c.id === custId);
@@ -54,10 +60,23 @@ export const FinanceLedgerView: React.FC = () => {
         customerId: cust.id,
         customerName: cust.fullName,
         invoiceId: openInv ? openInv.id : '',
-        amount: openInv ? openInv.balanceDue : 5000
+        amount: openInv ? openInv.balanceDue : 0
       }));
     }
   };
+
+  // The header's "Record Revenue / Customer Payment" button (in the parent
+  // FinanceControlCenterView) only switched tabs here before -- clicking it
+  // showed a table with no visible reaction, which reads as "the button
+  // doesn't work". Each increment of this signal now opens the modal
+  // directly, matching what the button's label promises.
+  useEffect(() => {
+    if (autoOpenPaymentSignal) {
+      if (customers.length > 0) handleCustomerSelect(customers[0].id);
+      setPaymentModalOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenPaymentSignal]);
 
   const handlePaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -334,7 +353,7 @@ export const FinanceLedgerView: React.FC = () => {
       {/* Record Payment Modal */}
       <Modal
         isOpen={paymentModalOpen}
-        onClose={() => setPaymentModalOpen(false)}
+        onClose={() => { setPaymentModalOpen(false); setPaymentForm(EMPTY_PAYMENT_FORM); }}
         title={isAr ? 'تسجيل دفعة من العميل' : 'Record Client Payment'}
         subtitle={isAr ? 'تخصيص المبلغ المستلم لحساب العميل والفاتورة' : 'Allocate received funds to customer account and invoice'}
         maxWidth="lg"
@@ -343,16 +362,23 @@ export const FinanceLedgerView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'العميل *' : 'Customer *'}</label>
-              <select
-                required
-                value={paymentForm.customerId}
-                onChange={(e) => handleCustomerSelect(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
-              >
-                {(customers || []).map(c => (
-                  <option key={c.id} value={c.id}>{c.fullName || c.id} ({isAr ? 'الرصيد' : 'Balance'}: {((c.outstandingBalance || 0)).toLocaleString()} {isAr ? 'د.إ' : 'AED'})</option>
-                ))}
-              </select>
+              {(customers || []).length === 0 ? (
+                <div className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-amber-500/40 text-amber-300 text-[11px]">
+                  {isAr ? 'لا يوجد عملاء مسجّلون بعد. سجّل عميلاً أولاً من شاشة العملاء.' : 'No customers are registered yet. Register a customer first from the Customers screen.'}
+                </div>
+              ) : (
+                <select
+                  required
+                  value={paymentForm.customerId}
+                  onChange={(e) => handleCustomerSelect(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+                >
+                  <option value="" disabled>{isAr ? '-- اختر عميلاً --' : '-- Select a customer --'}</option>
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id}>{c.fullName || c.id} ({isAr ? 'الرصيد' : 'Balance'}: {((c.outstandingBalance || 0)).toLocaleString()} {isAr ? 'د.إ' : 'AED'})</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
               <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'طريقة الدفع *' : 'Payment Method *'}</label>
@@ -397,14 +423,15 @@ export const FinanceLedgerView: React.FC = () => {
           <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
             <button
               type="button"
-              onClick={() => setPaymentModalOpen(false)}
+              onClick={() => { setPaymentModalOpen(false); setPaymentForm(EMPTY_PAYMENT_FORM); }}
               className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400"
             >
               {t('cancel')}
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold"
+              disabled={!paymentForm.customerId || !(paymentForm.amount > 0)}
+              className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50"
             >
               {isAr ? 'تسجيل وتخصيص' : 'Record & Allocate'}
             </button>

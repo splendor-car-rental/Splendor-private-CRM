@@ -29,6 +29,20 @@ type SupplierInvoiceLite = {
   status: string;
 };
 
+type ManualJournalRequestLite = {
+  id: string;
+  date: string;
+  reference?: string;
+  memo: string;
+  lines: Array<{ accountCode: string; debit: number; credit: number; memo?: string }>;
+  status: 'pending_approval' | 'approved' | 'rejected';
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  decidedByName?: string;
+  decisionReason?: string;
+};
+
 type FinanceReports = {
   trialBalance?: Array<{ debit: number; credit: number }>;
   profitLoss?: { revenue: number; expenses: number; netProfit: number };
@@ -80,6 +94,13 @@ export const FinanceControlCenterView: React.FC = () => {
   const { vehicles, contracts, showToast } = useCRM();
   const isAr = language === 'ar';
   const [tab, setTab] = useState<TabKey>('overview');
+  // The "Record Revenue / Customer Payment" button in the header only
+  // switches to the Operations tab (a list view) -- from a user's
+  // perspective, clicking a button labeled "record a payment" and seeing a
+  // table instead of a payment form reads as "nothing happened". This
+  // counter increments each time that button is clicked so FinanceLedgerView
+  // can open its own payment modal immediately, matching the button's label.
+  const [autoOpenPaymentSignal, setAutoOpenPaymentSignal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [dashboard, setDashboard] = useState<FinanceDashboardSummary | null>(null);
   const [accounts, setAccounts] = useState<AccountingAccount[]>([]);
@@ -94,6 +115,8 @@ export const FinanceControlCenterView: React.FC = () => {
   const [postingGaps, setPostingGaps] = useState<PostingGap[]>([]);
   const [reports, setReports] = useState<FinanceReports | null>(null);
   const [notes, setNotes] = useState<FinancialNote[]>([]);
+  const [manualJournalRequests, setManualJournalRequests] = useState<ManualJournalRequestLite[]>([]);
+  const [otherIncomeModalOpen, setOtherIncomeModalOpen] = useState(false);
   const [expenseModalOpen, setExpenseModalOpen] = useState(false);
   const [periodModalOpen, setPeriodModalOpen] = useState(false);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
@@ -116,6 +139,10 @@ export const FinanceControlCenterView: React.FC = () => {
   const [noteForm, setNoteForm] = useState({ invoiceId: '', issueDate: new Date().toISOString().slice(0, 10), reason: '', amountBeforeVat: 0, vatAmount: 0, revenueAccountCode: '4000' });
   const [supplierPostForm, setSupplierPostForm] = useState({ amountBeforeVat: 0, vatAmount: 0, dueDate: '', expenseAccountCode: '5170' });
   const [payablePaymentForm, setPayablePaymentForm] = useState({ amount: 0, settlementAccountCode: '1100', reference: '', paymentDate: new Date().toISOString().slice(0, 10) });
+  const [otherIncomeForm, setOtherIncomeForm] = useState({
+    date: new Date().toISOString().slice(0, 10), sourceAccountCode: '3000', settlementAccountCode: '1100',
+    amount: 0, reference: '', memo: ''
+  });
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -138,7 +165,8 @@ export const FinanceControlCenterView: React.FC = () => {
       { label: 'فجوات الترحيل', run: async () => setPostingGaps(await getJson<PostingGap[]>('/api/accounting/posting-gaps')) },
       { label: 'التقارير المالية', run: async () => setReports(await getJson<FinanceReports>('/api/accounting/reports')) },
       { label: 'الإشعارات الدائنة والمدينة', run: async () => setNotes(await getJson<FinancialNote[]>('/api/accounting/financial-notes')) },
-      { label: 'فواتير الموردين', run: async () => setSupplierInvoices(await getJson<SupplierInvoiceLite[]>('/api/supplier-invoices')) }
+      { label: 'فواتير الموردين', run: async () => setSupplierInvoices(await getJson<SupplierInvoiceLite[]>('/api/supplier-invoices')) },
+      { label: 'طلبات القيود اليدوية', run: async () => setManualJournalRequests(await getJson<ManualJournalRequestLite[]>('/api/accounting/journals/manual')) }
     ];
     const results = await Promise.allSettled(sections.map(s => s.run()));
     const failed = results
@@ -160,6 +188,15 @@ export const FinanceControlCenterView: React.FC = () => {
   const expenseAccounts = useMemo(() => accounts.filter(a => a.active && a.accountClass === 'expense'), [accounts]);
   const settlementAccounts = useMemo(() => accounts.filter(a => a.active && a.accountClass === 'asset' && a.cashEquivalent), [accounts]);
   const revenueAccounts = useMemo(() => accounts.filter(a => a.active && a.accountClass === 'revenue'), [accounts]);
+  // Non-AR income sources: financing received, partner capital support, or
+  // any other credit that isn't a customer collection -- equity/liability
+  // accounts an admin is allowed to post to directly, plus the dedicated
+  // "Other Income" revenue account (4900), which is also allowDirectPosting.
+  const otherIncomeSourceAccounts = useMemo(
+    () => accounts.filter(a => a.active && a.allowDirectPosting && (a.accountClass === 'equity' || a.accountClass === 'liability' || a.accountClass === 'revenue')),
+    [accounts]
+  );
+  const pendingManualJournalRequests = useMemo(() => manualJournalRequests.filter(r => r.status === 'pending_approval'), [manualJournalRequests]);
 
   const createExpense = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -183,6 +220,46 @@ export const FinanceControlCenterView: React.FC = () => {
     try {
       await getJson(`/api/accounting/expenses/${encodeURIComponent(id)}/decision`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason }) });
       showToast(decision === 'approve' ? 'تم اعتماد المصروف' : 'تم رفض المصروف', 'تم تسجيل القرار في سجل التدقيق.', 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر تنفيذ القرار', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
+  const createOtherIncome = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setWorkingId('other-income');
+    try {
+      const amount = Number(otherIncomeForm.amount);
+      if (!(amount > 0)) throw new Error('المبلغ يجب أن يكون أكبر من صفر.');
+      await getJson('/api/accounting/journals/manual', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: otherIncomeForm.date,
+          reference: otherIncomeForm.reference,
+          memo: otherIncomeForm.memo,
+          lines: [
+            { accountCode: otherIncomeForm.settlementAccountCode, debit: amount, credit: 0 },
+            { accountCode: otherIncomeForm.sourceAccountCode, debit: 0, credit: amount }
+          ]
+        })
+      });
+      setOtherIncomeModalOpen(false);
+      setOtherIncomeForm({ date: new Date().toISOString().slice(0, 10), sourceAccountCode: '3000', settlementAccountCode: '1100', amount: 0, reference: '', memo: '' });
+      showToast('تم إنشاء طلب القيد', 'القيد الآن قيد الاعتماد من شخص آخر مخوّل ولن يُرحّل قبل ذلك.', 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر إنشاء طلب القيد', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
+  const decideManualJournalRequest = async (id: string, decision: 'approve' | 'reject') => {
+    const reason = window.prompt(decision === 'approve' ? 'سبب الاعتماد' : 'سبب الرفض');
+    if (!reason) return;
+    setWorkingId(id);
+    try {
+      await getJson(`/api/accounting/journals/manual/${encodeURIComponent(id)}/decision`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason })
+      });
+      showToast(decision === 'approve' ? 'تم اعتماد القيد وترحيله' : 'تم رفض القيد', 'تم تسجيل القرار في سجل التدقيق.', 'success');
       await refresh();
     } catch (error: any) { showToast('تعذر تنفيذ القرار', error.message, 'error'); }
     finally { setWorkingId(null); }
@@ -296,13 +373,38 @@ export const FinanceControlCenterView: React.FC = () => {
           <p className="text-xs text-zinc-400 mt-1 max-w-3xl">دفتر أستاذ مزدوج القيد، المصروفات، ذمم العملاء والموردين، الضريبة، التدفقات النقدية، إقفال الفترات وربحية المركبات مع سجل تدقيق وترحيل محكوم.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={() => setTab('operations')} className="px-4 py-2.5 rounded-xl bg-emerald-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-emerald-400 transition-colors"><CircleDollarSign className="w-4 h-4" />تسجيل إيراد / دفعة عميل</button>
+          <button onClick={() => { setTab('operations'); setAutoOpenPaymentSignal(s => s + 1); }} className="px-4 py-2.5 rounded-xl bg-emerald-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-emerald-400 transition-colors"><CircleDollarSign className="w-4 h-4" />تسجيل دفعة عميل</button>
+          <button onClick={() => setOtherIncomeModalOpen(true)} className="px-4 py-2.5 rounded-xl bg-teal-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-teal-400 transition-colors"><Banknote className="w-4 h-4" />إيراد آخر (تمويل / دعم شريك)</button>
           <button onClick={() => setExpenseModalOpen(true)} className="px-4 py-2.5 rounded-xl bg-blue-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-blue-400 transition-colors"><Plus className="w-4 h-4" />تسجيل مصروف</button>
           <button onClick={() => { setNoteType('credit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FileMinus2 className="w-4 h-4" />إشعار دائن</button>
           <button onClick={() => { setNoteType('debit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FilePlus2 className="w-4 h-4" />إشعار مدين</button>
           <button onClick={() => void refresh()} disabled={loading} className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300" title="تحديث البيانات"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
         </div>
       </div>
+
+      {pendingManualJournalRequests.length > 0 && (
+        <div className="rounded-2xl bg-teal-500/10 border border-teal-500/30 p-4">
+          <h3 className="text-sm font-bold text-teal-300 mb-2">طلبات قيود يدوية بانتظار الاعتماد ({pendingManualJournalRequests.length})</h3>
+          <div className="space-y-2">
+            {pendingManualJournalRequests.map(r => (
+              <div key={r.id} className="p-3 rounded-xl bg-zinc-900/70 border border-zinc-800 flex items-center justify-between gap-3 flex-wrap text-xs">
+                <div className="min-w-0">
+                  <p className="font-semibold text-zinc-100">{r.id} — {r.memo}</p>
+                  <p className="text-zinc-500 mt-0.5">{r.requestedByName} · {r.date} · {money(r.lines?.[0]?.debit || r.lines?.[0]?.credit)}</p>
+                </div>
+                {r.requestedBy !== currentUser.id ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button disabled={workingId === r.id} onClick={() => decideManualJournalRequest(r.id, 'approve')} className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300">اعتماد</button>
+                    <button disabled={workingId === r.id} onClick={() => decideManualJournalRequest(r.id, 'reject')} className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-300">رفض</button>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-zinc-500 shrink-0">بانتظار شخص آخر مخوّل</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading && !dashboard ? <div className="min-h-[320px] flex items-center justify-center"><Loader2 className="w-7 h-7 animate-spin text-blue-400" /></div> : <>
         <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -317,7 +419,7 @@ export const FinanceControlCenterView: React.FC = () => {
         <div className="overflow-x-auto pb-1"><div className="flex gap-2 min-w-max border-b border-zinc-800 pb-2">{TABS.map(item => <button key={item.id} onClick={() => setTab(item.id)} className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${tab === item.id ? 'bg-blue-500/15 border border-blue-500/40 text-blue-300' : 'border border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'}`}>{item.icon}{item.label}</button>)}</div></div>
 
         {tab === 'overview' && <Overview dashboard={dashboard} reports={reports} postingGaps={postingGaps} notes={notes} />}
-        {tab === 'operations' && <FinanceLedgerView />}
+        {tab === 'operations' && <FinanceLedgerView autoOpenPaymentSignal={autoOpenPaymentSignal} />}
         {tab === 'expenses' && <ExpensesTable expenses={expenses} currentUserId={currentUser.id} workingId={workingId} onDecision={decideExpense} />}
         {tab === 'ar' && <ARAgingTable rows={arRows} />}
         {tab === 'ap' && <APView rows={apRows} payables={payables} supplierInvoices={supplierInvoices} workingId={workingId} onPost={openSupplierPost} onPay={openPayablePayment} />}
@@ -393,6 +495,23 @@ export const FinanceControlCenterView: React.FC = () => {
 
       <Modal isOpen={noteModalOpen} onClose={() => setNoteModalOpen(false)} title={noteType === 'credit_note' ? 'إصدار إشعار دائن' : 'إصدار إشعار مدين'} subtitle="يتم إنشاء مستند وقيد مستقل دون تعديل الفاتورة الأصلية" maxWidth="lg">
         <form onSubmit={createNote} className="space-y-4 text-xs"><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><Field label="رقم الفاتورة"><input required value={noteForm.invoiceId} onChange={e => setNoteForm({ ...noteForm, invoiceId: e.target.value })} className="field" /></Field><Field label="تاريخ الإصدار"><input type="date" required value={noteForm.issueDate} onChange={e => setNoteForm({ ...noteForm, issueDate: e.target.value })} className="field" /></Field><Field label="المبلغ قبل الضريبة"><input type="number" min="0.01" step="0.01" required value={noteForm.amountBeforeVat} onChange={e => setNoteForm({ ...noteForm, amountBeforeVat: Number(e.target.value) })} className="field" /></Field><Field label="الضريبة"><input type="number" min="0" step="0.01" required value={noteForm.vatAmount} onChange={e => setNoteForm({ ...noteForm, vatAmount: Number(e.target.value) })} className="field" /></Field><Field label="حساب الإيراد"><select value={noteForm.revenueAccountCode} onChange={e => setNoteForm({ ...noteForm, revenueAccountCode: e.target.value })} className="field">{revenueAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field></div><Field label="السبب"><textarea required rows={3} value={noteForm.reason} onChange={e => setNoteForm({ ...noteForm, reason: e.target.value })} className="field" /></Field><div className="flex justify-end gap-2"><button type="button" onClick={() => setNoteModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800">إلغاء</button><button disabled={workingId === 'financial-note'} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold flex items-center gap-2">{workingId === 'financial-note' && <Loader2 className="w-4 h-4 animate-spin" />}إصدار وترحيل</button></div></form>
+      </Modal>
+
+      <Modal isOpen={otherIncomeModalOpen} onClose={() => setOtherIncomeModalOpen(false)} title="تسجيل إيراد آخر (غير مرتبط بعميل)" subtitle="تمويل مستلم، دعم شريك، أو أي إيراد آخر -- يُنشأ كقيد معلّق ولا يُرحّل قبل اعتماد شخص آخر مخوّل" maxWidth="lg">
+        <form onSubmit={createOtherIncome} className="space-y-4 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="التاريخ"><input type="date" required value={otherIncomeForm.date} onChange={e => setOtherIncomeForm({ ...otherIncomeForm, date: e.target.value })} className="field" /></Field>
+            <Field label="المبلغ"><input type="number" min="0.01" step="0.01" required value={otherIncomeForm.amount} onChange={e => setOtherIncomeForm({ ...otherIncomeForm, amount: Number(e.target.value) })} className="field" /></Field>
+            <Field label="مصدر الإيراد"><select required value={otherIncomeForm.sourceAccountCode} onChange={e => setOtherIncomeForm({ ...otherIncomeForm, sourceAccountCode: e.target.value })} className="field">{otherIncomeSourceAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>
+            <Field label="حساب الاستلام (نقدية / بنك)"><select required value={otherIncomeForm.settlementAccountCode} onChange={e => setOtherIncomeForm({ ...otherIncomeForm, settlementAccountCode: e.target.value })} className="field">{settlementAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field>
+            <Field label="المرجع"><input value={otherIncomeForm.reference} onChange={e => setOtherIncomeForm({ ...otherIncomeForm, reference: e.target.value })} className="field" /></Field>
+          </div>
+          <Field label="الوصف / السبب"><textarea required rows={3} value={otherIncomeForm.memo} onChange={e => setOtherIncomeForm({ ...otherIncomeForm, memo: e.target.value })} placeholder="مثال: دفعة تمويل من شريك، قرض بنكي مستلم، إلخ." className="field" /></Field>
+          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800">
+            <button type="button" onClick={() => setOtherIncomeModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">إلغاء</button>
+            <button disabled={workingId === 'other-income'} className="px-5 py-2 rounded-xl bg-teal-500 text-zinc-950 font-bold flex items-center gap-2">{workingId === 'other-income' && <Loader2 className="w-4 h-4 animate-spin" />}حفظ وإرسال للاعتماد</button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

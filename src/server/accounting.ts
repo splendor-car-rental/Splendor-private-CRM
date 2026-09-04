@@ -57,7 +57,7 @@ interface PostJournalInput {
   directManualPosting?: boolean;
 }
 
-interface ManualJournalRequest {
+export interface ManualJournalRequest {
   id: string;
   date: string;
   reference?: string;
@@ -370,6 +370,15 @@ export async function decideManualJournal(
     newValue: `Manual journal approved and posted as ${posted.journal.id}.`, reason: reason.trim()
   });
   return updated;
+}
+
+/** Lists manual journal requests (e.g. a non-customer income source: financing received, partner capital support) for the pending-approval inbox. */
+export async function listManualJournalRequests(limit = 500): Promise<ManualJournalRequest[]> {
+  const snap = await db().collection(COLLECTIONS.manualJournalRequests)
+    .orderBy('requestedAt', 'desc')
+    .limit(limit)
+    .get();
+  return snap.docs.map(doc => doc.data() as ManualJournalRequest);
 }
 
 export async function reverseJournal(
