@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, AlertTriangle, Banknote, BarChart3, BookOpen, Building2,
   CalendarClock, Car, CheckCircle2, CircleDollarSign, FileMinus2, FilePlus2,
-  Loader2, Plus, Receipt, RefreshCw, Scale, ShieldCheck,
-  TrendingDown, TrendingUp, WalletCards
+  Loader2, Pencil, Plus, Receipt, RefreshCw, RotateCcw, Scale, ShieldCheck,
+  TrendingDown, TrendingUp, WalletCards, LayoutList
 } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useLanguage } from '../../context/LanguageContext';
@@ -12,12 +12,12 @@ import { useCRM } from '../../context/CRMContext';
 import { Modal } from '../common/Modal';
 import { FinanceLedgerView } from './FinanceLedgerView';
 import type {
-  AccountingAccount, AccountingPeriod, AccountsPayableEntry, ARAgingRow, APAgingRow,
+  AccountingAccount, AccountingAccountClass, AccountingNormalSide, AccountingPeriod, AccountsPayableEntry, ARAgingRow, APAgingRow,
   CashFlowReport, FinanceDashboardSummary, FinanceExpense, FinancialNote, JournalEntry,
-  PostingGap, VehicleProfitabilityRow
+  PostingGap, ProfitLossReport, VehicleProfitabilityRow
 } from '../../accounting/types';
 
-type TabKey = 'overview' | 'operations' | 'expenses' | 'ar' | 'ap' | 'vat' | 'cashflow' | 'ledger' | 'periods' | 'vehicles' | 'integrity';
+type TabKey = 'overview' | 'operations' | 'expenses' | 'ar' | 'ap' | 'vat' | 'pnl' | 'cashflow' | 'ledger' | 'coa' | 'periods' | 'vehicles' | 'integrity';
 
 type SupplierInvoiceLite = {
   id: string;
@@ -45,7 +45,7 @@ type ManualJournalRequestLite = {
 
 type FinanceReports = {
   trialBalance?: Array<{ debit: number; credit: number }>;
-  profitLoss?: { revenue: number; expenses: number; netProfit: number };
+  profitLoss?: ProfitLossReport;
   balanceSheet?: { assets: number; liabilities: number; equity: number; currentEarnings: number; balanced: boolean };
   vat?: { outputVat: number; inputVat: number; vatPayable: number };
   cashFlow?: CashFlowReport;
@@ -81,8 +81,10 @@ const TABS: Array<{ id: TabKey; label: string; icon: React.ReactNode }> = [
   { id: 'ar', label: 'ذمم العملاء', icon: <CircleDollarSign className="w-4 h-4" /> },
   { id: 'ap', label: 'ذمم الموردين', icon: <Building2 className="w-4 h-4" /> },
   { id: 'vat', label: 'الضريبة', icon: <Scale className="w-4 h-4" /> },
+  { id: 'pnl', label: 'قائمة الدخل', icon: <BarChart3 className="w-4 h-4" /> },
   { id: 'cashflow', label: 'التدفقات النقدية', icon: <WalletCards className="w-4 h-4" /> },
   { id: 'ledger', label: 'دفتر الأستاذ', icon: <BookOpen className="w-4 h-4" /> },
+  { id: 'coa', label: 'دليل الحسابات', icon: <LayoutList className="w-4 h-4" /> },
   { id: 'periods', label: 'إقفال الفترات', icon: <CalendarClock className="w-4 h-4" /> },
   { id: 'vehicles', label: 'ربحية المركبات', icon: <Car className="w-4 h-4" /> },
   { id: 'integrity', label: 'سلامة الترحيل', icon: <ShieldCheck className="w-4 h-4" /> }
@@ -129,6 +131,10 @@ export const FinanceControlCenterView: React.FC = () => {
   const [gapPostAccountCode, setGapPostAccountCode] = useState('');
   const [noteType, setNoteType] = useState<'credit_note' | 'debit_note'>('credit_note');
   const [workingId, setWorkingId] = useState<string | null>(null);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<AccountingAccount | null>(null);
+  const [reverseModalOpen, setReverseModalOpen] = useState(false);
+  const [selectedJournal, setSelectedJournal] = useState<JournalEntry | null>(null);
 
   const [expenseForm, setExpenseForm] = useState({
     date: new Date().toISOString().slice(0, 10), vendor: '', category: 'maintenance', expenseAccountCode: '5000',
@@ -143,6 +149,12 @@ export const FinanceControlCenterView: React.FC = () => {
     date: new Date().toISOString().slice(0, 10), sourceAccountCode: '3000', settlementAccountCode: '1100',
     amount: 0, reference: '', memo: ''
   });
+  const EMPTY_ACCOUNT_FORM = {
+    code: '', name: '', nameAr: '', accountClass: 'expense' as AccountingAccountClass, normalSide: 'debit' as AccountingNormalSide,
+    description: '', descriptionAr: '', active: true, allowDirectPosting: true, cashEquivalent: false
+  };
+  const [accountForm, setAccountForm] = useState(EMPTY_ACCOUNT_FORM);
+  const [reverseForm, setReverseForm] = useState({ reason: '', date: new Date().toISOString().slice(0, 10) });
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -334,6 +346,69 @@ export const FinanceControlCenterView: React.FC = () => {
 
   const closeAllowed = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
+  const defaultNormalSideFor = (accountClass: AccountingAccountClass): AccountingNormalSide =>
+    accountClass === 'asset' || accountClass === 'expense' ? 'debit' : 'credit';
+
+  const openNewAccount = () => {
+    setEditingAccount(null);
+    setAccountForm(EMPTY_ACCOUNT_FORM);
+    setAccountModalOpen(true);
+  };
+
+  const openEditAccount = (account: AccountingAccount) => {
+    setEditingAccount(account);
+    setAccountForm({
+      code: account.code, name: account.name, nameAr: account.nameAr,
+      accountClass: account.accountClass, normalSide: account.normalSide,
+      description: account.description || '', descriptionAr: account.descriptionAr || '',
+      active: account.active, allowDirectPosting: account.allowDirectPosting, cashEquivalent: Boolean(account.cashEquivalent)
+    });
+    setAccountModalOpen(true);
+  };
+
+  const saveAccount = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const code = accountForm.code.trim();
+    if (!code) return;
+    setWorkingId('save-account');
+    try {
+      await getJson(`/api/accounting/chart-of-accounts/${encodeURIComponent(code)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: accountForm.name.trim(), nameAr: accountForm.nameAr.trim(),
+          accountClass: accountForm.accountClass, normalSide: accountForm.normalSide,
+          description: accountForm.description || undefined, descriptionAr: accountForm.descriptionAr || undefined,
+          active: accountForm.active, allowDirectPosting: accountForm.allowDirectPosting, cashEquivalent: accountForm.cashEquivalent
+        })
+      });
+      setAccountModalOpen(false);
+      showToast(editingAccount ? 'تم تحديث الحساب' : 'تم إنشاء الحساب', `الحساب ${code} في دليل الحسابات.`, 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر حفظ الحساب', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
+  const openReverseJournal = (journal: JournalEntry) => {
+    setSelectedJournal(journal);
+    setReverseForm({ reason: '', date: new Date().toISOString().slice(0, 10) });
+    setReverseModalOpen(true);
+  };
+
+  const submitReverseJournal = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedJournal) return;
+    setWorkingId(`reverse-${selectedJournal.id}`);
+    try {
+      await getJson(`/api/accounting/journals/${encodeURIComponent(selectedJournal.id)}/reverse`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reverseForm)
+      });
+      setReverseModalOpen(false);
+      showToast('تم عكس القيد', `تم إنشاء قيد عكسي للقيد ${selectedJournal.id}.`, 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر عكس القيد', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
   // Posting a gap from the Integrity tab reuses the same accounting.ts
   // functions the AP/notes flows already call (postInvoiceToAccounting /
   // postPaymentToAccounting / the deposit lifecycle's 'post' action) -- this
@@ -378,6 +453,7 @@ export const FinanceControlCenterView: React.FC = () => {
           <button onClick={() => setExpenseModalOpen(true)} className="px-4 py-2.5 rounded-xl bg-blue-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-blue-400 transition-colors"><Plus className="w-4 h-4" />تسجيل مصروف</button>
           <button onClick={() => { setNoteType('credit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FileMinus2 className="w-4 h-4" />إشعار دائن</button>
           <button onClick={() => { setNoteType('debit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FilePlus2 className="w-4 h-4" />إشعار مدين</button>
+          <button onClick={() => { setTab('coa'); openNewAccount(); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><LayoutList className="w-4 h-4" />حساب جديد</button>
           <button onClick={() => void refresh()} disabled={loading} className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300" title="تحديث البيانات"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
         </div>
       </div>
@@ -424,8 +500,10 @@ export const FinanceControlCenterView: React.FC = () => {
         {tab === 'ar' && <ARAgingTable rows={arRows} />}
         {tab === 'ap' && <APView rows={apRows} payables={payables} supplierInvoices={supplierInvoices} workingId={workingId} onPost={openSupplierPost} onPay={openPayablePayment} />}
         {tab === 'vat' && <VatView reports={reports} />}
+        {tab === 'pnl' && <IncomeStatementView profitLoss={reports?.profitLoss} />}
         {tab === 'cashflow' && <CashFlowView cashFlow={reports?.cashFlow} />}
-        {tab === 'ledger' && <LedgerView journals={journals} accounts={accounts} reports={reports} />}
+        {tab === 'ledger' && <LedgerView journals={journals} accounts={accounts} reports={reports} canReverse={closeAllowed} workingId={workingId} onReverse={openReverseJournal} />}
+        {tab === 'coa' && <ChartOfAccountsView accounts={accounts} onNew={openNewAccount} onEdit={openEditAccount} />}
         {tab === 'periods' && <PeriodsView periods={periods} closeAllowed={closeAllowed} onClose={() => setPeriodModalOpen(true)} />}
         {tab === 'vehicles' && <VehicleProfitabilityTable rows={vehicleRows} />}
         {tab === 'integrity' && <PostingGapsTable gaps={postingGaps} workingId={workingId} onPost={openGapPost} />}
@@ -513,6 +591,76 @@ export const FinanceControlCenterView: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      <Modal isOpen={accountModalOpen} onClose={() => setAccountModalOpen(false)} title={editingAccount ? `تعديل حساب ${editingAccount.code}` : 'حساب جديد في دليل الحسابات'} subtitle={editingAccount?.system ? 'حساب نظام -- لا يمكن تغيير التصنيف أو الطبيعة أو السماح بالترحيل المباشر' : 'الحسابات المخصصة تحتاج رمزًا واسمًا وتصنيفًا وطبيعة رصيد'} maxWidth="lg">
+        <form onSubmit={saveAccount} className="space-y-4 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="الرمز">
+              <input required disabled={Boolean(editingAccount)} value={accountForm.code} onChange={e => setAccountForm({ ...accountForm, code: e.target.value.trim() })} className="field disabled:opacity-60 font-mono" placeholder="مثال: 5200" />
+            </Field>
+            <Field label="التصنيف">
+              <select
+                disabled={Boolean(editingAccount?.system)}
+                value={accountForm.accountClass}
+                onChange={e => { const cls = e.target.value as AccountingAccountClass; setAccountForm({ ...accountForm, accountClass: cls, normalSide: defaultNormalSideFor(cls) }); }}
+                className="field disabled:opacity-60"
+              >
+                <option value="asset">أصل</option>
+                <option value="liability">التزام</option>
+                <option value="equity">حقوق ملكية</option>
+                <option value="revenue">إيراد</option>
+                <option value="expense">مصروف</option>
+              </select>
+            </Field>
+            <Field label="الاسم (إنجليزي)"><input required value={accountForm.name} onChange={e => setAccountForm({ ...accountForm, name: e.target.value })} className="field" /></Field>
+            <Field label="الاسم (عربي)"><input required value={accountForm.nameAr} onChange={e => setAccountForm({ ...accountForm, nameAr: e.target.value })} className="field" /></Field>
+            <Field label="طبيعة الرصيد">
+              <select disabled={Boolean(editingAccount?.system)} value={accountForm.normalSide} onChange={e => setAccountForm({ ...accountForm, normalSide: e.target.value as AccountingNormalSide })} className="field disabled:opacity-60">
+                <option value="debit">مدين</option>
+                <option value="credit">دائن</option>
+              </select>
+            </Field>
+            <Field label="السماح بالترحيل اليدوي المباشر">
+              <select disabled={Boolean(editingAccount?.system)} value={accountForm.allowDirectPosting ? '1' : '0'} onChange={e => setAccountForm({ ...accountForm, allowDirectPosting: e.target.value === '1' })} className="field disabled:opacity-60">
+                <option value="1">مسموح</option>
+                <option value="0">غير مسموح</option>
+              </select>
+            </Field>
+            <Field label="حساب نقدية/بنك (يظهر كخيار سداد)">
+              <select value={accountForm.cashEquivalent ? '1' : '0'} onChange={e => setAccountForm({ ...accountForm, cashEquivalent: e.target.value === '1' })} className="field">
+                <option value="0">لا</option>
+                <option value="1">نعم</option>
+              </select>
+            </Field>
+            <Field label="الحالة">
+              <select value={accountForm.active ? '1' : '0'} onChange={e => setAccountForm({ ...accountForm, active: e.target.value === '1' })} className="field">
+                <option value="1">نشط</option>
+                <option value="0">معطّل</option>
+              </select>
+            </Field>
+          </div>
+          <Field label="وصف (اختياري)"><textarea rows={2} value={accountForm.descriptionAr} onChange={e => setAccountForm({ ...accountForm, descriptionAr: e.target.value })} className="field" /></Field>
+          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800">
+            <button type="button" onClick={() => setAccountModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">إلغاء</button>
+            <button disabled={workingId === 'save-account'} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold flex items-center gap-2">{workingId === 'save-account' && <Loader2 className="w-4 h-4 animate-spin" />}حفظ</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={reverseModalOpen} onClose={() => setReverseModalOpen(false)} title="عكس قيد محاسبي" subtitle="سيتم إنشاء قيد عكسي جديد بنفس المبالغ مقلوبة الطرفين -- القيد الأصلي لا يُحذف ولا يُعدَّل" maxWidth="md">
+        <form onSubmit={submitReverseJournal} className="space-y-4 text-xs">
+          <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-zinc-300">
+            {selectedJournal?.id} — {selectedJournal?.memo} — مدين {money(selectedJournal?.totalDebit)} / دائن {money(selectedJournal?.totalCredit)}
+          </div>
+          <Field label="تاريخ القيد العكسي"><input type="date" required value={reverseForm.date} onChange={e => setReverseForm({ ...reverseForm, date: e.target.value })} className="field" /></Field>
+          <Field label="سبب العكس"><textarea required rows={3} value={reverseForm.reason} onChange={e => setReverseForm({ ...reverseForm, reason: e.target.value })} className="field" /></Field>
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300">هذا الإجراء نهائي ولا يمكن عكس القيد العكسي نفسه لاحقًا -- تأكد من الحاجة الفعلية للتصحيح.</div>
+          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800">
+            <button type="button" onClick={() => setReverseModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">إلغاء</button>
+            <button disabled={Boolean(selectedJournal && workingId === `reverse-${selectedJournal.id}`)} className="px-5 py-2 rounded-xl bg-rose-500 text-white font-bold flex items-center gap-2">{selectedJournal && workingId === `reverse-${selectedJournal.id}` && <Loader2 className="w-4 h-4 animate-spin" />}تأكيد العكس</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };
@@ -535,7 +683,122 @@ const APView: React.FC<{ rows: APAgingRow[]; payables: AccountsPayableEntry[]; s
 const VatView: React.FC<{ reports: FinanceReports | null }> = ({ reports }) => <div className="grid grid-cols-1 md:grid-cols-3 gap-4"><Kpi title="ضريبة المخرجات" value={money(reports?.vat?.outputVat)} icon={<TrendingUp className="w-4 h-4" />} /><Kpi title="ضريبة المدخلات" value={money(reports?.vat?.inputVat)} icon={<TrendingDown className="w-4 h-4" />} /><Kpi title="صافي الضريبة المستحقة" value={money(reports?.vat?.vatPayable)} icon={<Scale className="w-4 h-4" />} /><div className="md:col-span-3 p-4 rounded-2xl bg-zinc-900/70 border border-zinc-800 text-xs text-zinc-400">التقرير يعرض فقط الضريبة الناتجة عن القيود المحاسبية المرحلة. لا يتم افتراض ضريبة الموردين تلقائيًا؛ يتم إدخال صافي وضريبة فاتورة المورد قبل ترحيلها.</div></div>;
 const CashFlowView: React.FC<{ cashFlow?: CashFlowReport }> = ({ cashFlow }) => !cashFlow ? <div className="p-5 rounded-2xl bg-zinc-900/70 border border-zinc-800 text-zinc-400 text-sm">لا توجد بيانات تدفقات نقدية متاحة للفترة الحالية.</div> : <div className="space-y-4"><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><Kpi title="رصيد النقد أول الفترة" value={money(cashFlow.openingCash)} icon={<WalletCards className="w-4 h-4" />} /><Kpi title="صافي النشاط التشغيلي" value={money(cashFlow.operating.net)} icon={<TrendingUp className="w-4 h-4" />} /><Kpi title="صافي النشاط الاستثماري" value={money(cashFlow.investing.net)} icon={<Car className="w-4 h-4" />} /><Kpi title="صافي النشاط التمويلي" value={money(cashFlow.financing.net)} icon={<Building2 className="w-4 h-4" />} /></div><TableShell title={`التدفقات النقدية من ${cashFlow.periodStart} إلى ${cashFlow.periodEnd}`}><table className="w-full text-xs min-w-[640px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>التصنيف</Th><Th>المتحصلات</Th><Th>المدفوعات</Th><Th>الصافي</Th></tr></thead><tbody><CashFlowRow label="تشغيلي" section={cashFlow.operating} /><CashFlowRow label="استثماري" section={cashFlow.investing} /><CashFlowRow label="تمويلي" section={cashFlow.financing} /><CashFlowRow label="غير مصنف — يحتاج مراجعة" section={cashFlow.unclassified} /></tbody></table></TableShell><div className="grid grid-cols-2 gap-3"><Mini label="صافي حركة النقد" value={money(cashFlow.netCashMovement)} /><Mini label="رصيد النقد آخر الفترة" value={money(cashFlow.closingCash)} /></div>{Math.abs(cashFlow.unclassified.net) > 0.005 && <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0" /><span>توجد حركة نقدية ذات أطراف محاسبية من أكثر من تصنيف. تم إبقاؤها «غير مصنفة» بدل تخمين تصنيف غير مؤكد.</span></div>}</div>;
 const CashFlowRow: React.FC<{ label: string; section: { inflows: number; outflows: number; net: number } }> = ({ label, section }) => <tr className="border-b border-zinc-800/50"><Td>{label}</Td><Td>{money(section.inflows)}</Td><Td>{money(section.outflows)}</Td><Td>{money(section.net)}</Td></tr>;
-const LedgerView: React.FC<{ journals: JournalEntry[]; accounts: AccountingAccount[]; reports: FinanceReports | null }> = ({ journals, accounts, reports }) => <div className="space-y-4"><div className="grid grid-cols-2 md:grid-cols-4 gap-3"><Mini label="إجمالي مدين ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.debit, 0))} /><Mini label="إجمالي دائن ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.credit, 0))} /><Mini label="عدد القيود" value={String(journals.length)} /><Mini label="الحسابات النشطة" value={String(accounts.filter(a => a.active).length)} /></div><TableShell title="القيود المرحلة"><table className="w-full text-xs min-w-[900px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>القيد</Th><Th>التاريخ</Th><Th>المصدر</Th><Th>المرجع</Th><Th>البيان</Th><Th>مدين</Th><Th>دائن</Th></tr></thead><tbody>{journals.map(j => <tr key={j.id} className="border-b border-zinc-800/50"><Td mono>{j.id}</Td><Td>{j.date}</Td><Td>{j.sourceType}</Td><Td mono>{j.reference || j.sourceId}</Td><Td>{j.memo}</Td><Td>{money(j.totalDebit)}</Td><Td>{money(j.totalCredit)}</Td></tr>)}</tbody></table></TableShell></div>;
+const LedgerView: React.FC<{
+  journals: JournalEntry[]; accounts: AccountingAccount[]; reports: FinanceReports | null;
+  canReverse: boolean; workingId: string | null; onReverse: (journal: JournalEntry) => void;
+}> = ({ journals, accounts, reports, canReverse, workingId, onReverse }) => {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  return <div className="space-y-4">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3"><Mini label="إجمالي مدين ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.debit, 0))} /><Mini label="إجمالي دائن ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.credit, 0))} /><Mini label="عدد القيود" value={String(journals.length)} /><Mini label="الحسابات النشطة" value={String(accounts.filter(a => a.active).length)} /></div>
+    <TableShell title="القيود المرحلة -- اضغط على أي صف لعرض بنود المدين والدائن">
+      <table className="w-full text-xs min-w-[980px]">
+        <thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>القيد</Th><Th>التاريخ</Th><Th>المصدر</Th><Th>المرجع</Th><Th>البيان</Th><Th>مدين</Th><Th>دائن</Th><Th>الحالة</Th><Th>الإجراء</Th></tr></thead>
+        <tbody>
+          {journals.map(j => {
+            const isReversed = Boolean(j.reversalJournalId) || j.status === 'reversed';
+            const isReversal = Boolean(j.reversalOfJournalId);
+            const canReverseThis = canReverse && !isReversed && !isReversal;
+            return <React.Fragment key={j.id}>
+              <tr className="border-b border-zinc-800/50 cursor-pointer hover:bg-zinc-900/40" onClick={() => setExpandedId(expandedId === j.id ? null : j.id)}>
+                <Td mono>{j.id}</Td><Td>{j.date}</Td><Td>{j.sourceType}</Td><Td mono>{j.reference || j.sourceId}</Td><Td>{j.memo}</Td><Td>{money(j.totalDebit)}</Td><Td>{money(j.totalCredit)}</Td>
+                <Td>
+                  {isReversed && <span className="text-rose-400 font-semibold">معكوس</span>}
+                  {isReversal && <span className="text-amber-400 font-semibold">قيد عكسي</span>}
+                  {!isReversed && !isReversal && <span className="text-emerald-400">مرحّل</span>}
+                </Td>
+                <Td>
+                  {canReverseThis ? (
+                    <button
+                      onClick={e => { e.stopPropagation(); onReverse(j); }}
+                      disabled={workingId === `reverse-${j.id}`}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold whitespace-nowrap"
+                    >
+                      <RotateCcw className="w-3 h-3" />عكس
+                    </button>
+                  ) : <span className="text-zinc-600">—</span>}
+                </Td>
+              </tr>
+              {expandedId === j.id && (
+                <tr className="bg-zinc-950/60">
+                  <td colSpan={9} className="p-3">
+                    <table className="w-full text-[11px]">
+                      <thead><tr className="text-zinc-500"><Th>الحساب</Th><Th>البيان</Th><Th>مدين</Th><Th>دائن</Th></tr></thead>
+                      <tbody>
+                        {j.lines.map((line, i) => {
+                          const account = accounts.find(a => a.code === line.accountCode);
+                          return <tr key={i} className="border-t border-zinc-800/40"><Td mono>{line.accountCode}{account ? ` — ${account.nameAr}` : ''}</Td><Td>{line.memo || '—'}</Td><Td>{money(line.debit)}</Td><Td>{money(line.credit)}</Td></tr>;
+                        })}
+                      </tbody>
+                    </table>
+                    {isReversalOrReversed(j) && (
+                      <p className="mt-2 text-zinc-500">
+                        {j.reversalJournalId && `تم عكس هذا القيد بواسطة: ${j.reversalJournalId}`}
+                        {j.reversalOfJournalId && `هذا قيد عكسي للقيد: ${j.reversalOfJournalId}`}
+                        {j.reversalReason && ` — السبب: ${j.reversalReason}`}
+                      </p>
+                    )}
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>;
+          })}
+        </tbody>
+      </table>
+    </TableShell>
+  </div>;
+};
+const isReversalOrReversed = (j: JournalEntry) => Boolean(j.reversalJournalId || j.reversalOfJournalId);
+const IncomeStatementView: React.FC<{ profitLoss?: ProfitLossReport }> = ({ profitLoss }) => {
+  if (!profitLoss) return <div className="p-5 rounded-2xl bg-zinc-900/70 border border-zinc-800 text-zinc-400 text-sm">لا توجد بيانات قائمة دخل متاحة للفترة الحالية.</div>;
+  return <div className="space-y-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <Kpi title="إجمالي الإيرادات" value={money(profitLoss.revenue)} icon={<TrendingUp className="w-4 h-4" />} />
+      <Kpi title="إجمالي المصروفات" value={money(profitLoss.expenses)} icon={<TrendingDown className="w-4 h-4" />} />
+      <Kpi title="صافي الربح" value={money(profitLoss.netProfit)} icon={<BarChart3 className="w-4 h-4" />} />
+    </div>
+    <TableShell title={`الإيرادات من ${profitLoss.periodStart} إلى ${profitLoss.periodEnd}`}>
+      <table className="w-full text-xs min-w-[640px]">
+        <thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الحساب</Th><Th>مدين</Th><Th>دائن</Th><Th>الصافي</Th></tr></thead>
+        <tbody>
+          {profitLoss.revenueAccounts.map(r => <tr key={r.accountCode} className="border-b border-zinc-800/50"><Td mono>{r.accountCode} — {r.accountNameAr}</Td><Td>{money(r.debit)}</Td><Td>{money(r.credit)}</Td><Td>{money(r.credit - r.debit)}</Td></tr>)}
+          {profitLoss.revenueAccounts.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-zinc-500">لا توجد قيود إيراد في هذه الفترة.</td></tr>}
+        </tbody>
+      </table>
+    </TableShell>
+    <TableShell title="المصروفات">
+      <table className="w-full text-xs min-w-[640px]">
+        <thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الحساب</Th><Th>مدين</Th><Th>دائن</Th><Th>الصافي</Th></tr></thead>
+        <tbody>
+          {profitLoss.expenseAccounts.map(r => <tr key={r.accountCode} className="border-b border-zinc-800/50"><Td mono>{r.accountCode} — {r.accountNameAr}</Td><Td>{money(r.debit)}</Td><Td>{money(r.credit)}</Td><Td>{money(r.debit - r.credit)}</Td></tr>)}
+          {profitLoss.expenseAccounts.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-zinc-500">لا توجد قيود مصروف في هذه الفترة.</td></tr>}
+        </tbody>
+      </table>
+    </TableShell>
+  </div>;
+};
+const ChartOfAccountsView: React.FC<{ accounts: AccountingAccount[]; onNew: () => void; onEdit: (account: AccountingAccount) => void }> = ({ accounts, onNew, onEdit }) => {
+  const CLASS_LABELS: Record<AccountingAccountClass, string> = { asset: 'أصل', liability: 'التزام', equity: 'حقوق ملكية', revenue: 'إيراد', expense: 'مصروف' };
+  return <div className="space-y-4">
+    <div className="flex justify-end"><button onClick={onNew} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold"><Plus className="w-3.5 h-3.5" />حساب جديد</button></div>
+    <TableShell title={`دليل الحسابات (${accounts.length})`}>
+      <table className="w-full text-xs min-w-[900px]">
+        <thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الرمز</Th><Th>الاسم</Th><Th>التصنيف</Th><Th>طبيعة الرصيد</Th><Th>ترحيل مباشر</Th><Th>الحالة</Th><Th>النوع</Th><Th>الإجراء</Th></tr></thead>
+        <tbody>
+          {accounts.map(a => <tr key={a.code} className="border-b border-zinc-800/50 text-zinc-300">
+            <Td mono>{a.code}</Td>
+            <Td>{a.nameAr}<span className="block text-zinc-600">{a.name}</span></Td>
+            <Td>{CLASS_LABELS[a.accountClass]}</Td>
+            <Td>{a.normalSide === 'debit' ? 'مدين' : 'دائن'}</Td>
+            <Td>{a.allowDirectPosting ? 'مسموح' : 'غير مسموح'}</Td>
+            <Td>{a.active ? <span className="text-emerald-400">نشط</span> : <span className="text-zinc-600">معطّل</span>}</Td>
+            <Td>{a.system ? 'نظام' : 'مخصّص'}</Td>
+            <Td><button onClick={() => onEdit(a)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 font-bold whitespace-nowrap"><Pencil className="w-3 h-3" />تعديل</button></Td>
+          </tr>)}
+        </tbody>
+      </table>
+    </TableShell>
+  </div>;
+};
 const PeriodsView: React.FC<{ periods: AccountingPeriod[]; closeAllowed: boolean; onClose: () => void }> = ({ periods, closeAllowed, onClose }) => <div className="space-y-4">{closeAllowed && <div className="flex justify-end"><button onClick={onClose} className="px-4 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-2"><CalendarClock className="w-4 h-4" />إقفال فترة</button></div>}<TableShell title="الفترات المقفلة"><table className="w-full text-xs"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الفترة</Th><Th>من</Th><Th>إلى</Th><Th>الحالة</Th><Th>تاريخ الإقفال</Th><Th>بواسطة</Th></tr></thead><tbody>{periods.map(p => <tr key={p.id} className="border-b border-zinc-800/50"><Td mono>{p.id}</Td><Td>{p.startDate}</Td><Td>{p.endDate}</Td><Td>{p.status === 'closed' ? 'مقفلة' : 'مفتوحة'}</Td><Td>{p.closedAt?.slice(0, 10) || '—'}</Td><Td>{p.closedByName || '—'}</Td></tr>)}</tbody></table></TableShell><div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400">إعادة فتح فترة مقفلة غير متاحة من هذه الواجهة عمدًا. أي تغيير في هذا السلوك يحتاج قرار حوكمة مستقل؛ التصحيح الحالي يتم بقيد عكسي أو قيد تسوية في فترة مفتوحة.</div></div>;
 const VehicleProfitabilityTable: React.FC<{ rows: VehicleProfitabilityRow[] }> = ({ rows }) => <TableShell title="ربحية المركبات من القيود المرتبطة بالمركبة"><table className="w-full text-xs min-w-[980px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>المركبة</Th><Th>الإيراد</Th><Th>الصيانة</Th><Th>التأمين</Th><Th>الترخيص</Th><Th>التمويل</Th><Th>التجهيز</Th><Th>إجمالي التكلفة</Th><Th>صافي الربح</Th><Th>العائد</Th></tr></thead><tbody>{rows.map(r => <tr key={r.vehicleId} className="border-b border-zinc-800/50"><Td>{r.vehicleName || r.vehicleId}</Td><Td>{money(r.revenue)}</Td><Td>{money(r.maintenanceCost)}</Td><Td>{money(r.insuranceCost)}</Td><Td>{money(r.registrationCost)}</Td><Td>{money(r.financeCost)}</Td><Td>{money(r.cleaningCost)}</Td><Td>{money(r.totalCost)}</Td><Td>{money(r.netProfit)}</Td><Td>{r.roiPercent == null ? '—' : `${r.roiPercent}%`}</Td></tr>)}</tbody></table></TableShell>;
 const PostingGapsTable: React.FC<{ gaps: PostingGap[]; workingId: string | null; onPost: (gap: PostingGap) => void }> = ({ gaps, workingId, onPost }) => <div className="space-y-4"><div className={`p-4 rounded-2xl border text-xs flex items-start gap-3 ${gaps.length === 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{gaps.length === 0 ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}<div><p className="font-bold">{gaps.length === 0 ? 'لا توجد فجوات ترحيل مكتشفة' : `${gaps.length} عملية تشغيلية تحتاج ربطًا محاسبيًا`}</p><p className="opacity-80 mt-1">لا يقوم النظام بأي ترحيل رجعي تلقائي للبيانات التاريخية. اضغط «ترحيل الآن» لكل عملية إيراد أو دفعة أو تأمين لإدخالها في دفتر الأستاذ بنفسك -- لا يتم اختراع حساب أو ضريبة أو تاريخ استحقاق.</p></div></div><TableShell title="فجوات الترحيل التاريخية والحالية"><table className="w-full text-xs min-w-[960px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>النوع</Th><Th>المرجع</Th><Th>التاريخ</Th><Th>البيان</Th><Th>المبلغ</Th><Th>سبب الفجوة</Th><Th>الإجراء</Th></tr></thead><tbody>{gaps.map((g, i) => <tr key={`${g.sourceType}-${g.sourceId}-${i}`} className="border-b border-zinc-800/50"><Td>{g.sourceType}</Td><Td mono>{g.sourceId}</Td><Td>{g.date || '—'}</Td><Td>{g.description}</Td><Td>{g.amount == null ? '—' : money(g.amount)}</Td><Td>{g.reason}</Td><Td>{(g.sourceType === 'Invoice' || g.sourceType === 'Payment' || g.sourceType === 'Deposit') ? <button disabled={workingId === `gap-${g.sourceType}-${g.sourceId}`} onClick={() => onPost(g)} className="px-3 py-1.5 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 font-bold whitespace-nowrap">ترحيل الآن</button> : <span className="text-zinc-600">—</span>}</Td></tr>)}</tbody></table></TableShell></div>;

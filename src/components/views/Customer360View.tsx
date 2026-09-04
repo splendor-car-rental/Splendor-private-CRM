@@ -24,7 +24,7 @@ export const Customer360View: React.FC = () => {
   const { language, t } = useLanguage();
   const { currentUser } = useAuth();
   const {
-    customers, contracts, invoices, deposits,
+    customers, contracts, deposits,
     payments, communications, documents,
     selectedCustomerId, setSelectedCustomerId,
     mergeCustomers,
@@ -48,11 +48,42 @@ export const Customer360View: React.FC = () => {
   const [aiBriefLoading, setAiBriefLoading] = useState(false);
   const [aiBrief, setAiBrief] = useState<string | null>(null);
 
+  // Real accounting-ledger-based statement (invoices + payments + credit/debit
+  // notes + running totals) -- the actual posted evidence, not just a raw
+  // invoice list built from the local customers/invoices context arrays.
+  const [accountingStatement, setAccountingStatement] = useState<{
+    totalInvoiced: number; totalPaid: number; totalCreditNotes: number; totalDebitNotes: number; outstanding: number;
+    invoices: Array<{ id: string; issueDate: string; totalAmount: number; paidAmount: number; status: string }>;
+    payments: Array<{ id: string; receivedAt: string; amount: number; method: string; referenceNumber?: string }>;
+    notes: Array<{ id: string; type: 'credit_note' | 'debit_note'; issueDate: string; totalAmount: number; reason: string }>;
+  } | null>(null);
+  const [statementLoading, setStatementLoading] = useState(false);
+
   // Active Selected Customer
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
 
   // 360 Tab selection
   const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs' | 'kyc'>('overview');
+
+  useEffect(() => {
+    if (activeTab !== 'statement' || !activeCustomer?.id) return;
+    let cancelled = false;
+    setStatementLoading(true);
+    apiFetch(`/api/accounting/customers/${encodeURIComponent(activeCustomer.id)}/statement`)
+      .then(res => res.json().then(data => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (cancelled) return;
+        if (!ok) throw new Error(data?.error || 'Failed to load statement');
+        setAccountingStatement(data);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('Failed to load accounting statement', err);
+        showToast(language === 'ar' ? 'تعذر تحميل كشف الحساب المحاسبي' : 'Failed to load accounting statement', err?.message || '', 'error');
+      })
+      .finally(() => { if (!cancelled) setStatementLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeTab, activeCustomer?.id, showToast, language]);
 
   // Filtered customer list
   const filteredCustomers = customers.filter(c => {
@@ -94,7 +125,6 @@ export const Customer360View: React.FC = () => {
   // Associated 360 records for active customer
   const customerContracts = activeCustomer ? contracts.filter(c => c.customerId === activeCustomer.id) : [];
   const customerLtoContracts = activeCustomer ? contracts.filter(c => c.customerId === activeCustomer.id && c.contractType === 'lease_to_own' && c.lto) : [];
-  const customerInvoices = activeCustomer ? invoices.filter(i => i.customerId === activeCustomer.id) : [];
   const customerDeposits = activeCustomer ? deposits.filter(d => d.customerId === activeCustomer.id) : [];
   const customerPayments = activeCustomer ? payments.filter(p => p.customerId === activeCustomer.id) : [];
   const customerComms = activeCustomer ? communications.filter(cm => cm.relatedEntityId === activeCustomer.id) : [];
@@ -562,8 +592,8 @@ export const Customer360View: React.FC = () => {
               <div className="space-y-4">
                 <div className="flex items-center justify-between p-4 rounded-2xl bg-zinc-950 border border-zinc-800">
                   <div>
-                    <h4 className="text-sm font-semibold text-zinc-200">Customer Account Statement</h4>
-                    <p className="text-xs text-zinc-400">Statement period: All historical transactions to date</p>
+                    <h4 className="text-sm font-semibold text-zinc-200">{language === 'ar' ? 'كشف حساب العميل (محاسبي)' : 'Customer Account Statement (Accounting)'}</h4>
+                    <p className="text-xs text-zinc-400">{language === 'ar' ? 'مبني على الفواتير والدفعات والإشعارات الفعلية المسجلة' : 'Built from the actual recorded invoices, payments, and notes'}</p>
                   </div>
                   <button
                     onClick={() => window.print()}
@@ -574,36 +604,60 @@ export const Customer360View: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-start">
-                    <thead>
-                      <tr className="border-b border-zinc-800 text-zinc-400">
-                        <th className="pb-3 text-start font-medium">Type</th>
-                        <th className="pb-3 text-start font-medium">Ref / Number</th>
-                        <th className="pb-3 text-start font-medium">Date</th>
-                        <th className="pb-3 text-end font-medium">Invoiced (AED)</th>
-                        <th className="pb-3 text-end font-medium">Paid (AED)</th>
-                        <th className="pb-3 text-end font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800/60">
-                      {customerInvoices.map(inv => (
-                        <tr key={inv.id} className="text-zinc-300">
-                          <td className="py-3 font-semibold text-[#f5d97f]">Invoice</td>
-                          <td className="py-3 font-mono">{inv.id}</td>
-                          <td className="py-3">{inv.issueDate ? formatDate(inv.issueDate) : 'N/A'}</td>
-                          <td className="py-3 text-end font-medium">{(inv.totalAmount || 0).toLocaleString()}</td>
-                          <td className="py-3 text-end text-emerald-400 font-medium">{(inv.paidAmount || 0).toLocaleString()}</td>
-                          <td className="py-3 text-end">
-                            <Badge variant={inv.status === 'paid' ? 'emerald' : 'rose'} size="sm">
-                              {(inv.status || '').toUpperCase()}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                {statementLoading ? (
+                  <div className="p-8 text-center text-xs text-zinc-500">{language === 'ar' ? 'جارِ التحميل...' : 'Loading...'}</div>
+                ) : !accountingStatement ? (
+                  <div className="p-8 text-center text-xs text-zinc-500">{language === 'ar' ? 'تعذر تحميل الكشف.' : 'Could not load the statement.'}</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                      <StatementMini label={language === 'ar' ? 'إجمالي الفواتير' : 'Total Invoiced'} value={accountingStatement.totalInvoiced} />
+                      <StatementMini label={language === 'ar' ? 'إجمالي المدفوع' : 'Total Paid'} value={accountingStatement.totalPaid} accent="emerald" />
+                      <StatementMini label={language === 'ar' ? 'إشعارات دائنة' : 'Credit Notes'} value={accountingStatement.totalCreditNotes} />
+                      <StatementMini label={language === 'ar' ? 'إشعارات مدينة' : 'Debit Notes'} value={accountingStatement.totalDebitNotes} />
+                      <StatementMini label={language === 'ar' ? 'الرصيد المستحق' : 'Outstanding'} value={accountingStatement.outstanding} accent={accountingStatement.outstanding > 0 ? 'rose' : 'emerald'} />
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-start">
+                        <thead>
+                          <tr className="border-b border-zinc-800 text-zinc-400">
+                            <th className="pb-3 text-start font-medium">{language === 'ar' ? 'النوع' : 'Type'}</th>
+                            <th className="pb-3 text-start font-medium">{language === 'ar' ? 'المرجع' : 'Ref / Number'}</th>
+                            <th className="pb-3 text-start font-medium">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
+                            <th className="pb-3 text-end font-medium">{language === 'ar' ? 'المبلغ (درهم)' : 'Amount (AED)'}</th>
+                            <th className="pb-3 text-end font-medium">{language === 'ar' ? 'الحالة/التفاصيل' : 'Status / Details'}</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/60">
+                          {[
+                            ...accountingStatement.invoices.map(inv => ({ kind: 'invoice' as const, date: inv.issueDate, ref: inv.id, amount: inv.totalAmount, detail: `${(inv.status || '').toUpperCase()} — ${language === 'ar' ? 'مدفوع' : 'paid'} ${(inv.paidAmount || 0).toLocaleString()}` })),
+                            ...accountingStatement.payments.map(p => ({ kind: 'payment' as const, date: p.receivedAt, ref: p.id, amount: p.amount, detail: `${p.method}${p.referenceNumber ? ` — ${p.referenceNumber}` : ''}` })),
+                            ...accountingStatement.notes.map(n => ({ kind: n.type, date: n.issueDate, ref: n.id, amount: n.totalAmount, detail: n.reason }))
+                          ]
+                            .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+                            .map(row => (
+                              <tr key={`${row.kind}-${row.ref}`} className="text-zinc-300">
+                                <td className="py-3 font-semibold">
+                                  {row.kind === 'invoice' && <span className="text-[#f5d97f]">{language === 'ar' ? 'فاتورة' : 'Invoice'}</span>}
+                                  {row.kind === 'payment' && <span className="text-emerald-400">{language === 'ar' ? 'دفعة' : 'Payment'}</span>}
+                                  {row.kind === 'credit_note' && <span className="text-sky-400">{language === 'ar' ? 'إشعار دائن' : 'Credit Note'}</span>}
+                                  {row.kind === 'debit_note' && <span className="text-amber-400">{language === 'ar' ? 'إشعار مدين' : 'Debit Note'}</span>}
+                                </td>
+                                <td className="py-3 font-mono">{row.ref}</td>
+                                <td className="py-3">{row.date ? formatDate(row.date) : 'N/A'}</td>
+                                <td className="py-3 text-end font-medium">{(row.amount || 0).toLocaleString()}</td>
+                                <td className="py-3 text-end text-zinc-400">{row.detail}</td>
+                              </tr>
+                            ))}
+                          {accountingStatement.invoices.length === 0 && accountingStatement.payments.length === 0 && accountingStatement.notes.length === 0 && (
+                            <tr><td colSpan={5} className="py-8 text-center text-zinc-500">{language === 'ar' ? 'لا توجد معاملات مسجلة لهذا العميل.' : 'No transactions recorded for this customer.'}</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -792,3 +846,10 @@ export const Customer360View: React.FC = () => {
     </div>
   );
 };
+
+const StatementMini: React.FC<{ label: string; value: number; accent?: 'emerald' | 'rose' }> = ({ label, value, accent }) => (
+  <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
+    <p className="text-[10px] text-zinc-500">{label}</p>
+    <p className={`text-sm font-bold mt-1 ${accent === 'emerald' ? 'text-emerald-400' : accent === 'rose' ? 'text-rose-400' : 'text-zinc-100'}`}>{(value || 0).toLocaleString()} AED</p>
+  </div>
+);

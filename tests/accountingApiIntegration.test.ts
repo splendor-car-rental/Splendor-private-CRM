@@ -246,6 +246,32 @@ describe('handleAccountingRequest -- dispatcher routing to the correct engine fu
     expect(res.body.some((a: any) => a.code === '1000')).toBe(true);
   });
 
+  it('PUT /api/accounting/chart-of-accounts/:code creates a new custom account, then edits it, from the Chart of Accounts tab', async () => {
+    const create = await call(FINANCE_ACTOR, 'PUT', '/api/accounting/chart-of-accounts/5200', {
+      body: { name: 'Vehicle Detailing', nameAr: 'تلميع المركبات', accountClass: 'expense', normalSide: 'debit', active: true, allowDirectPosting: true }
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.body.code).toBe('5200');
+    expect(create.body.system).toBe(false);
+
+    const listAfterCreate = await call(FINANCE_ACTOR, 'GET', '/api/accounting/chart-of-accounts');
+    expect(listAfterCreate.body.some((a: any) => a.code === '5200' && a.nameAr === 'تلميع المركبات')).toBe(true);
+
+    const edit = await call(FINANCE_ACTOR, 'PUT', '/api/accounting/chart-of-accounts/5200', {
+      body: { name: 'Vehicle Detailing', nameAr: 'تلميع المركبات', accountClass: 'expense', normalSide: 'debit', active: false, allowDirectPosting: true }
+    });
+    expect(edit.statusCode).toBe(200);
+    expect(edit.body.active).toBe(false);
+  });
+
+  it('PUT /api/accounting/chart-of-accounts/:code refuses to change a system account\'s class, normal side, or direct-posting flag', async () => {
+    const res = await call(FINANCE_ACTOR, 'PUT', '/api/accounting/chart-of-accounts/1000', {
+      body: { name: 'Cash on Hand', nameAr: 'النقدية', accountClass: 'liability', normalSide: 'debit', active: true, allowDirectPosting: true }
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/cannot change accountClass/i);
+  });
+
   it('GET /api/accounting/journals lists journals', async () => {
     seedDoc('accounting_journals', 'JRN-1', { id: 'JRN-1', date: '2026-09-01', sourceType: 'Test', sourceId: 'S1', sourceAction: 'x', lines: [], totalDebit: 0, totalCredit: 0 });
     const res = await call(FINANCE_ACTOR, 'GET', '/api/accounting/journals');
@@ -344,6 +370,67 @@ describe('handleAccountingRequest -- dispatcher routing to the correct engine fu
     expect(res.body).toHaveProperty('profitLoss');
     expect(res.body).toHaveProperty('balanceSheet');
     expect(res.body).toHaveProperty('cashFlow');
+  });
+
+  it('GET /api/accounting/reports/profitLoss breaks revenue and expenses down per account, feeding the Income Statement tab', async () => {
+    seedDoc('accounting_journals', 'JRN-PL-1', {
+      id: 'JRN-PL-1', date: new Date().toISOString().slice(0, 10), periodKey: new Date().toISOString().slice(0, 7),
+      currency: 'AED', sourceType: 'Invoice', sourceId: 'INV-PL-1', sourceAction: 'post', memo: 'Test revenue',
+      status: 'posted', lines: [
+        { accountCode: '1100', debit: 1000, credit: 0 },
+        { accountCode: '4000', debit: 0, credit: 1000 }
+      ],
+      totalDebit: 1000, totalCredit: 1000, createdBy: 'x', createdByName: 'x', createdByRole: 'finance',
+      createdAt: new Date().toISOString(), postedAt: new Date().toISOString()
+    });
+    const res = await call(FINANCE_ACTOR, 'GET', '/api/accounting/reports');
+    expect(res.statusCode).toBe(200);
+    const revenueRow = res.body.profitLoss.revenueAccounts.find((r: any) => r.accountCode === '4000');
+    expect(revenueRow).toBeDefined();
+    expect(revenueRow.credit).toBe(1000);
+    expect(res.body.profitLoss.revenue).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('GET /api/accounting/customers/:id/statement returns the real invoices/payments/notes evidence for the Customer 360 statement tab', async () => {
+    seedDoc('invoices', 'INV-STMT-1', {
+      id: 'INV-STMT-1', customerId: 'CUST-STMT-1', customerName: 'Statement Test Customer',
+      issueDate: '2026-09-01', dueDate: '2026-09-15', subtotal: 1000, vatAmount: 50, totalAmount: 1050,
+      paidAmount: 500, balanceDue: 550, status: 'partially_paid', items: [], createdAt: '2026-09-01', updatedAt: '2026-09-01'
+    });
+    seedDoc('payments', 'PAY-STMT-1', {
+      id: 'PAY-STMT-1', customerId: 'CUST-STMT-1', customerName: 'Statement Test Customer', invoiceId: 'INV-STMT-1',
+      amount: 500, method: 'bank_transfer', status: 'confirmed', referenceNumber: 'REF-1', allocatedTo: [],
+      receivedBy: 'x', receivedAt: '2026-09-02', receiptNumber: 'RCPT-1', notes: '', createdAt: '2026-09-02'
+    });
+    const res = await call(FINANCE_ACTOR, 'GET', '/api/accounting/customers/CUST-STMT-1/statement');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.customerId).toBe('CUST-STMT-1');
+    expect(res.body.totalInvoiced).toBe(1050);
+    expect(res.body.totalPaid).toBe(500);
+    expect(res.body.invoices).toHaveLength(1);
+    expect(res.body.payments).toHaveLength(1);
+  });
+
+  it('GET /api/accounting/suppliers/:id/statement returns the real payables/payments evidence for the Suppliers statement modal', async () => {
+    seedDoc('accounting_payables', 'AP-STMT-1', {
+      id: 'AP-STMT-1', supplierInvoiceId: 'SINV-STMT-1', supplierId: 'SUP-STMT-1', supplierName: 'Statement Test Supplier',
+      invoiceNumber: 'INV-SUP-1', invoiceDate: '2026-09-01', dueDate: '2026-09-15', expenseAccountCode: '5170',
+      amountBeforeVat: 2000, vatAmount: 100, totalAmount: 2100, paidAmount: 2100, balance: 0, status: 'paid',
+      journalId: 'JRN-SEED-STMT', createdAt: '2026-09-01', updatedAt: '2026-09-01'
+    });
+    seedDoc('accounting_payable_payments', 'APP-STMT-1', {
+      id: 'APP-STMT-1', payableId: 'AP-STMT-1', supplierId: 'SUP-STMT-1', supplierName: 'Statement Test Supplier',
+      amount: 2100, settlementAccountCode: '1100', reference: 'PAY-REF-1', journalId: 'JRN-PAY-STMT',
+      paidBy: 'finance-1', paidByName: 'Finance Officer', paidAt: '2026-09-05'
+    });
+    const res = await call(FINANCE_ACTOR, 'GET', '/api/accounting/suppliers/SUP-STMT-1/statement');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.supplierId).toBe('SUP-STMT-1');
+    expect(res.body.totalInvoiced).toBe(2100);
+    expect(res.body.totalPaid).toBe(2100);
+    expect(res.body.outstanding).toBe(0);
+    expect(res.body.payables).toHaveLength(1);
+    expect(res.body.payments).toHaveLength(1);
   });
 
   it('derives the resource path from req.url when req.path is absent, matching how api/index.ts (Vercel) invokes this dispatcher', async () => {
