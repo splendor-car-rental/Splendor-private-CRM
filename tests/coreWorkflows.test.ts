@@ -1212,4 +1212,37 @@ describe('WhatsApp Unified Inbox (Splendor Master Rule Set, Module 13)', () => {
     expect(res.body.botActive).toBe(true);
     expect(res.body.state).toBe('BROWSING');
   });
+
+  describe('starting a brand-new outbound conversation (POST /api/whatsapp/conversations)', () => {
+    it('requires both a phone number and message text', async () => {
+      const noPhone = await request(app).post('/api/whatsapp/conversations').set(authAs(OPS_UID)).send({ text: 'hi' });
+      expect(noPhone.status).toBe(400);
+      const noText = await request(app).post('/api/whatsapp/conversations').set(authAs(OPS_UID)).send({ phone: '971500000200' });
+      expect(noText.status).toBe(400);
+    });
+
+    it('rejects a role without operational access', async () => {
+      const res = await request(app).post('/api/whatsapp/conversations').set(authAs(FINANCE_UID)).send({ phone: '971500000201', text: 'hi' });
+      expect(res.status).toBe(403);
+    });
+
+    // No WHATSAPP_ACCESS_TOKEN/PHONE_NUMBER_ID are configured anywhere in
+    // this test suite -- the real, honest state of this sandbox -- so the
+    // Cloud API send always resolves to 'not_configured'. This is exactly
+    // the case that matters most for a genuinely new contact: the real
+    // failure reason must reach the caller as a 502 with Meta's/the
+    // server's own explanation, never a false 201 "sent".
+    it('surfaces a real send failure as 502 rather than pretending the message was sent', async () => {
+      const res = await request(app).post('/api/whatsapp/conversations').set(authAs(OPS_UID)).send({ phone: '971500000202', text: 'Hello from Splendor' });
+      expect(res.status).toBe(502);
+      expect(res.body.error).toMatch(/not configured/i);
+
+      // The conversation document was still created (so it's visible/assignable in the inbox),
+      // but never falsely marked as answered by a human or carrying a message that never arrived.
+      const check = await request(app).get('/api/whatsapp/conversations/971500000202').set(authAs(OPS_UID));
+      expect(check.status).toBe(200);
+      expect(check.body.botActive).toBe(true);
+      expect(check.body.messages).toHaveLength(0);
+    });
+  });
 });
