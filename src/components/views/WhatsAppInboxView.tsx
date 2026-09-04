@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageCircle, Bot, UserCog, Send, RefreshCw, Loader2, Search, AlertTriangle } from 'lucide-react';
+import { MessageCircle, Bot, UserCog, Send, RefreshCw, Loader2, Search, AlertTriangle, Plus } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
+import { Modal } from '../common/Modal';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
 import { formatTime } from '../../lib/dateFormat';
 import type { WhatsAppConversation, WhatsAppConversationMessage, WhatsAppConversationState, WhatsAppConversationPriority } from '../../types';
 
@@ -38,7 +40,7 @@ export const WhatsAppInboxView: React.FC = () => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
   const { staffDirectory } = useAuth();
-  const { showToast } = useCRM();
+  const { customers, showToast } = useCRM();
 
   const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +53,7 @@ export const WhatsAppInboxView: React.FC = () => {
   const [threadLoading, setThreadLoading] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
+  const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const loadList = useCallback(async () => {
@@ -186,9 +189,14 @@ export const WhatsAppInboxView: React.FC = () => {
           </h2>
           <p className="text-xs text-zinc-500 mt-1">{isAr ? 'محادثات العملاء عبر واتساب، مرتبطة مباشرة بسجلات العميل والحجز' : 'Customer WhatsApp conversations, linked directly to the customer and reservation record'}</p>
         </div>
-        <button onClick={() => { loadList(); if (selectedPhone) loadThread(selectedPhone); }} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-medium">
-          <RefreshCw className="w-3.5 h-3.5" /> {isAr ? 'تحديث' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setNewMessageModalOpen(true)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold text-xs shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all">
+            <Plus className="w-3.5 h-3.5" /> {isAr ? 'محادثة جديدة' : 'New Message'}
+          </button>
+          <button onClick={() => { loadList(); if (selectedPhone) loadThread(selectedPhone); }} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-medium">
+            <RefreshCw className="w-3.5 h-3.5" /> {isAr ? 'تحديث' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {configured === false && (
@@ -353,6 +361,102 @@ export const WhatsAppInboxView: React.FC = () => {
           )}
         </div>
       </div>
+
+      <NewMessageModal
+        isOpen={newMessageModalOpen}
+        onClose={() => setNewMessageModalOpen(false)}
+        onSent={(phone) => { setNewMessageModalOpen(false); setSelectedPhone(phone); loadList(); }}
+      />
     </div>
+  );
+};
+
+/**
+ * Starts a brand-new outbound conversation for a number that has never
+ * messaged in -- the gap that otherwise leaves the inbox showing nothing to
+ * do until a customer contacts the business first. Meta only allows free
+ * text within a customer-initiated 24-hour session; outside that window the
+ * send legitimately fails (a pre-approved Message Template would be
+ * required instead), and that real failure -- Meta's own error text -- is
+ * shown here rather than a false "sent" toast.
+ */
+const NewMessageModal: React.FC<{ isOpen: boolean; onClose: () => void; onSent: (phone: string) => void }> = ({ isOpen, onClose, onSent }) => {
+  const { language } = useLanguage();
+  const isAr = language === 'ar';
+  const { customers } = useCRM();
+  const [customerId, setCustomerId] = useState('');
+  const [phone, setPhone] = useState('');
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) { setCustomerId(''); setPhone(''); setText(''); setError(null); }
+  }, [isOpen]);
+
+  const handleCustomerPick = (id: string) => {
+    setCustomerId(id);
+    const c = customers.find((x: any) => x.id === id);
+    if (c?.phone) setPhone(c.phone);
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!phone.trim() || !text.trim() || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await apiFetch('/api/whatsapp/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim(), text: text.trim() })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || (isAr ? 'فشل إرسال الرسالة.' : 'Failed to send this message.'));
+      onSent(data.phone || phone.replace(/[^0-9]/g, ''));
+    } catch (err: any) {
+      setError(err?.message || (isAr ? 'فشل إرسال الرسالة.' : 'Failed to send this message.'));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={isAr ? 'محادثة واتساب جديدة' : 'New WhatsApp Message'} maxWidth="sm">
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300">
+          {isAr
+            ? 'واتساب يسمح بإرسال نص حر فقط إذا كان العميل قد راسلكم خلال آخر 24 ساعة. إذا لم يفعل، سيفشل الإرسال برسالة من واتساب توضح السبب -- وهذا متوقع، وليس عطلاً.'
+            : "WhatsApp only allows free text if the customer messaged you within the last 24 hours. If they haven't, the send will fail with WhatsApp's own explanation -- that's expected, not a bug."}
+        </div>
+        {error && (
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-start gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'اختر عميلاً (اختياري)' : 'Pick a customer (optional)'}</label>
+          <select value={customerId} onChange={e => handleCustomerPick(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{isAr ? '-- إدخال رقم يدوياً --' : '-- Enter a number manually --'}</option>
+            {customers.map((c: any) => (
+              <option key={c.id} value={c.id}>{c.fullName} {c.phone ? `(${c.phone})` : ''}</option>
+            ))}
+          </select>
+        </div>
+        <PhoneNumberInput label={isAr ? 'رقم الواتساب *' : 'WhatsApp number *'} required value={phone} onChange={setPhone} isAr={isAr} />
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{isAr ? 'الرسالة *' : 'Message *'}</label>
+          <textarea required rows={3} value={text} onChange={e => setText(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">{isAr ? 'إلغاء' : 'Cancel'}</button>
+          <button type="submit" disabled={sending || !phone.trim() || !text.trim()} className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50">
+            {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            {isAr ? 'إرسال' : 'Send'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 };

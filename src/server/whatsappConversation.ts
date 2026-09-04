@@ -38,7 +38,7 @@ import { globalStore } from './dataStore.js';
 import { dispatchNotificationEvent } from './notificationEngine.js';
 import {
   sendWhatsAppMessage, sendWhatsAppInteractiveButtons, sendWhatsAppInteractiveList,
-  isWhatsAppConfigured
+  isWhatsAppConfigured, type WhatsAppSendResult
 } from './whatsapp.js';
 import { SplendorConnectEngine } from './splendorConnectEngine.js';
 import { recordFailedJob } from './deadLetterQueue.js';
@@ -771,6 +771,61 @@ export async function sendManualReply(
     entityType: 'WhatsAppConversation', entityId: normalized, action: 'update',
     newValue: `Manual WhatsApp reply sent by ${actor.name}: "${text.trim().slice(0, 120)}"`
   });
+}
+
+/**
+ * Staff-initiated outbound conversation from the Unified Inbox -- the
+ * counterpart to sendManualReply for a number that has never messaged in
+ * (so no conversation document exists yet, or one exists but the bot never
+ * engaged it). Unlike sendManualReply, the send RESULT is returned to the
+ * caller rather than only logged to the dead-letter queue: Meta's Cloud API
+ * only allows free-text OUTSIDE a customer-initiated 24-hour session window
+ * via a pre-approved Message Template (sendWhatsAppTemplate), so a plain
+ * text message here will frequently and legitimately fail with Meta's own
+ * "re-engagement message" error -- the caller needs that real reason, not a
+ * silent no-op, to understand why nothing arrived on the customer's phone.
+ * On success, the conversation is created/updated with botActive=false and
+ * assigned to the initiating staff member -- the bot must never pick up a
+ * thread a human just started by hand.
+ */
+export async function startConversation(
+  phone: string,
+  text: string,
+  actor: ConversationActor,
+  recordAudit: RecordAuditFn
+): Promise<{ conversation: WhatsAppConversation; sendResult: WhatsAppSendResult }> {
+  const normalized = normalizePhone(phone);
+  if (!normalized) throw new ConversationError('A valid phone number is required.');
+  if (!text.trim()) throw new ConversationError('Message text is required.');
+
+  const conversation = await ensureConversation(normalized);
+  const sendResult = await sendWhatsAppMessage(normalized, text.trim());
+
+  if (!sendResult.success) {
+    if (sendResult.status === 'failed') {
+      await recordFailedJob('whatsapp_send', { phone: normalized, message: text.trim() }, sendResult.error || 'Unknown WhatsApp send failure.');
+    }
+    return { conversation, sendResult };
+  }
+
+  const now = new Date().toISOString();
+  await appendMessage(normalized, {
+    id: `staff_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    direction: 'outbound', type: 'text', body: text.trim(),
+    sentBy: actor.uid, sentByName: actor.name, timestamp: now
+  });
+  const patch: Record<string, unknown> = {
+    botActive: false, state: 'HUMAN_ASSISTANCE',
+    assignedEmployeeId: actor.uid, assignedEmployeeName: actor.name,
+    lastOutboundAt: now, lastMessagePreview: text.trim().slice(0, 140), unread: false, updatedAt: now
+  };
+  await updateDurable(CONVERSATIONS_COLLECTION, normalized, patch);
+  await recordAudit({
+    userId: actor.uid, userName: actor.name, userRole: actor.role,
+    entityType: 'WhatsAppConversation', entityId: normalized, action: 'create',
+    newValue: `New WhatsApp conversation started by ${actor.name}: "${text.trim().slice(0, 120)}"`
+  });
+  return { conversation: { ...conversation, ...(patch as Partial<WhatsAppConversation>) }, sendResult };
 }
 
 export async function markConversationRead(phone: string): Promise<void> {

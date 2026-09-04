@@ -105,7 +105,7 @@ import {
 } from './src/server/vehicleInspections.js';
 import {
   processInboundWhatsAppMessage, getConversation, listConversations, listConversationMessages,
-  assignConversation, setConversationBotActive, sendManualReply, markConversationRead,
+  assignConversation, setConversationBotActive, sendManualReply, startConversation, markConversationRead,
   normalizePhone, ConversationError
 } from './src/server/whatsappConversation.js';
 import {
@@ -5339,6 +5339,34 @@ app.post('/api/whatsapp/webhook', webhookRateLimiter(300), asyncHandler(async (r
 function conversationErrorStatus(message: string): number {
   return message.includes('No conversation found') ? 404 : 409;
 }
+
+// Staff-initiated outbound conversation -- the Unified Inbox otherwise only
+// ever shows numbers that messaged in first, since the bot/webhook is the
+// only other creator of a conversation document. Meta's Cloud API rejects
+// free text outside a customer-initiated 24-hour session window (a
+// pre-approved Message Template is required there instead -- see
+// sendWhatsAppTemplate in whatsapp.ts, unusable until a template is
+// registered and approved with Meta), so a 502 here with Meta's own error
+// text is the expected, honest outcome for a genuinely new contact -- never
+// silently swallowed as a false "sent".
+app.post('/api/whatsapp/conversations', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not resolve the authenticated user.' });
+  const phone = String(req.body?.phone || '').trim();
+  const text = String(req.body?.text || '').trim();
+  if (!phone) return res.status(400).json({ error: 'A phone number is required.' });
+  if (!text) return res.status(400).json({ error: 'Message text is required.' });
+  try {
+    const { conversation, sendResult } = await startConversation(phone, text, actor, recordAudit);
+    if (!sendResult.success) {
+      return res.status(502).json({ error: sendResult.error || 'Failed to send this message.', conversation });
+    }
+    res.status(201).json(conversation);
+  } catch (err) {
+    if (err instanceof ConversationError) return res.status(conversationErrorStatus(err.message)).json({ error: err.message });
+    throw err;
+  }
+}));
 
 app.get('/api/whatsapp/conversations', requireRole('ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
   const state = typeof req.query.state === 'string' ? (req.query.state as any) : undefined;
