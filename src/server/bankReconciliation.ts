@@ -15,8 +15,8 @@
 // -- that only ever happens in server.ts's POST /api/bank-transactions/:id
 // /reconcile, called by a human, one transaction at a time.
 
-import type { BankMatchClassification, BankTransaction, Customer, Invoice, Payment, UnmatchedCrmPaymentReportEntry } from '../types';
-import type { ParsedBankStatementRow } from './bankStatementParsers';
+import type { BankMatchClassification, BankTransaction, Customer, Invoice, Payment, UnmatchedCrmPaymentReportEntry } from '../types/index.js';
+import type { ParsedBankStatementRow } from './bankStatementParsers.js';
 
 export interface ClassifyBankRowInput {
   row: ParsedBankStatementRow;

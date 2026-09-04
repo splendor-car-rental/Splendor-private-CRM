@@ -31,25 +31,25 @@
 // handler, before this function is ever called a second time for that id.
 
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import type { RecordAuditFn } from './businessRules';
-import { globalStore } from './dataStore';
-import { dispatchNotificationEvent } from './notificationEngine';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import type { RecordAuditFn } from './businessRules.js';
+import { globalStore } from './dataStore.js';
+import { dispatchNotificationEvent } from './notificationEngine.js';
 import {
   sendWhatsAppMessage, sendWhatsAppInteractiveButtons, sendWhatsAppInteractiveList,
   isWhatsAppConfigured
-} from './whatsapp';
-import { SplendorConnectEngine } from './splendorConnectEngine';
-import { recordFailedJob } from './deadLetterQueue';
+} from './whatsapp.js';
+import { SplendorConnectEngine } from './splendorConnectEngine.js';
+import { recordFailedJob } from './deadLetterQueue.js';
 import {
   WHATSAPP_CATEGORY_LABELS, ALL_VEHICLE_CATEGORIES, RESTART_COMMANDS, HUMAN_HELP_COMMANDS,
   WHATSAPP_ACTION_IDS
-} from '../config/whatsappCatalog';
+} from '../config/whatsappCatalog.js';
 import type {
   Customer, WhatsAppConversation, WhatsAppConversationState, WhatsAppConversationMessage,
   WhatsAppConversationDraft, WhatsAppCustomerMatchStatus, VehicleCategory
-} from '../types';
+} from '../types/index.js';
 
 export class ConversationError extends PersistenceError {
   constructor(message: string) {

@@ -1,4 +1,4 @@
-import type { VehicleCategory } from '../types';
+import type { VehicleCategory } from '../types/index.js';
 
 /**
  * Static copy/config for the WhatsApp conversational flow -- category

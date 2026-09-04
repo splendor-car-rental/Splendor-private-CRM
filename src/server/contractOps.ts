@@ -1,9 +1,9 @@
-import { runIdempotent } from './idempotency';
-import { AvailabilityConflictError } from './availability';
-import { issueNextNumber } from './idGenerator';
-import { PersistenceError } from './persistence';
-import { calculateVatOnNet } from '../config/tax';
-import type { AuditLog, Contract, Customer, Vehicle } from '../types';
+import { runIdempotent } from './idempotency.js';
+import { AvailabilityConflictError } from './availability.js';
+import { issueNextNumber } from './idGenerator.js';
+import { PersistenceError } from './persistence.js';
+import { calculateVatOnNet } from '../config/tax.js';
+import type { AuditLog, Contract, Customer, Vehicle } from '../types/index.js';
 
 // Server-authoritative rental-contract draft creation (POST /api/contracts).
 //

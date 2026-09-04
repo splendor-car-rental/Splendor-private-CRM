@@ -1,4 +1,4 @@
-import { NotificationCategory } from '../types';
+import { NotificationCategory } from '../types/index.js';
 
 /**
  * Every action/event/milestone across the CRM that can be toggled on/off in

@@ -1,8 +1,8 @@
-import { runDurableTransaction, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { globalStore } from './dataStore';
-import { RecordAuditFn } from './businessRules';
-import type { Deposit } from '../types';
+import { runDurableTransaction, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { globalStore } from './dataStore.js';
+import { RecordAuditFn } from './businessRules.js';
+import type { Deposit } from '../types/index.js';
 
 /**
  * Security deposit create/refund -- extracted, behavior-preserving, from

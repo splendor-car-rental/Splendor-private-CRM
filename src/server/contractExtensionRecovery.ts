@@ -1,4 +1,4 @@
-import { UAE_VAT_RATE, calculateVatOnNet } from '../config/tax';
+import { UAE_VAT_RATE, calculateVatOnNet } from '../config/tax.js';
 
 export interface ContractExtensionActor {
   uid: string;

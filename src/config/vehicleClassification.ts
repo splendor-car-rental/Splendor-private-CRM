@@ -1,7 +1,7 @@
 import type {
   VehicleBodyStyle, VehicleClassTier, VehicleSuvClass, VehiclePerformanceClass,
   VehicleRentalSegment, VehicleUsageType, VehicleDrivetrain, VehicleRoofType, Vehicle
-} from '../types';
+} from '../types/index.js';
 
 /**
  * SPLENDOR Vehicle Master Profile -- centralized classification dropdowns.

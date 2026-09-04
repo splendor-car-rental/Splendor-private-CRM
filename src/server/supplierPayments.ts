@@ -1,11 +1,11 @@
-import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
 import type {
   PurchaseOrder, SupplierPaymentRequest, SupplierPaymentTrack, ProcurementPaymentMethod,
   AdvanceSettlement, ProcurementOperation, UserRole
-} from '../types';
+} from '../types/index.js';
 
 // ----------------------------------------------------
 // SUPPLIER PAYMENTS: post-verification vs advance tracks (Splendor Procurement, Phase 1)

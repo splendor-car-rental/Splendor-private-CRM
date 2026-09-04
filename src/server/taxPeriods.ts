@@ -1,15 +1,15 @@
 import crypto from 'node:crypto';
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { accountingPeriodBounds, buildVatSummary, money } from '../lib/accounting';
-import { listJournals } from './accounting';
-import { getExtendedPostingGaps } from './extendedPostingGaps';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { accountingPeriodBounds, buildVatSummary, money } from '../lib/accounting.js';
+import { listJournals } from './accounting.js';
+import { getExtendedPostingGaps } from './extendedPostingGaps.js';
 import {
   createProcurementApproval, registerApprovalHandler,
   type ProcurementApprovalRequest, type ProcurementApprovalActor
-} from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
-import type { JournalEntry, PostingGap, TaxPeriod } from '../accounting/types';
+} from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { JournalEntry, PostingGap, TaxPeriod } from '../accounting/types.js';
 
 // ----------------------------------------------------
 // TAX / VAT GOVERNANCE -- period review workflow (Splendor OS 3.0, P2)

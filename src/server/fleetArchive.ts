@@ -1,5 +1,5 @@
 import admin from 'firebase-admin';
-import { recordDurableAudit } from './durableAudit';
+import { recordDurableAudit } from './durableAudit.js';
 
 const OPERATIVE_CONTRACT_STATUSES = new Set(['approved', 'signed', 'active']);
 

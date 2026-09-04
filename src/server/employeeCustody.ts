@@ -1,8 +1,8 @@
-import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
-import type { EmployeeCustody, EmployeeCustodyMovement, EmployeeExpense, EmployeeExpenseFundingSource, EmployeeExpenseRejection, UserRole } from '../types';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { EmployeeCustody, EmployeeCustodyMovement, EmployeeExpense, EmployeeExpenseFundingSource, EmployeeExpenseRejection, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // EMPLOYEE CUSTODY / FLOAT + EXPENSES (Splendor Procurement, Phase 1)

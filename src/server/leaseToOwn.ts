@@ -1,25 +1,25 @@
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, runDurableTransaction, runDurableBatch, PersistenceError, type BatchOp } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { runIdempotentCreate, type IdempotentOutcome } from './idempotency';
-import { reserveVehicleSlot, placeTemporaryHold, releaseTemporaryHold, AvailabilityConflictError } from './availability';
-import { checkBlocklist } from './blocklist';
-import { createApprovalRequest, decideApprovalRequest, ApprovalError } from './approvals';
-import { startInspection, getInspection, listInspections, InspectionError } from './vehicleInspections';
-import { dispatchCustomerNotification } from './notificationEngine';
-import type { RecordAuditFn, RuleChangeActor } from './businessRules';
+import { createDurable, updateDurable, runDurableTransaction, runDurableBatch, PersistenceError, type BatchOp } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { runIdempotentCreate, type IdempotentOutcome } from './idempotency.js';
+import { reserveVehicleSlot, placeTemporaryHold, releaseTemporaryHold, AvailabilityConflictError } from './availability.js';
+import { checkBlocklist } from './blocklist.js';
+import { createApprovalRequest, decideApprovalRequest, ApprovalError } from './approvals.js';
+import { startInspection, getInspection, listInspections, InspectionError } from './vehicleInspections.js';
+import { dispatchCustomerNotification } from './notificationEngine.js';
+import type { RecordAuditFn, RuleChangeActor } from './businessRules.js';
 import {
   computeLtoFinancialOffer, computeOutstandingBalance, computeSettlementAmount,
   computeInstallmentStatus, countConsecutiveMissedInstallments, getLtoMinCustomerAgeYears,
   getLtoApplicationHoldDays, getLtoConsecutiveMissedInstallmentsForDefault, LtoPolicyNotConfiguredError,
   type LtoOfferInput
-} from './leaseToOwnPolicy';
-import { globalStore } from './dataStore';
+} from './leaseToOwnPolicy.js';
+import { globalStore } from './dataStore.js';
 import type {
   LtoApplication, LtoApplicationStatus, LtoEligibilityCheck, LtoFinancialOffer,
   LtoContractDetails, LtoStatus, LtoInstallment, LtoInstallmentStatus,
   LtoSettlementRequest, Contract, Customer, Vehicle, UserRole, Payment
-} from '../types';
+} from '../types/index.js';
 
 // ----------------------------------------------------
 // LEASE-TO-OWN (Splendor Private Mobility Operating System)

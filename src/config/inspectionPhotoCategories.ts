@@ -1,4 +1,4 @@
-import type { InspectionPhotoCategory, InspectionType } from '../types';
+import type { InspectionPhotoCategory, InspectionType } from '../types/index.js';
 
 /**
  * Which photo categories are required to COMPLETE an inspection of a given

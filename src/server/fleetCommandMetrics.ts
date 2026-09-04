@@ -1,4 +1,4 @@
-import type { Contract, Reservation, Vehicle } from '../types';
+import type { Contract, Reservation, Vehicle } from '../types/index.js';
 
 export interface FleetCommandMetrics {
   totalVehicles: number;

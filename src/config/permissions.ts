@@ -1,4 +1,4 @@
-import { UserRole } from '../types';
+import { UserRole } from '../types/index.js';
 
 export const ROLE_RANK: Record<UserRole, number> = {
   ceo: 0,

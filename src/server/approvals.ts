@@ -1,9 +1,9 @@
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { applyRuleValue, RuleChangeActor, RecordAuditFn } from './businessRules';
-import { canDecideApproval } from '../config/businessRules';
-import type { ApprovalRequest, ApprovalRequestStatus, ApprovalRequestType, UserRole } from '../types';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { applyRuleValue, RuleChangeActor, RecordAuditFn } from './businessRules.js';
+import { canDecideApproval } from '../config/businessRules.js';
+import type { ApprovalRequest, ApprovalRequestStatus, ApprovalRequestType, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // FOUR-EYES APPROVAL + SEGREGATION OF DUTIES (Phase 23.2)

@@ -1,12 +1,12 @@
-import { createDurable, runDurableTransaction, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { runIdempotentCreate, type IdempotentOutcome } from './idempotency';
-import { REQUIRED_PHOTO_CATEGORIES_BY_TYPE, REQUIRES_CUSTOMER_ACKNOWLEDGEMENT } from '../config/inspectionPhotoCategories';
-import type { RecordAuditFn } from './businessRules';
+import { createDurable, runDurableTransaction, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { runIdempotentCreate, type IdempotentOutcome } from './idempotency.js';
+import { REQUIRED_PHOTO_CATEGORIES_BY_TYPE, REQUIRES_CUSTOMER_ACKNOWLEDGEMENT } from '../config/inspectionPhotoCategories.js';
+import type { RecordAuditFn } from './businessRules.js';
 import type {
   VehicleInspection, InspectionType, InspectionDamageMarker, InspectionPhoto,
   DamageClassification, DamageLiabilityStatus, InspectionPhotoCategory, UserRole
-} from '../types';
+} from '../types/index.js';
 
 // ----------------------------------------------------
 // VEHICLE INSPECTION & PHOTO EVIDENCE (Splendor Master Rule Set, Module 08)

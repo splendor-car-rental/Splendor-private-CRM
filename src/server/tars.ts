@@ -1,8 +1,8 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { TARS_DEADLINE_HOURS } from '../config/procurement';
-import type { RecordAuditFn } from './businessRules';
-import type { TarsRecord, UserRole } from '../types';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { TARS_DEADLINE_HOURS } from '../config/procurement.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { TarsRecord, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // TARS (Splendor Procurement, Phase 1)

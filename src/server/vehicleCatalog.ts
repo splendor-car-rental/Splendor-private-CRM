@@ -1,14 +1,14 @@
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createApprovalRequest, decideApprovalRequest, ApprovalError } from './approvals';
-import { RuleChangeActor, RecordAuditFn } from './businessRules';
-import { DEFAULT_MANUFACTURERS, DEFAULT_CATALOG_MODELS } from '../config/vehicleCatalog';
-import { UAE_CATALOG_EXPANSION_MANUFACTURERS, UAE_CATALOG_EXPANSION_MODELS } from '../config/vehicleCatalogExpansion';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createApprovalRequest, decideApprovalRequest, ApprovalError } from './approvals.js';
+import { RuleChangeActor, RecordAuditFn } from './businessRules.js';
+import { DEFAULT_MANUFACTURERS, DEFAULT_CATALOG_MODELS } from '../config/vehicleCatalog.js';
+import { UAE_CATALOG_EXPANSION_MANUFACTURERS, UAE_CATALOG_EXPANSION_MODELS } from '../config/vehicleCatalogExpansion.js';
 import type {
   VehicleManufacturer, VehicleCatalogModel, VehicleCatalogUpdateRequest,
   VehicleCatalogRequestStatus, ApprovalRequestStatus
-} from '../types';
+} from '../types/index.js';
 
 /**
  * SPLENDOR Master Vehicle Catalog -- server-side engine.

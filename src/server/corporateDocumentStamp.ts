@@ -1,4 +1,4 @@
-import { SPLENDOR_RED_STAMP_SVG } from './assets/splendorStampAsset';
+import { SPLENDOR_RED_STAMP_SVG } from './assets/splendorStampAsset.js';
 
 const STAMP_DATA_URI =
   `data:image/svg+xml;base64,${Buffer.from(SPLENDOR_RED_STAMP_SVG, 'utf8').toString('base64')}`;

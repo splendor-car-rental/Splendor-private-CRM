@@ -1,4 +1,4 @@
-import { auth } from '../firebase/config';
+import { auth } from '../firebase/config.js';
 
 interface IdempotencyCacheEntry {
   key: string;

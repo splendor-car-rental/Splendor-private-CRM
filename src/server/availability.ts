@@ -1,7 +1,7 @@
-import { PersistenceError, runDurableTransaction } from './persistence';
-import { runIdempotent } from './idempotency';
-import { getRuleValue } from './businessRules';
-import { issueNextNumber } from './idGenerator';
+import { PersistenceError, runDurableTransaction } from './persistence.js';
+import { runIdempotent } from './idempotency.js';
+import { getRuleValue } from './businessRules.js';
+import { issueNextNumber } from './idGenerator.js';
 
 const DEFAULT_BOOKING_BUFFER_HOURS = 3;
 const DEFAULT_SOFT_HOLD_MINUTES = 10;

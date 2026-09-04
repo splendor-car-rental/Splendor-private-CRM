@@ -1,8 +1,8 @@
 import admin from 'firebase-admin';
-import { getPostingGaps, listJournals } from './accounting';
-import { money } from '../lib/accounting';
-import type { AdditionalCharge, Deposit } from '../types';
-import type { JournalEntry, PostingGap } from '../accounting/types';
+import { getPostingGaps, listJournals } from './accounting.js';
+import { money } from '../lib/accounting.js';
+import type { AdditionalCharge, Deposit } from '../types/index.js';
+import type { JournalEntry, PostingGap } from '../accounting/types.js';
 
 function firestore() {
   if (admin.apps.length === 0) throw new Error('Firebase Admin is not initialized.');

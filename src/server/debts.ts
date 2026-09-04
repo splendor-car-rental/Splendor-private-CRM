@@ -1,9 +1,9 @@
-import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { fingerprintRequest, runIdempotent } from './idempotency';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
-import type { Debt, DebtType, DebtSettlementMovement, DebtCorrection, DebtCancellation, ProcurementPaymentMethod, UserRole } from '../types';
+import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { fingerprintRequest, runIdempotent } from './idempotency.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { Debt, DebtType, DebtSettlementMovement, DebtCorrection, DebtCancellation, ProcurementPaymentMethod, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // DEBTS / CHARGES: fixed type list, lifecycle, multiple settlement methods

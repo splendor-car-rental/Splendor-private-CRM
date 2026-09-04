@@ -1,4 +1,4 @@
-import type { Invoice } from '../types';
+import type { Invoice } from '../types/index.js';
 import type {
   AccountingAccount,
   AgingBucketKey,
@@ -13,7 +13,7 @@ import type {
   TrialBalanceRow,
   VatSummary,
   VehicleProfitabilityRow
-} from '../accounting/types';
+} from '../accounting/types.js';
 
 const EPSILON = 0.005;
 

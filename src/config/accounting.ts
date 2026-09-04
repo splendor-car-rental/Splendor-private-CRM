@@ -1,4 +1,4 @@
-import type { AccountingAccount } from '../accounting/types';
+import type { AccountingAccount } from '../accounting/types.js';
 
 // Controlled default chart. These definitions are code defaults only: they
 // are NOT seeded into Firestore and never overwrite an existing production

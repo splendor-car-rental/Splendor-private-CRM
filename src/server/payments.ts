@@ -1,10 +1,10 @@
-import { runIdempotent, IdempotentOutcome } from './idempotency';
-import { issueNextNumber } from './idGenerator';
-import { PersistenceError } from './persistence';
-import { globalStore } from './dataStore';
-import { RecordAuditFn } from './businessRules';
-import { dispatchNotificationEvent, dispatchCustomerNotification } from './notificationEngine';
-import type { Payment } from '../types';
+import { runIdempotent, IdempotentOutcome } from './idempotency.js';
+import { issueNextNumber } from './idGenerator.js';
+import { PersistenceError } from './persistence.js';
+import { globalStore } from './dataStore.js';
+import { RecordAuditFn } from './businessRules.js';
+import { dispatchNotificationEvent, dispatchCustomerNotification } from './notificationEngine.js';
+import type { Payment } from '../types/index.js';
 
 /**
  * Payment recording -- extracted, behavior-preserving, from the body of

@@ -1,14 +1,14 @@
 import crypto from 'node:crypto';
 import admin from 'firebase-admin';
-import { fingerprintRequest, runIdempotent } from './idempotency';
-import { PersistenceError } from './persistence';
-import type { RecordAuditFn } from './businessRules';
-import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
-import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting';
-import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting';
-import { globalStore } from './dataStore';
-import type { AdditionalCharge, Deposit } from '../types';
-import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/types';
+import { fingerprintRequest, runIdempotent } from './idempotency.js';
+import { PersistenceError } from './persistence.js';
+import type { RecordAuditFn } from './businessRules.js';
+import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting.js';
+import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting.js';
+import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting.js';
+import { globalStore } from './dataStore.js';
+import type { AdditionalCharge, Deposit } from '../types/index.js';
+import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/types.js';
 
 const JOURNAL_COLLECTION = 'accounting_journals';
 const PERIOD_COLLECTION = 'accounting_periods';

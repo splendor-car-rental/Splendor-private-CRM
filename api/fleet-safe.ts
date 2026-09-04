@@ -1,6 +1,5 @@
 import type { Request, Response } from 'express';
-// @ts-ignore TS5097 -- Vercel bundles the TypeScript Express app from source.
-import app from '../server.ts';
+import app from '../server.js';
 import { globalStore } from '../src/server/dataStore.js';
 import { getVerifiedActiveStaff } from '../src/server/activeStaffAuth.js';
 import { archiveVehicle, FleetArchiveError } from '../src/server/fleetArchive.js';

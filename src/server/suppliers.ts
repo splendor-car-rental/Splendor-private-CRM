@@ -1,10 +1,10 @@
 import {
   SUPPLIER_FIELD_TIERS, SUPPLIER_OPERATION_BLOCKING_FIELDS
-} from '../config/procurement';
+} from '../config/procurement.js';
 import type {
   Supplier, SupplierFieldKey, SupplierCompletenessSummary, SupplierEligibilityResult,
   SupplierOperationTypeKey
-} from '../types';
+} from '../types/index.js';
 
 // ----------------------------------------------------
 // SUPPLIERS MODULE (Splendor Procurement, Phase 1, rules 4-7)

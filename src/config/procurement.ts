@@ -1,7 +1,7 @@
-import { UserRole } from '../types';
+import { UserRole } from '../types/index.js';
 import type {
   SupplierOperationTypeDef, SupplierOperationTypeKey, SupplierFieldKey, SupplierFieldTier
-} from '../types';
+} from '../types/index.js';
 
 // ============================================================================
 // PROCUREMENT & SUPPLIER MANAGEMENT -- fixed/configurable lists (Phase 1)
