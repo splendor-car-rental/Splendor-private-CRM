@@ -5682,23 +5682,29 @@ app.post('/api/blocklist', requireRole('ceo', 'admin', 'operations'), asyncHandl
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || null) as string | null;
   try {
-    const entry = await createBlocklistEntry({
+    const { result: entry, replayed } = await runIdempotentCreate('blocklist-entry-create', idempotencyKey, fingerprintRequest(body), async () => createBlocklistEntry({
       identifierType: body.identifierType,
       identifierValue: body.identifierValue,
       identifierCountry: body.identifierCountry,
       customerName: body.customerName,
       nationality: body.nationality,
+      mobile: body.mobile,
+      idExpiryDate: body.idExpiryDate,
+      incidentDate: body.incidentDate,
       tier: body.tier,
       reason: body.reason,
       conditionalNote: body.conditionalNote,
+      banType: body.banType,
+      expiryDate: body.expiryDate,
       createdBy: actor.uid,
       createdByName: actor.name,
       createdByRole: actor.role as any
-    }, recordAudit);
-    res.status(201).json(entry);
+    }, recordAudit));
+    res.status(replayed ? 200 : 201).json(entry);
   } catch (error: any) {
-    if (error instanceof BlocklistError) return res.status(400).json({ error: error.message });
+    if (error instanceof BlocklistError || error instanceof IdempotencyConflictError) return res.status(400).json({ error: error.message });
     throw error;
   }
 }));
