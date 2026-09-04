@@ -20,7 +20,7 @@ import { assignPlateAtomically } from './src/server/atomicPlateAssignment.js';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine.js';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp.js';
 import { NOTIFICATION_EVENTS } from './src/config/notificationEvents.js';
-import { issueNextNumber, resetNumbering } from './src/server/idGenerator.js';
+import { issueNextNumber } from './src/server/idGenerator.js';
 import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence.js';
 import { asyncHandler } from './src/server/asyncHandler.js';
 import { reserveVehicleSlot, AvailabilityConflictError, placeTemporaryHold, releaseTemporaryHold } from './src/server/availability.js';

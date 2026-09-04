@@ -1,5 +1,4 @@
 import { TrafficFine, FineStatus, FineSource, Contract, Customer, Vehicle } from '../types/index.js';
-import { DataStore } from './dataStore.js';
 
 export interface FineImportRow {
   ticketNumber: string;

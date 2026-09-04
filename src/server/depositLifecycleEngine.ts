@@ -1,4 +1,4 @@
-import { SecurityDepositRecord, DepositLifecycleStatus, Contract, Customer, TrafficFine, TollTransaction } from '../types/index.js';
+import { SecurityDepositRecord, DepositLifecycleStatus, Contract, Customer } from '../types/index.js';
 
 export class DepositLifecycleEngine {
   public static readonly STANDARD_POST_RENTAL_HOLD_DAYS = 14;

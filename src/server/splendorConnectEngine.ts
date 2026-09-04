@@ -6,7 +6,7 @@ import {
   Contract, Reservation, Customer, Lead, AuditLog
 } from '../types/index.js';
 import { globalStore } from './dataStore.js';
-import { updateDurable, createDurable, PersistenceError } from './persistence.js';
+import { updateDurable, createDurable } from './persistence.js';
 import { issueNextNumber } from './idGenerator.js';
 import { reserveVehicleSlot, AvailabilityConflictError } from './availability.js';
 
