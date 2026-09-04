@@ -167,8 +167,12 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
     setForm(updated);
     if (field === 'email' || field === 'phone' || field === 'idNumber' || field === 'licenseNumber') {
       if (updated.email.length > 4 || updated.phone.length > 6) {
-        const dup = await checkDuplicateCustomer(updated.email, updated.phone, updated.licenseNumber, updated.idNumber);
-        setDuplicateWarning(dup.hasDuplicate ? dup.matches : null);
+        try {
+          const dup = await checkDuplicateCustomer(updated.email, updated.phone, updated.licenseNumber, updated.idNumber);
+          setDuplicateWarning(dup.hasDuplicate ? dup.matches : null);
+        } catch (err) {
+          console.error('Duplicate customer check failed:', err);
+        }
       }
     }
   };

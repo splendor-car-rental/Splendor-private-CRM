@@ -1071,7 +1071,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const res = await fetch('/api/bank-batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(batchData)
+      body: JSON.stringify({ ...batchData, confirm: true })
     });
     let data: { batch: BankImportBatch & { totalTransactions: number; bankName: string } };
     try {
@@ -1670,10 +1670,34 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const reclassifyBankTransaction = async (txnId: string, classification: any, reason: string) => {
-    await FirestoreService.update(COLLECTIONS.BANK_TRANSACTIONS, txnId, { classification, reclassificationReason: reason, reclassifiedAt: new Date().toISOString() });
-    setBankTransactions(prev => prev.map(t => t.id === txnId ? { ...t, classification, reclassificationReason: reason } : t));
+    const res = await fetch(`/api/bank-transactions/${txnId}/reclassify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classification, reason })
+    });
+    let data: { transaction: BankTransaction };
+    try {
+      data = await parseApiResponse<{ transaction: BankTransaction }>(res, 'Failed to reclassify transaction.');
+    } catch (err: any) {
+      showToast('Reclassification Failed', err.message, 'error');
+      throw err;
+    }
+    await fetchData();
+    showToast('Transaction Reclassified', `Reclassified ${data.transaction.reference} successfully.`);
   };
-  const previewBankImport = async (file: any) => ({ fileName: file?.fileName || file?.name || 'bank-import', transactions: [], warnings: [] });
+  const previewBankImport = async (file: any) => {
+    const res = await fetch('/api/bank-batches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(file)
+    });
+    try {
+      return await parseApiResponse<{ batch: BankImportBatch; transactions: BankTransaction[]; warnings: string[] }>(res, 'Failed to preview bank statement.');
+    } catch (err: any) {
+      showToast('Preview Failed', err.message, 'error');
+      throw err;
+    }
+  };
   const confirmBankImport = async (file: any) => { await uploadBankBatch(file); return { confirmed: true, fileName: file?.fileName || file?.name || 'bank-import' }; };
   const startVehicleMaintenance = async (vehicleId: string, reason: string) => { const updated = await updateVehicle(vehicleId, { maintenanceStatus: 'IN_PROGRESS', maintenanceReason: reason, maintenanceStartedAt: new Date().toISOString() } as any); return updated; };
   const logVehicleMaintenance = async (vehicleId: string, mileageAtService: number, notes: string) => { const updated = await updateVehicle(vehicleId, { lastMaintenanceMileage: mileageAtService, lastMaintenanceNotes: notes, lastMaintenanceAt: new Date().toISOString(), maintenanceStatus: 'COMPLETED' } as any); return updated; };

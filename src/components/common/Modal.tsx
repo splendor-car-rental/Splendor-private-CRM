@@ -1,5 +1,8 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 interface ModalProps {
   isOpen: boolean;
@@ -20,13 +23,43 @@ export const Modal: React.FC<ModalProps> = ({
   maxWidth = '2xl',
   actions
 }) => {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) onClose();
+      if (!isOpen) return;
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (isOpen) {
+      previouslyFocused.current = document.activeElement as HTMLElement | null;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      (focusable && focusable[0] ? focusable[0] : dialogRef.current)?.focus();
+    } else {
+      previouslyFocused.current?.focus();
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -50,12 +83,17 @@ export const Modal: React.FC<ModalProps> = ({
 
       {/* Dialog box */}
       <div
-        className={`relative w-full ${maxWidthClass} bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/90 flex flex-col max-h-[90vh] z-10 overflow-hidden transition-all duration-200`}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+        tabIndex={-1}
+        className={`relative w-full ${maxWidthClass} bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/90 flex flex-col max-h-[90vh] z-10 overflow-hidden transition-all duration-200 outline-none`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4.5 border-b border-zinc-800/90 bg-zinc-900/60">
           <div>
-            <h3 className="text-base font-semibold text-zinc-100 font-display tracking-tight">{title}</h3>
+            <h3 id="modal-title" className="text-base font-semibold text-zinc-100 font-display tracking-tight">{title}</h3>
             {subtitle && <p className="text-xs text-zinc-400 mt-0.5">{subtitle}</p>}
           </div>
           <button
