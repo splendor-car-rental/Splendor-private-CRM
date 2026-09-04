@@ -2,6 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     { "source": "/api/whatsapp/webhook", "destination": "/api/whatsapp-webhook" },
+    { "source": "/api/contracts/:contractId/extend", "destination": "/api/contract-extension-safe?contractId=:contractId" },
+    { "source": "/api/fleet/:vehicleId", "destination": "/api/fleet-safe?vehicleId=:vehicleId" },
     { "source": "/api/:path*", "destination": "/api" }
   ],
   "crons": [

@@ -1,13 +1,8 @@
 import type { Request, Response } from 'express';
-import admin from 'firebase-admin';
-// Vercel must bundle the TypeScript source so the Express app is available
-// inside the serverless function instead of relying on a runtime /server.js
-// file that is not deployed next to this entrypoint.
-// @ts-ignore TS5097 -- intentional Vercel bundling entrypoint.
-import app from '../server.ts';
+import { getVerifiedActiveStaff } from '../src/server/activeStaffAuth.js';
 import { assignPlateAtomically } from '../src/server/atomicPlateAssignment.js';
 import { handleAccountingRequest, handleSafeCustomerPaymentRequest, handleSafeLegacyDepositMutation } from '../src/server/accountingApi.js';
-import { createManualDepositAtomic } from '../src/server/safeManualDepositCreate.js';
+import { handleSafeManualDepositCreate } from '../src/server/safeManualDepositCreate.js';
 import { recordAccountingAudit } from '../src/server/accountingAudit.js';
 import {
   issueAndRenderCorporateDocument,
@@ -16,10 +11,25 @@ import {
   type CorporateDocumentKind
 } from '../src/server/corporateDocumentEngine.js';
 
+type ExpressApp = (req: Request, res: Response) => unknown;
+let appPromise: Promise<ExpressApp> | null = null;
+
+/** Import the legacy Express surface only when a request actually needs it. */
+async function getExpressApp(): Promise<ExpressApp> {
+  if (!appPromise) {
+    appPromise = import('../server.js').then(module => module.default as ExpressApp).catch(error => {
+      appPromise = null;
+      throw error;
+    });
+  }
+  return appPromise;
+}
+
 const CORPORATE_DOCUMENT_KINDS: CorporateDocumentKind[] = [
   'lpo', 'credit_note', 'fines_notice', 'debit_note', 'contract_extension',
   'payment_receipt', 'tax_invoice', 'simplified_tax_invoice', 'official_letter',
-  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation'
+  'vehicle_record_card', 'vehicle_exit_permit', 'account_statement', 'quotation',
+  'payment_demand_notice', 'fleet_document_renewal_schedule', 'damage_claim_notice'
 ];
 
 const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
@@ -35,35 +45,14 @@ const CORPORATE_DOCUMENT_ROLES: Record<CorporateDocumentKind, string[]> = {
   vehicle_record_card: ['ceo', 'admin', 'operations', 'fleet'],
   vehicle_exit_permit: ['ceo', 'admin', 'operations', 'fleet'],
   account_statement: ['ceo', 'admin', 'finance', 'operations', 'sales'],
-  quotation: ['ceo', 'admin', 'sales', 'operations']
+  quotation: ['ceo', 'admin', 'sales', 'operations'],
+  payment_demand_notice: ['ceo', 'admin', 'finance'],
+  fleet_document_renewal_schedule: ['ceo', 'admin', 'fleet', 'operations'],
+  damage_claim_notice: ['ceo', 'admin', 'operations', 'finance']
 };
 
-async function getVerifiedStaff(req: Request, res: Response, allowedRoles: string[]) {
-  const authorization = req.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  if (!token || admin.apps.length === 0) {
-    res.status(401).json({ error: 'Authentication required.' });
-    return null;
-  }
-
-  try {
-    const decoded = await admin.auth().verifyIdToken(token);
-    const profile = await admin.firestore().collection('users').doc(decoded.uid).get();
-    const data = profile.exists ? (profile.data() as any) : null;
-    if (!data || !allowedRoles.includes(data.role)) {
-      res.status(403).json({ error: 'You do not have permission to perform this action.' });
-      return null;
-    }
-    return { uid: decoded.uid, name: data.name || decoded.name || decoded.uid, role: data.role };
-  } catch {
-    res.status(401).json({ error: 'Invalid or expired session.' });
-    return null;
-  }
-}
-
-function idempotencyKeyFromRequest(req: Request): string | undefined {
-  const value = req.headers['idempotency-key'];
-  return Array.isArray(value) ? value[0] : value;
+async function verifiedStaff(req: Request, res: Response, roles: readonly string[]) {
+  return getVerifiedActiveStaff(req, res, roles);
 }
 
 async function handleCorporateDocuments(req: Request, res: Response) {
@@ -74,7 +63,6 @@ async function handleCorporateDocuments(req: Request, res: Response) {
       kinds: CORPORATE_DOCUMENT_KINDS.map(kind => ({ kind, ...getCorporateDocumentMeta(kind) }))
     });
   }
-
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed.' });
@@ -84,16 +72,12 @@ async function handleCorporateDocuments(req: Request, res: Response) {
   if (!body.kind || !CORPORATE_DOCUMENT_KINDS.includes(body.kind)) {
     return res.status(400).json({ error: 'Unsupported corporate document type.' });
   }
-
-  const actor = await getVerifiedStaff(req, res, CORPORATE_DOCUMENT_ROLES[body.kind]);
+  const actor = await verifiedStaff(req, res, CORPORATE_DOCUMENT_ROLES[body.kind]);
   if (!actor) return;
 
   try {
-    // Never trust a serial supplied by the browser. The engine issues the
-    // next number atomically from Firestore and returns the authoritative ID.
     const { serial: _ignoredSerial, ...safeInput } = body as any;
     const issued = await issueAndRenderCorporateDocument(safeInput);
-
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${issued.fileName}"`);
     res.setHeader('X-Document-Serial', issued.serial);
@@ -106,60 +90,35 @@ async function handleCorporateDocuments(req: Request, res: Response) {
 }
 
 async function handler(req: Request, res: Response) {
-  if (req.path === '/api/corporate-documents') {
-    return handleCorporateDocuments(req, res);
-  }
+  // req.path is an Express-only convenience -- this handler runs as a bare
+  // Vercel Node serverless function (no Express wrapping it), so req.path
+  // is not reliably populated and reading .match()/.startsWith() off it
+  // directly throws "Cannot read properties of undefined" for whichever
+  // requests hit that gap (confirmed in production runtime errors: 154
+  // occurrences crashing every one of these routes with a raw 500, with no
+  // JSON body at all -- exactly what a frontend caller then reports as "an
+  // unexpected token", "failed to load", or "nothing happens"). Deriving
+  // the path from req.url instead works the same for both real Express
+  // requests (which also have req.url) and Vercel's raw request object.
+  const path = req.path || (req.url ? req.url.split('?')[0] : '') || '';
 
-  // Finance & Accounting Control Center. The generic Express fallback also
-  // authenticates /api/* routes, but this serverless boundary resolves the
-  // actor once here so the accounting layer receives a verified uid/name/
-  // role and never accepts identity or role fields from request bodies.
-  if (req.path === '/api/accounting' || req.path.startsWith('/api/accounting/')) {
-    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+  if (path === '/api/corporate-documents') return handleCorporateDocuments(req, res);
+
+  if (path === '/api/accounting' || path.startsWith('/api/accounting/')) {
+    const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleAccountingRequest(req, res, actor);
   }
 
-  // Manual security-deposit collection is money movement. Replace the
-  // legacy create route at the production boundary so deposit + customer
-  // held balance + double-entry journal + idempotency record commit together.
-  // Gateway authorization holds do not come through this HTTP route; their
-  // signed gateway lifecycle remains separate and is never treated as cash.
-  if (req.path === '/api/deposits' && req.method === 'POST') {
-    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance', 'operations', 'sales']);
+  if (path === '/api/deposits' && req.method === 'POST') {
+    const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance', 'operations', 'sales']);
     if (!actor) return;
-    try {
-      const body = req.body || {};
-      if (body.holdType === 'gateway_authorization') {
-        return res.status(400).json({ error: 'Gateway authorization holds must be created by the signed payment-gateway lifecycle.' });
-      }
-      const result = await createManualDepositAtomic({
-        customerId: String(body.customerId || ''),
-        customerName: body.customerName,
-        contractId: body.contractId,
-        reservationId: body.reservationId,
-        amount: Number(body.amount),
-        paymentMethod: body.paymentMethod,
-        settlementAccountCode: body.settlementAccountCode,
-        holdReleaseDueDate: body.holdReleaseDueDate,
-        notes: body.notes,
-        transactionRef: body.transactionRef
-      }, actor, idempotencyKeyFromRequest(req), recordAccountingAudit);
-      return res.status(result.replayed ? 200 : 201).json(result.deposit);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Security deposit request failed.';
-      const status = message.toLowerCase().includes('idempotency-key') || message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('closed') ? 409 : 400;
-      return res.status(status).json({ error: message });
-    }
+    return handleSafeManualDepositCreate(req, res, actor, recordAccountingAudit);
   }
 
-  // Existing CRM screens historically call /api/deposits/:id/apply|refund.
-  // Intercept those exact money-moving paths here before the legacy Express
-  // fallback so they use the same atomic journal/idempotency controls as the
-  // Accounting Center without forcing a risky wholesale frontend rewrite.
-  const depositMutationMatch = req.path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);
+  const depositMutationMatch = path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);
   if (depositMutationMatch && req.method === 'POST') {
-    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+    const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleSafeLegacyDepositMutation(
       req,
@@ -170,31 +129,25 @@ async function handler(req: Request, res: Response) {
     );
   }
 
-  // Replace only the production POST /api/payments write boundary. Existing
-  // readers and verification/refund routes remain on the legacy Express
-  // app. The safe writer is backward-compatible with callers that provide a
-  // single invoiceId, and adds guarded multi-allocation + customer credit.
-  if (req.path === '/api/payments' && req.method === 'POST') {
-    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'finance']);
+  if (path === '/api/payments' && req.method === 'POST') {
+    const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleSafeCustomerPaymentRequest(req, res, actor);
   }
 
-  if (req.path === '/api/tests/run-all') {
-    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin']);
+  if (path === '/api/tests/run-all') {
+    const actor = await verifiedStaff(req, res, ['ceo', 'admin']);
     if (!actor) return;
+    const app = await getExpressApp();
     return app(req, res);
   }
 
-  const plateMatch = req.path.match(/^\/api\/fleet\/([^/]+)\/assign-plate$/);
+  const plateMatch = path.match(/^\/api\/fleet\/([^/]+)\/assign-plate$/);
   if (plateMatch && req.method === 'POST') {
-    const actor = await getVerifiedStaff(req, res, ['ceo', 'admin', 'fleet']);
+    const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'fleet']);
     if (!actor) return;
-
     const body = req.body || {};
-    if (!body.plateNumber || !body.plateCity) {
-      return res.status(400).json({ error: 'Plate number and city are required.' });
-    }
+    if (!body.plateNumber || !body.plateCity) return res.status(400).json({ error: 'Plate number and city are required.' });
 
     const result = await assignPlateAtomically({
       vehicleId: decodeURIComponent(plateMatch[1]),
@@ -205,11 +158,11 @@ async function handler(req: Request, res: Response) {
       assignedByName: actor.name,
       effectiveDate: body.effectiveDate
     });
-
     if (!result.success) return res.status(400).json({ error: result.error });
     return res.json({ success: true, vehicle: result.vehicle });
   }
 
+  const app = await getExpressApp();
   return app(req, res);
 }
 

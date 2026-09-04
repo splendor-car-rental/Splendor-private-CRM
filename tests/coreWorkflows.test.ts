@@ -58,7 +58,7 @@ vi.mock('firebase-admin', () => {
     get: async () => {
       if (collectionName === 'users') {
         const u = usersDb.get(id);
-        return { exists: !!u, data: () => u, id };
+        return { exists: !!u, data: () => (u ? { status: 'active', ...u } : u), id };
       }
       const data = collectionOf(collectionName).get(id);
       return { exists: data !== undefined, data: () => data, id };
@@ -117,17 +117,29 @@ vi.mock('firebase-admin', () => {
       };
     },
     runTransaction: async (fn: any) => {
+      // Real Firestore transactions reject any read issued after the first
+      // write in the same transaction attempt. Enforce that here too --
+      // this exact class of bug (Issue #35: a write before a later read in
+      // the same transaction) is invisible against a mock that just
+      // applies operations in call order without checking, which is why it
+      // shipped in the first place.
+      let writesStarted = false;
       const applySet = (ref: any, data: any, opts?: { merge?: boolean }) => {
         maybeFail(ref.__collection);
+        writesStarted = true;
         const col = collectionOf(ref.__collection);
         const existing = col.get(ref.id);
         col.set(ref.id, opts?.merge && existing ? { ...existing, ...data } : data);
       };
       const tx = {
-        get: async (refOrQuery: any) => refOrQuery.get(),
+        get: async (refOrQuery: any) => {
+          if (writesStarted) throw new Error('STRICT_TX_READ_AFTER_WRITE: Firestore transactions require all reads to be executed before all writes.');
+          return refOrQuery.get();
+        },
         set: (ref: any, data: any, opts?: any) => applySet(ref, data, opts),
         create: (ref: any, data: any) => {
           maybeFail(ref.__collection);
+          writesStarted = true;
           const col = collectionOf(ref.__collection);
           if (col.has(ref.id)) {
             const err: any = new Error('ALREADY_EXISTS');
@@ -136,7 +148,7 @@ vi.mock('firebase-admin', () => {
           }
           col.set(ref.id, data);
         },
-        delete: (ref: any) => collectionOf(ref.__collection).delete(ref.id)
+        delete: (ref: any) => { writesStarted = true; collectionOf(ref.__collection).delete(ref.id); }
       };
       return fn(tx, firestoreObj);
     }
@@ -249,9 +261,15 @@ describe('POST /api/contracts/:id/handover', () => {
 });
 
 describe('POST /api/contracts/:id/return', () => {
-  it('completes an active contract and frees the vehicle', async () => {
-    seedContract('CON-RETURN-1', { status: 'active' });
-    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', status: 'rented' });
+  // Issue #36: physical return is NOT financial closure. It moves the
+  // contract to settlement_pending (never straight to completed), holds
+  // the vehicle unavailable (never immediately available again), and must
+  // never itself recognize the customer's lifetimeValue -- only the
+  // separate /close event does that, exactly once.
+  it('moves an active contract to settlement_pending, holds the vehicle unavailable, and does not recognize LTV yet', async () => {
+    seedContract('CON-RETURN-1', { status: 'active', grandTotal: 4200 });
+    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', status: 'rented', totalRevenue: 0 });
+    seedDoc('customers', 'CUS-CW-1', { id: 'CUS-CW-1', lifetimeValue: 0 });
 
     const res = await request(app)
       .post('/api/contracts/CON-RETURN-1/return')
@@ -259,7 +277,9 @@ describe('POST /api/contracts/:id/return', () => {
       .send({ returnData: { endMileage: 1200, fuelLevel: 'full' } });
 
     expect(res.status).toBe(200);
-    expect(res.body.contract.status).toBe('completed');
+    expect(res.body.contract.status).toBe('settlement_pending');
+    expect(adminMock.store.get('vehicles')?.get('VEH-CW-1').status).toBe('unavailable');
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1')?.lifetimeValue || 0).toBe(0);
   });
 
   it('rejects returning a contract that was never handed over (still signed, not active)', async () => {
@@ -268,6 +288,98 @@ describe('POST /api/contracts/:id/return', () => {
       .post('/api/contracts/CON-RETURN-2/return')
       .set(authAs(OPS_UID))
       .send({ returnData: {} });
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects returning a contract that has already been returned (settlement_pending)', async () => {
+    seedContract('CON-RETURN-3', { status: 'settlement_pending' });
+    const res = await request(app)
+      .post('/api/contracts/CON-RETURN-3/return')
+      .set(authAs(OPS_UID))
+      .send({ returnData: {} });
+    expect(res.status).toBe(409);
+  });
+});
+
+describe('POST /api/contracts/:id/close', () => {
+  it('financially closes a settlement_pending contract exactly once: recognizes LTV/revenue and frees the vehicle', async () => {
+    seedContract('CON-CLOSE-1', { status: 'settlement_pending', grandTotal: 4200 });
+    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', status: 'unavailable', totalRevenue: 1000 });
+    seedDoc('customers', 'CUS-CW-1', { id: 'CUS-CW-1', lifetimeValue: 500 });
+
+    const res = await request(app)
+      .post('/api/contracts/CON-CLOSE-1/close')
+      .set(authAs(FINANCE_UID))
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.contract.status).toBe('completed');
+    expect(adminMock.store.get('vehicles')?.get('VEH-CW-1').status).toBe('available');
+    expect(adminMock.store.get('vehicles')?.get('VEH-CW-1').totalRevenue).toBe(1000 + 4200);
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1').lifetimeValue).toBe(500 + 4200);
+  });
+
+  it('rejects closing a contract that has not been returned yet (still active)', async () => {
+    seedContract('CON-CLOSE-2', { status: 'active' });
+    const res = await request(app)
+      .post('/api/contracts/CON-CLOSE-2/close')
+      .set(authAs(FINANCE_UID))
+      .send({});
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects double-closing an already-completed contract (no double LTV recognition)', async () => {
+    seedContract('CON-CLOSE-3', { status: 'completed' });
+    const res = await request(app)
+      .post('/api/contracts/CON-CLOSE-3/close')
+      .set(authAs(FINANCE_UID))
+      .send({});
+    expect(res.status).toBe(409);
+  });
+});
+
+describe('POST /api/reservations/:id/create-contract', () => {
+  // Issue #36: both contract-entry paths (direct creation, covered in
+  // tests/durablePersistence.test.ts, and this reservation-derived path)
+  // must be consistent -- neither increments totalRentals/lifetimeValue at
+  // creation. Only handover (totalRentals) and /close (lifetimeValue) do.
+  it('creates a draft contract from a reservation without incrementing rental/LTV metrics', async () => {
+    seedDoc('reservations', 'RES-CW-1', {
+      id: 'RES-CW-1', customerId: 'CUS-CW-1', customerName: 'CW Test Customer', customerPhone: '+9715000000',
+      vehicleId: 'VEH-CW-1', vehicleName: 'Test GT', vehiclePlate: 'A 11111',
+      pickupDateTime: '2026-02-01T10:00:00.000Z', returnDateTime: '2026-02-03T10:00:00.000Z',
+      pickupLocation: 'Dubai', returnLocation: 'Dubai', dailyRate: 1000, totalAmount: 2100, depositAmount: 3000,
+      notes: '', status: 'confirmed'
+    });
+    seedDoc('customers', 'CUS-CW-1', { id: 'CUS-CW-1', totalRentals: 2, lifetimeValue: 8000 });
+    seedDoc('vehicles', 'VEH-CW-1', { id: 'VEH-CW-1', vin: 'VIN-CW-1' });
+
+    const res = await request(app)
+      .post('/api/reservations/RES-CW-1/create-contract')
+      .set(authAs(OPS_UID))
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.contract.status).toBe('draft');
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1').totalRentals).toBe(2);
+    expect(adminMock.store.get('customers')?.get('CUS-CW-1').lifetimeValue).toBe(8000);
+    // Tax/VAT governance fix: the reservation's totalAmount (2100) is
+    // VAT-inclusive -- correctly backing VAT out of it gives a clean
+    // 2000 net / 100 VAT split. Before the fix, this route mistakenly
+    // applied the net-only 5% formula to the gross 2100 figure, yielding
+    // vatAmount 105 / rentalTotal 1995 -- silently overstating VAT
+    // collected and understating rental revenue on every such contract.
+    expect(res.body.contract.rentalTotal).toBeCloseTo(2000, 8);
+    expect(res.body.contract.vatAmount).toBeCloseTo(100, 8);
+    expect(res.body.contract.grandTotal).toBe(2100);
+  });
+
+  it('rejects creating a second contract from a reservation that already has one', async () => {
+    seedDoc('reservations', 'RES-CW-2', { id: 'RES-CW-2', contractId: 'CON-EXISTING', customerId: 'CUS-CW-1', vehicleId: 'VEH-CW-1' });
+    const res = await request(app)
+      .post('/api/reservations/RES-CW-2/create-contract')
+      .set(authAs(OPS_UID))
+      .send({});
     expect(res.status).toBe(409);
   });
 });
@@ -310,8 +422,10 @@ describe('POST /api/payments -- idempotent payment recording', () => {
       .set(authAs(FINANCE_UID))
       .set('Idempotency-Key', key)
       .send({ customerId: 'CUS-CW-1', amount: 500, method: 'card' });
-    expect(second.status).toBe(201);
-    expect(second.body.id).toBe(first.body.id); // same payment, not a duplicate
+    // 200, not 201: a replayed Idempotency-Key returns the original result,
+    // it does not create (and therefore must not report creating) a second one.
+    expect(second.status).toBe(200);
+    expect(second.body.paymentId).toBe(first.body.paymentId); // same payment, not a duplicate
   });
 
   it('rejects a non-positive payment amount', async () => {
@@ -323,67 +437,102 @@ describe('POST /api/payments -- idempotent payment recording', () => {
   });
 });
 
+// Deposits created through POST /api/deposits (see the accounting-payments
+// describe block below) are always already posted to accounting; a deposit
+// seeded directly (bypassing that route, as every case here does) must
+// carry the same accountingPostingStatus/accountingJournalId/
+// accountingAccountCode fields the real creation path would have set, or
+// apply/refund correctly refuse it as "not posted yet" -- that refusal is
+// itself the same real production behavior being tested (api/index.ts has
+// enforced it in production since PR #9; this file exercises the identical
+// server.ts route that used to run a separate, less-safe implementation).
+function seedPostedDeposit(id: string, overrides: Record<string, any> = {}) {
+  seedDoc('deposits', id, {
+    id, amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held',
+    accountingPostingStatus: 'posted', accountingJournalId: `JRN-SEED-${id}`, accountingAccountCode: '1100',
+    ...overrides
+  });
+}
+
+function seedApprovableCharge(id: string, overrides: Record<string, any> = {}) {
+  seedDoc('charges', id, {
+    id, type: 'fuel', description: 'Fuel shortfall', approvalStatus: 'approved',
+    totalAmount: 300, amount: 300, vatAmount: 0, timestamp: new Date().toISOString(),
+    ...overrides
+  });
+}
+
 describe('POST /api/deposits/:id/apply and /refund', () => {
   it('applies part of a held deposit against an existing, approved charge -- and marks that charge consumed', async () => {
-    seedDoc('deposits', 'DEP-APPLY-1', { id: 'DEP-APPLY-1', customerId: 'CUS-DEP-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
-    seedDoc('charges', 'CHG-DEP-1', { id: 'CHG-DEP-1', customerId: 'CUS-DEP-1', type: 'fuel', totalAmount: 300, description: 'Fuel shortfall', approvalStatus: 'approved' });
+    seedPostedDeposit('DEP-APPLY-1', { customerId: 'CUS-DEP-1' });
+    seedApprovableCharge('CHG-DEP-1', { customerId: 'CUS-DEP-1', totalAmount: 300, amount: 300 });
     const res = await request(app)
       .post('/api/deposits/DEP-APPLY-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'apply-key-1')
       .send({ applyAmount: 300, chargeId: 'CHG-DEP-1' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201); // a fresh Idempotency-Key created a new application, not a replay
     expect(res.body.deposit.appliedAmount).toBe(300);
     expect(res.body.deposit.balance).toBe(700);
     expect(adminMock.store.get('charges')?.get('CHG-DEP-1').deductedFromDepositId).toBe('DEP-APPLY-1');
   });
 
   it('refunds a held deposit', async () => {
-    seedDoc('deposits', 'DEP-REFUND-1', { id: 'DEP-REFUND-1', amount: 1000, appliedAmount: 0, refundedAmount: 0, balance: 1000, status: 'held' });
+    seedPostedDeposit('DEP-REFUND-1');
     const res = await request(app)
       .post('/api/deposits/DEP-REFUND-1/refund')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'refund-key-1')
       .send({ refundAmount: 1000 });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
     expect(res.body.deposit.refundedAmount).toBe(1000);
   });
 
   it('rejects applying more than the remaining deposit balance', async () => {
-    seedDoc('deposits', 'DEP-OVERAPPLY-1', { id: 'DEP-OVERAPPLY-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
-    seedDoc('charges', 'CHG-DEP-2', { id: 'CHG-DEP-2', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 5000, description: 'Too much', approvalStatus: 'approved' });
+    seedPostedDeposit('DEP-OVERAPPLY-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
+    seedApprovableCharge('CHG-DEP-2', { customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 5000, amount: 5000, description: 'Too much' });
     const res = await request(app)
       .post('/api/deposits/DEP-OVERAPPLY-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'overapply-key-1')
       .send({ applyAmount: 5000, chargeId: 'CHG-DEP-2' });
     expect(res.status).not.toBe(200);
+    expect(res.status).not.toBe(201);
   });
 
   it('rejects a deposit deduction with no chargeId -- never a direct deduction without a backing charge/claim', async () => {
-    seedDoc('deposits', 'DEP-NOCHG-1', { id: 'DEP-NOCHG-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedPostedDeposit('DEP-NOCHG-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
     const res = await request(app)
       .post('/api/deposits/DEP-NOCHG-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'nochg-key-1')
       .send({ applyAmount: 100, reason: 'No charge attached' });
     expect(res.status).toBe(400);
   });
 
   it('rejects deducting against a charge that is not yet approved', async () => {
-    seedDoc('deposits', 'DEP-PENDCHG-1', { id: 'DEP-PENDCHG-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
+    seedPostedDeposit('DEP-PENDCHG-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
     seedDoc('charges', 'CHG-DEP-3', { id: 'CHG-DEP-3', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, description: 'Pending review', approvalStatus: 'pending_approval' });
     const res = await request(app)
       .post('/api/deposits/DEP-PENDCHG-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'pendchg-key-1')
       .send({ applyAmount: 100, chargeId: 'CHG-DEP-3' });
     expect(res.status).toBe(400);
   });
 
   it('rejects deducting against a charge that was already deducted from a deposit', async () => {
-    seedDoc('deposits', 'DEP-REUSED-1', { id: 'DEP-REUSED-1', customerId: 'CUS-DEP-1', amount: 500, appliedAmount: 0, refundedAmount: 0, balance: 500, status: 'held' });
-    seedDoc('charges', 'CHG-DEP-4', { id: 'CHG-DEP-4', customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, description: 'Already used', approvalStatus: 'approved', deductedFromDepositId: 'DEP-SOME-OTHER' });
+    seedPostedDeposit('DEP-REUSED-1', { customerId: 'CUS-DEP-1', amount: 500, balance: 500 });
+    seedApprovableCharge('CHG-DEP-4', { customerId: 'CUS-DEP-1', type: 'damage', totalAmount: 200, amount: 200, description: 'Already used', deductedFromDepositId: 'DEP-SOME-OTHER' });
     const res = await request(app)
       .post('/api/deposits/DEP-REUSED-1/apply')
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'reused-key-1')
       .send({ applyAmount: 100, chargeId: 'CHG-DEP-4' });
-    expect(res.status).toBe(400);
+    // 409, not 400: this is a conflict with existing state (the charge was
+    // already consumed by a different deposit), the same bucket every other
+    // "already"/"duplicate" conflict in the accounting API falls into.
+    expect(res.status).toBe(409);
   });
 });
 
@@ -578,7 +727,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     const create = await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', tier: 'full', reason: 'Fraud attempt on a prior booking' });
+      .send({ identifierType: 'passport', identifierValue: 'p9988776', identifierCountry: 'united kingdom', customerName: 'Blocked Person', tier: 'full', reason: 'Fraud attempt on a prior booking' });
     expect(create.status).toBe(201);
     expect(create.body.identifierValue).toBe('P9988776'); // normalized uppercase
 
@@ -606,7 +755,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'passport', identifierValue: 'P3333333', identifierCountry: 'Germany', tier: 'full', reason: 'Unpaid fines' });
+      .send({ identifierType: 'passport', identifierValue: 'P3333333', identifierCountry: 'Germany', customerName: 'Someone Else', tier: 'full', reason: 'Unpaid fines' });
 
     const sameNumberDifferentCountry = await request(app)
       .post('/api/customers')
@@ -619,7 +768,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'emirates_id', identifierValue: '784-1111-1111111-1', tier: 'conditional', conditionalNote: 'Requires a 5,000 AED raised deposit and operations-manager sign-off.', reason: 'Minor prior damage dispute, resolved' });
+      .send({ identifierType: 'emirates_id', identifierValue: '784-1111-1111111-1', customerName: 'Conditional Customer', tier: 'conditional', conditionalNote: 'Requires a 5,000 AED raised deposit and operations-manager sign-off.', reason: 'Minor prior damage dispute, resolved' });
 
     const res = await request(app)
       .post('/api/customers')
@@ -633,7 +782,7 @@ describe('Security Blocklist / Watchlist (RULE-B01-B05, Splendor Master Rule Set
     const create = await request(app)
       .post('/api/blocklist')
       .set(authAs(OPS_UID))
-      .send({ identifierType: 'emirates_id', identifierValue: '784-2222-2222222-2', tier: 'full', reason: 'Reckless driving' });
+      .send({ identifierType: 'emirates_id', identifierValue: '784-2222-2222222-2', customerName: 'Unblocked Customer', tier: 'full', reason: 'Reckless driving' });
 
     const unblockReq = await request(app)
       .post(`/api/blocklist/${create.body.id}/unblock-requests`)

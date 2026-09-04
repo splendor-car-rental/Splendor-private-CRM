@@ -16,7 +16,10 @@ const DOCUMENTS: Array<{ kind: CorporateDocumentKind; ar: string; en: string }> 
   { kind: 'vehicle_record_card', ar: 'بطاقة مركبة', en: 'Vehicle Record Card' },
   { kind: 'vehicle_exit_permit', ar: 'تصريح خروج مركبة خارج الدولة', en: 'Vehicle Exit Permit' },
   { kind: 'account_statement', ar: 'كشف حساب', en: 'Account Statement' },
-  { kind: 'quotation', ar: 'عرض سعر', en: 'Quotation' }
+  { kind: 'quotation', ar: 'عرض سعر', en: 'Quotation' },
+  { kind: 'payment_demand_notice', ar: 'إنذار بالسداد', en: 'Payment Demand Notice' },
+  { kind: 'fleet_document_renewal_schedule', ar: 'جدول تجديد وثائق الأسطول', en: 'Fleet Document Renewal Schedule' },
+  { kind: 'damage_claim_notice', ar: 'مطالبة أضرار', en: 'Damage Claim Notice' }
 ];
 
 const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = props => <input {...props} className="input" />;

@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { CustomerPortal } from './components/portal/CustomerPortal';
+import { PublicKycPortalView } from './components/views/PublicKycPortalView';
 import './index.css';
 import './premium-sapphire.css';
 
@@ -15,9 +16,10 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 }
 
 const isCustomerPortal = window.location.pathname === '/portal' || window.location.pathname.startsWith('/portal/');
+const isKycPortal = window.location.pathname === '/kyc' || window.location.pathname.startsWith('/kyc/');
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isCustomerPortal ? <CustomerPortal /> : <App />}
+    {isCustomerPortal ? <CustomerPortal /> : isKycPortal ? <PublicKycPortalView /> : <App />}
   </StrictMode>,
 );

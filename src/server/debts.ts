@@ -1,5 +1,6 @@
 import { createDurable, updateDurable, runDurableTransaction, PersistenceError } from './persistence';
 import { issueNextNumber } from './idGenerator';
+import { fingerprintRequest, runIdempotent } from './idempotency';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
 import type { RecordAuditFn } from './businessRules';
 import type { Debt, DebtType, DebtSettlementMovement, DebtCorrection, DebtCancellation, ProcurementPaymentMethod, UserRole } from '../types';
@@ -108,6 +109,7 @@ export interface AddDebtSettlementInput {
   recordedBy: string;
   recordedByName: string;
   recordedByRole: UserRole;
+  idempotencyKey?: string;
 }
 
 /**
@@ -128,8 +130,19 @@ export interface AddDebtSettlementInput {
  * transaction, so a concurrent write to the same debt document forces
  * Firestore to retry the transaction against the up-to-date state instead
  * of allowing a lost update.
+ *
+ * A second, separate gap found later: unlike every other money-recording
+ * mutation in this codebase (deposits, payments), this one had no
+ * Idempotency-Key protection at all -- a double-click or a network retry
+ * after an ambiguous timeout would recompute a fresh movement id from
+ * whatever `settlements.length` the retry observes and record the SAME
+ * customer payment a second time. Fixed the same way as those: a mandatory
+ * Idempotency-Key, replayed rather than repeated.
  */
 export async function addDebtSettlement(input: AddDebtSettlementInput, recordAudit: RecordAuditFn): Promise<Debt> {
+  if (!input.idempotencyKey) {
+    throw new DebtError('Idempotency-Key is required for debt settlements.');
+  }
   if (typeof input.amount !== 'number' || input.amount <= 0) {
     throw new DebtError('A settlement requires an amount greater than zero.');
   }
@@ -140,44 +153,57 @@ export async function addDebtSettlement(input: AddDebtSettlementInput, recordAud
   const now = new Date().toISOString();
   const admin = (await import('firebase-admin')).default;
   const debtRef = admin.firestore().collection('debts').doc(input.debtId);
-
-  const updated = await runDurableTransaction(async (tx) => {
-    const snap = await tx.get(debtRef);
-    if (!snap.exists) throw new DebtError(`Debt ${input.debtId} not found.`);
-    const debt = snap.data() as Debt;
-
-    if (debt.status === 'paid' || debt.status === 'cancelled') {
-      throw new DebtError(`This debt is already ${debt.status} and cannot take further settlements.`);
-    }
-    if (input.amount > debt.remainingAmount) {
-      throw new DebtError(`Settlement amount (${input.amount.toLocaleString()}) exceeds the remaining debt (${debt.remainingAmount.toLocaleString()}).`);
-    }
-
-    const movement: DebtSettlementMovement = {
-      id: `${debt.id}-M${debt.settlements.length + 1}`,
-      method: input.method,
-      methodOther: input.methodOther,
-      amount: input.amount,
-      recordedBy: input.recordedBy,
-      recordedByName: input.recordedByName,
-      recordedAt: now
-    };
-    const settlements = [...debt.settlements, movement];
-    const { paidAmount, remainingAmount, status } = recomputeFromSettlements({ originalAmount: debt.originalAmount, settlements });
-
-    tx.set(debtRef, { settlements, paidAmount, remainingAmount, status, updatedAt: now }, { merge: true });
-    return { ...debt, settlements, paidAmount, remainingAmount, status, updatedAt: now };
+  const requestFingerprint = fingerprintRequest({
+    debtId: input.debtId,
+    method: input.method,
+    methodOther: input.methodOther || '',
+    amount: input.amount
   });
 
-  await recordAudit({
-    userId: input.recordedBy,
-    userName: input.recordedByName,
-    userRole: input.recordedByRole,
-    entityType: 'Debt',
-    entityId: updated.id,
-    action: 'update',
-    newValue: `Settlement of ${input.amount.toLocaleString()} AED via ${input.method} recorded against debt ${updated.id}. Remaining: ${updated.remainingAmount.toLocaleString()} AED.`
-  });
+  const { result: updated, replayed } = await runIdempotent<Debt>(
+    `debt-settlement:${input.debtId}`,
+    input.idempotencyKey,
+    async tx => {
+      const snap = await tx.get(debtRef);
+      if (!snap.exists) throw new DebtError(`Debt ${input.debtId} not found.`);
+      const debt = snap.data() as Debt;
+
+      if (debt.status === 'paid' || debt.status === 'cancelled') {
+        throw new DebtError(`This debt is already ${debt.status} and cannot take further settlements.`);
+      }
+      if (input.amount > debt.remainingAmount) {
+        throw new DebtError(`Settlement amount (${input.amount.toLocaleString()}) exceeds the remaining debt (${debt.remainingAmount.toLocaleString()}).`);
+      }
+
+      const movement: DebtSettlementMovement = {
+        id: `${debt.id}-M${debt.settlements.length + 1}`,
+        method: input.method,
+        methodOther: input.methodOther,
+        amount: input.amount,
+        recordedBy: input.recordedBy,
+        recordedByName: input.recordedByName,
+        recordedAt: now
+      };
+      const settlements = [...debt.settlements, movement];
+      const { paidAmount, remainingAmount, status } = recomputeFromSettlements({ originalAmount: debt.originalAmount, settlements });
+
+      tx.set(debtRef, { settlements, paidAmount, remainingAmount, status, updatedAt: now }, { merge: true });
+      return { ...debt, settlements, paidAmount, remainingAmount, status, updatedAt: now };
+    },
+    requestFingerprint
+  );
+
+  if (!replayed) {
+    await recordAudit({
+      userId: input.recordedBy,
+      userName: input.recordedByName,
+      userRole: input.recordedByRole,
+      entityType: 'Debt',
+      entityId: updated.id,
+      action: 'update',
+      newValue: `Settlement of ${input.amount.toLocaleString()} AED via ${input.method} recorded against debt ${updated.id}. Remaining: ${updated.remainingAmount.toLocaleString()} AED.`
+    });
+  }
 
   return updated;
 }

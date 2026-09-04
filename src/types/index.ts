@@ -18,7 +18,7 @@ export type CustomerType = 'individual' | 'corporate' | 'vip';
 export type CustomerStatus = 'active' | 'inactive' | 'blocklisted' | 'vip';
 
 // ---- Security Blocklist / Watchlist (Splendor Master Rule Set, Module 03) ----
-export type BlocklistIdentifierType = 'passport' | 'emirates_id';
+export type BlocklistIdentifierType = 'passport' | 'emirates_id' | 'gcc_id';
 export type BlocklistTier = 'full' | 'conditional';
 
 export interface BlocklistEntry {
@@ -27,6 +27,7 @@ export interface BlocklistEntry {
   identifierValue: string; // normalized uppercase -- never matched by name
   identifierCountry?: string; // required, and only meaningful, when identifierType === 'passport'
   customerName?: string; // display only -- never used as the match key (RULE-B01)
+  nationality?: string; // display only -- never used as the match key (RULE-B01)
   tier: BlocklistTier;
   reason: string;
   conditionalNote?: string; // required when tier === 'conditional': what's needed to proceed (raised deposit, manager sign-off, etc.)
@@ -39,6 +40,16 @@ export interface BlocklistEntry {
   removedByName?: string;
 }
 
+/** One of a corporate customer's own office locations -- distinct from `branchId`, which names the SPLENDOR branch servicing this account, not the client's own address. */
+export interface CorporateAccountBranch {
+  id: string;
+  branchName: string;
+  emirate: string;
+  address: string;
+  phone?: string;
+  isHeadOffice: boolean;
+}
+
 export interface CorporateAccount {
   id: string; // CORP-000001
   legalName: string;
@@ -47,12 +58,20 @@ export interface CorporateAccount {
   trnVatNumber?: string;
   licenseExpiry?: string;
   branchId: string;
+  /** The individual legally authorized to act for this company -- a corporate account is never treated as capable of signing for itself, so this person's own authority is tracked, not just their contact details. */
   primaryContact: {
     name: string;
     email: string;
     phone: string;
     designation: string;
+    /** The authorized person's own ID/passport number -- optional because most existing accounts predate this field, never guessed for one that does. */
+    idNumber?: string;
+    authorizationType?: 'power_of_attorney' | 'board_resolution' | 'trade_license_partner' | 'delegation_letter';
+    /** Reference number of the POA/board resolution/delegation letter itself -- the actual document is attached as real evidence via CRMDocument (relatedEntityType 'corporate_account'), never a self-reported checkbox. */
+    authorizationRef?: string;
   };
+  /** The client's own office network. Optional -- most existing accounts were registered before this was tracked. */
+  branches?: CorporateAccountBranch[];
   creditLimitAed: number;
   usedExposureAed: number;
   paymentTermsDays: number;
@@ -61,6 +80,58 @@ export interface CorporateAccount {
   status: 'active' | 'under_review' | 'credit_hold';
   notes?: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+/** A category of identity/license evidence the KYC engine requires per customer jurisdiction (see src/server/kycEngine.ts's REQUIRED_DOCUMENTS_MAP). */
+export type DocumentCategory = 'EMIRATES_ID_FRONT' | 'EMIRATES_ID_BACK' | 'PASSPORT' | 'VISA_ENTRY_STAMP' | 'DRIVING_LICENSE_FRONT' | 'DRIVING_LICENSE_BACK' | 'INTL_DRIVING_PERMIT';
+
+/** Which jurisdiction's document set applies to a customer -- drives REQUIRED_DOCUMENTS_MAP, never guessed once set. */
+export type CustomerKycCategory = 'UAE_RESIDENT' | 'GCC_NATIONAL' | 'TOURIST';
+
+/** Overall KYC verification state for a customer -- VERIFIED is only ever reached when every required document is ACCEPTED and unexpired and age is confirmed (see KycEngine.reconcileProfileState). */
+export type KycStatus = 'UNVERIFIED' | 'DOCUMENTS_PENDING' | 'UNDER_REVIEW' | 'VERIFIED' | 'REJECTED' | 'EXPIRED';
+
+/** A single uploaded piece of identity evidence, staff-reviewed individually -- never auto-accepted. */
+export interface KycDocument {
+  id: string; // KYC-DOC-...
+  customerId: string;
+  category: DocumentCategory;
+  storagePath: string;
+  fileUrl: string;
+  fileName: string;
+  /** The real MIME type detected from the file's own magic bytes (KycEngine.validateFileSignature), not the client-claimed content-type. */
+  fileType?: string;
+  documentNumberMasked?: string;
+  /** The real, unmasked document number -- never sent to the client; only used server-side. */
+  documentNumberRaw?: string;
+  expiryDate?: string;
+  issuingCountry?: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  uploadedAt: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  rejectionReason?: string;
+}
+
+/** A customer's KYC dossier -- one per customer, reconciled from its documents rather than hand-set (see KycEngine). */
+export interface CustomerKycProfile {
+  customerId: string;
+  customerCategory: CustomerKycCategory;
+  status: KycStatus;
+  /** Never manufactured -- absent means age cannot be verified, not "assumed adult". */
+  dateOfBirth: string;
+  age: number;
+  isAgeVerified: boolean;
+  documents: KycDocument[];
+  riskScore: 'LOW' | 'MEDIUM' | 'HIGH' | 'BLOCKED';
+  rejectionNotes?: string;
+  /** CEO-only override for the supercar under-25 age policy -- a named executive exception, never a default. */
+  ceoExceptionGranted?: boolean;
+  ceoExceptionReason?: string;
+  ceoExceptionGrantedAt?: string;
+  ceoExceptionGrantedBy?: string;
   updatedAt: string;
 }
 
@@ -82,13 +153,28 @@ export interface Customer {
   idType: 'emirates_id' | 'passport' | 'gcc_id';
   idNumber: string;
   idExpiryDate: string;
+  /** Optional -- most existing customer records were never asked for this. */
+  idIssueDate?: string;
   licenseNumber: string;
   licenseCountry: string;
   licenseExpiryDate: string;
+  /** Optional -- most existing customer records were never asked for these. */
+  licenseIssuedBy?: string;
+  licenseIssueDate?: string;
+  /** A UAE-issued license alone does not entitle a non-resident tourist to drive; a separate International Driving Permit is tracked independently rather than assumed. */
+  hasInternationalLicense?: boolean;
+  internationalLicenseNumber?: string;
+  internationalLicenseCountry?: string;
+  internationalLicenseIssueDate?: string;
+  internationalLicenseExpiryDate?: string;
   /** Optional -- most existing customer records were never asked for this. Added for Lease-to-Own age eligibility (checkLtoEligibility() in src/server/leaseToOwn.ts); absent for an existing customer is treated as "age cannot be verified" (conservatively ineligible for LTO), never guessed. */
   dateOfBirth?: string;
   /** Which language a customer-facing WhatsApp message should be sent in, monolingual (no mixing) -- used by the Lease-to-Own notification flows (dispatchCustomerNotification's `language` param). Defaults to 'ar' when absent, never mixed with a guessed opposite language. */
   preferredLanguage?: 'ar' | 'en';
+  /** Lazily created by KycEngine.getOrCreateKycProfile on first access -- absent for a customer whose KYC has never been evaluated. */
+  kycProfile?: CustomerKycProfile;
+  kycStatus?: KycStatus;
+  kycCustomerCategory?: CustomerKycCategory;
 
   // CRM details
   source: string;
@@ -718,7 +804,14 @@ export interface Reservation {
   updatedAt: string;
 }
 
-export type ContractStatus = 'draft' | 'review' | 'approved' | 'signed' | 'active' | 'completed' | 'cancelled';
+/**
+ * `settlement_pending`: the vehicle has been physically returned (evidence
+ * recorded) but the contract is not yet financially closed -- no final
+ * invoice/charges/deposit settlement has happened. Only the final closure
+ * event (POST /api/contracts/:id/close) moves a contract from here to
+ * `completed`; physical return alone never does (Issue #36).
+ */
+export type ContractStatus = 'draft' | 'review' | 'approved' | 'signed' | 'active' | 'settlement_pending' | 'completed' | 'cancelled';
 
 export interface VehicleDamageMarker {
   id: string;
@@ -1631,12 +1724,12 @@ export interface Communication {
 export interface CRMDocument {
   id: string; // DOC-000001
   title: string;
-  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'other';
+  category: 'contract' | 'quotation' | 'invoice' | 'receipt' | 'customer_id' | 'driving_license' | 'vehicle_reg' | 'vehicle_insurance' | 'inspection_sheet' | 'statement' | 'payment_proof' | 'bank_statement' | 'blocklist_evidence' | 'corporate_authorization' | 'other';
   fileName: string;
   fileSize: string;
   fileType: string;
   fileUrl: string;
-  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch';
+  relatedEntityType: 'customer' | 'vehicle' | 'contract' | 'reservation' | 'quotation' | 'invoice' | 'payment' | 'bank_batch' | 'blocklist_entry' | 'corporate_account';
   relatedEntityId: string;
   relatedEntityName?: string;
   expiryDate?: string;

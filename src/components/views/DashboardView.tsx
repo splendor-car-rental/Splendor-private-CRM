@@ -124,7 +124,7 @@ export const DashboardView: React.FC = () => {
                 <span className="text-sm font-semibold text-zinc-100 flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                   <span className="w-2 h-2 rounded-full bg-emerald-400 -ms-4" />
-                  {language === 'ar' ? 'سحابة بيانات سبلندر المباشرة' : 'Live Splendor Cloud Sync'}
+                  {language === 'ar' ? 'مزامنة البيانات المباشرة' : 'Live Data Sync'}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-[11px] font-mono text-[#f5d97f]">
                   {firebaseSyncState.projectId}
@@ -135,13 +135,9 @@ export const DashboardView: React.FC = () => {
               </div>
               <p className="text-xs text-zinc-400 mt-1 flex items-center gap-3 flex-wrap">
                 <span>
-                  {language === 'ar' 
-                    ? `إجمالي السجلات السحابية: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} مستند` 
-                    : `Cloud Documents: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} live records`}
-                </span>
-                <span>•</span>
-                <span>
-                  {language === 'ar' ? `زمن الاستجابة: ${firebaseSyncState.latencyMs || 24}ms` : `Latency: ${firebaseSyncState.latencyMs || 24}ms`}
+                  {language === 'ar'
+                    ? `إجمالي السجلات: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} مستند`
+                    : `Total Records: ${firebaseSyncState.totalDocs || (vehicles.length + customers.length + contracts.length)} live records`}
                 </span>
               </p>
             </div>
@@ -155,9 +151,9 @@ export const DashboardView: React.FC = () => {
             >
               <RefreshCw className={`w-3.5 h-3.5 text-[#D4AF37] ${firebaseSyncState.isSyncing ? 'animate-spin' : ''}`} />
               <span>
-                {firebaseSyncState.isSyncing 
-                  ? (language === 'ar' ? 'جاري المزامنة مع سبلندر...' : 'Syncing to Splendor Cloud...') 
-                  : (language === 'ar' ? 'مزامنة وتحديث سبلندر' : 'Sync to Splendor Cloud')}
+                {firebaseSyncState.isSyncing
+                  ? (language === 'ar' ? 'جاري المزامنة...' : 'Syncing...')
+                  : (language === 'ar' ? 'مزامنة وتحديث' : 'Sync Now')}
               </span>
             </button>
           </div>
@@ -170,7 +166,7 @@ export const DashboardView: React.FC = () => {
             <span className="text-xs font-bold text-[#f5d97f] font-mono">{vehicles.length}</span>
           </div>
           <div className="px-3 py-2 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center justify-between">
-            <span className="text-[11px] text-zinc-400">{language === 'ar' ? 'العملاء VIP' : 'Customers'}</span>
+            <span className="text-[11px] text-zinc-400">{language === 'ar' ? 'العملاء' : 'Customers'}</span>
             <span className="text-xs font-bold text-emerald-400 font-mono">{customers.length}</span>
           </div>
           <div className="px-3 py-2 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center justify-between">
@@ -209,9 +205,9 @@ export const DashboardView: React.FC = () => {
               {language === 'ar' ? 'مؤشرات الأداء والإيرادات المباشرة' : 'Executive Command & Fleet Telemetry'}
             </h2>
             <p className="text-xs lg:text-sm text-zinc-400 max-w-2xl leading-relaxed">
-              {language === 'ar' 
-                ? 'متابعة حية ومحدثة لحظياً عبر سحابة سبلندر للأسطول الفاخر، عقود الإيجار، التدفق النقدي، ومطابقة حساب بنك الإمارات دبي الوطني.' 
-                : 'Real-time telemetry synchronized via live Splendor Cloud for luxury supercars, VIP guest contracts, Emirates NBD reconciliation, and revenue optimization.'}
+              {language === 'ar'
+                ? 'متابعة حية ومحدثة لحظياً للأسطول الفاخر، عقود الإيجار، التدفق النقدي، ومطابقة حساب بنك الإمارات دبي الوطني.'
+                : 'Real-time tracking of the luxury fleet, guest contracts, cash flow, Emirates NBD reconciliation, and revenue optimization.'}
             </p>
           </div>
         </div>
@@ -497,9 +493,9 @@ export const DashboardView: React.FC = () => {
           <div className="p-4 rounded-2xl bg-zinc-950/80 border border-zinc-800 text-xs text-zinc-400 flex items-center gap-3">
             <Clock className="w-4 h-4 text-[#D4AF37] shrink-0" />
             <span>
-              {language === 'ar' 
-                ? 'نظام الحسابات يطبق ضريبة 5% تلقائياً وفقاً للتشريعات الإماراتية وتحديثات سبلندر اللحظية.' 
-                : '5% UAE VAT & Salik toll calculation running live on Splendor Cloud.'}
+              {language === 'ar'
+                ? 'نظام الحسابات يطبق ضريبة 5% تلقائياً وفقاً للتشريعات الإماراتية، مع حساب رسوم سالك لحظياً.'
+                : '5% UAE VAT & Salik toll calculation applied automatically, live.'}
             </span>
           </div>
         </div>

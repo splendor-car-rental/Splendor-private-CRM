@@ -2,16 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Users, UserPlus, Search, Filter, Phone, Mail, MapPin,
   Car, Shield, FileText, Landmark, Clock, CheckCircle2,
-  AlertTriangle, Sparkles, ChevronRight, X, Edit3, Merge,
+  Sparkles, ChevronRight, X, Edit3, Merge,
   Printer, ArrowUpRight, DollarSign, Calendar, UploadCloud, Plus
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
-import { Customer, CRMDocument } from '../../types';
+import { CRMDocument } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
+import { KycManagerCard } from '../common/KycManagerCard';
+import { AddCustomerModal } from '../modals/AddCustomerModal';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
 import { apiFetch } from '../../lib/apiFetch';
@@ -25,7 +27,7 @@ export const Customer360View: React.FC = () => {
     customers, contracts, invoices, deposits,
     payments, communications, documents,
     selectedCustomerId, setSelectedCustomerId,
-    addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer,
+    mergeCustomers,
     setActiveView, setSelectedContractId, addDocument, showToast
   } = useCRM();
 
@@ -46,37 +48,11 @@ export const Customer360View: React.FC = () => {
   const [aiBriefLoading, setAiBriefLoading] = useState(false);
   const [aiBrief, setAiBrief] = useState<string | null>(null);
 
-  // New customer form state
-  const [newCustForm, setNewCustForm] = useState({
-    fullName: '',
-    companyName: '',
-    email: '',
-    phone: '',
-    whatsapp: '',
-    type: 'individual' as 'individual' | 'corporate' | 'vip',
-    address: 'Dubai Marina, Dubai',
-    city: 'Dubai',
-    country: 'United Arab Emirates',
-    nationality: 'United Arab Emirates',
-    idType: 'emirates_id' as 'emirates_id' | 'passport' | 'gcc_id',
-    idNumber: '',
-    idExpiryDate: '2028-12-31',
-    licenseNumber: '',
-    licenseCountry: 'United Arab Emirates',
-    licenseExpiryDate: '2028-12-31',
-    source: 'showroom' as any,
-    isVIP: false,
-    tags: ['New Client'],
-    notes: ''
-  });
-
-  const [duplicateWarning, setDuplicateWarning] = useState<Customer[] | null>(null);
-
   // Active Selected Customer
   const activeCustomer = customers.find(c => c.id === selectedCustomerId) || customers[0];
 
   // 360 Tab selection
-  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'rentals' | 'lto' | 'statement' | 'comms' | 'docs' | 'kyc'>('overview');
 
   // Filtered customer list
   const filteredCustomers = customers.filter(c => {
@@ -92,46 +68,6 @@ export const Customer360View: React.FC = () => {
 
     return matchesSearch && matchesType && matchesVIP;
   });
-
-  const handlePhoneOrEmailChange = async (email: string, phone: string, lic?: string, idNum?: string) => {
-    if (email.length > 4 || phone.length > 5) {
-      const res = await checkDuplicateCustomer(email, phone, lic, idNum);
-      if (res.hasDuplicate) {
-        setDuplicateWarning(res.matches);
-      } else {
-        setDuplicateWarning(null);
-      }
-    }
-  };
-
-  const handleCreateCustomerSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await addCustomer(newCustForm);
-    setAddModalOpen(false);
-    setNewCustForm({
-      fullName: '',
-      companyName: '',
-      email: '',
-      phone: '',
-      whatsapp: '',
-      type: 'individual',
-      address: 'Dubai Marina, Dubai',
-      city: 'Dubai',
-      country: 'United Arab Emirates',
-      nationality: 'United Arab Emirates',
-      idType: 'emirates_id',
-      idNumber: '',
-      idExpiryDate: '2028-12-31',
-      licenseNumber: '',
-      licenseCountry: 'United Arab Emirates',
-      licenseExpiryDate: '2028-12-31',
-      source: 'showroom',
-      isVIP: false,
-      tags: ['New Client'],
-      notes: ''
-    });
-    setDuplicateWarning(null);
-  };
 
   const fetchCustomerAiBrief = async (customerId: string) => {
     setAiBriefLoading(true);
@@ -491,6 +427,14 @@ export const Customer360View: React.FC = () => {
               >
                 {language === 'ar' ? 'المستندات' : 'Documents'} ({customerDocs.length})
               </button>
+              <button
+                onClick={() => setActiveTab('kyc')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  activeTab === 'kyc' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {language === 'ar' ? 'التحقق من الهوية (KYC)' : 'KYC Verification'}
+              </button>
             </div>
 
             {/* TAB CONTENT: Profile & Identity */}
@@ -751,6 +695,17 @@ export const Customer360View: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* TAB CONTENT: KYC Verification */}
+            {activeTab === 'kyc' && activeCustomer && (
+              <KycManagerCard
+                customer={activeCustomer}
+                currentUserId={currentUser.id}
+                currentUserRole={currentUser.role}
+                currentUserName={currentUser.name}
+                showToast={showToast}
+              />
+            )}
           </div>
         ) : (
           <div className="lg:col-span-8 p-12 rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl flex flex-col items-center justify-center text-center space-y-4 min-h-[420px]">
@@ -778,149 +733,11 @@ export const Customer360View: React.FC = () => {
         )}
       </div>
 
-      {/* Add Customer Modal */}
-      <Modal
-        isOpen={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
-        title={language === 'ar' ? 'تسجيل عميل جديد' : 'Onboard New VIP Customer'}
-        subtitle={language === 'ar' ? 'تسجيل بيانات العميل مع الفحص الفوري لمنع تكرار السجلات' : 'Register customer profile with real-time duplicate checking'}
-        maxWidth="2xl"
-      >
-        <form onSubmit={handleCreateCustomerSubmit} className="space-y-4 text-xs">
-          {/* Real-time duplicate alert */}
-          {duplicateWarning && (
-            <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-500/50 space-y-1.5 animate-fade-in">
-              <div className="flex items-center gap-2 text-amber-300 font-semibold">
-                <AlertTriangle className="w-4 h-4" />
-                <span>Duplicate Records Detected</span>
-              </div>
-              <p className="text-zinc-300">
-                Found {duplicateWarning.length} existing customer(s) matching this phone or email:
-              </p>
-              {duplicateWarning.map(d => (
-                <div key={d.id} className="p-2 rounded-lg bg-zinc-900/80 flex items-center justify-between">
-                  <span>{d.fullName} ({d.id}) - {d.phone}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedCustomerId(d.id);
-                      setAddModalOpen(false);
-                    }}
-                    className="text-[#f5d97f] font-semibold hover:underline"
-                  >
-                    View Record →
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Full Legal Name *</label>
-              <input
-                type="text"
-                required
-                value={newCustForm.fullName}
-                onChange={(e) => setNewCustForm({ ...newCustForm, fullName: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="e.g. H.E. Sheikh Tariq Al Nahyan"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Company / Entity (Optional)</label>
-              <input
-                type="text"
-                value={newCustForm.companyName}
-                onChange={(e) => setNewCustForm({ ...newCustForm, companyName: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="e.g. Al Nahyan Holding Group"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Email Address *</label>
-              <input
-                type="email"
-                required
-                value={newCustForm.email}
-                onChange={(e) => {
-                  setNewCustForm({ ...newCustForm, email: e.target.value });
-                  handlePhoneOrEmailChange(e.target.value, newCustForm.phone);
-                }}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="client@vip.ae"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Phone Number (with Country Code) *</label>
-              <input
-                type="text"
-                required
-                value={newCustForm.phone}
-                onChange={(e) => {
-                  setNewCustForm({ ...newCustForm, phone: e.target.value });
-                  handlePhoneOrEmailChange(newCustForm.email, e.target.value);
-                }}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="+971 50 123 4567"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Customer Category</label>
-              <select
-                value={newCustForm.type}
-                onChange={(e) => setNewCustForm({ ...newCustForm, type: e.target.value as any })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-              >
-                <option value="vip">VIP Tier 1</option>
-                <option value="individual">Individual</option>
-                <option value="corporate">Corporate</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Nationality</label>
-              <input
-                type="text"
-                value={newCustForm.nationality}
-                onChange={(e) => setNewCustForm({ ...newCustForm, nationality: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-400 font-medium mb-1">Emirates ID / Passport No.</label>
-              <input
-                type="text"
-                value={newCustForm.idNumber}
-                onChange={(e) => setNewCustForm({ ...newCustForm, idNumber: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="784-1985-XXXXXXX-1"
-              />
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => setAddModalOpen(false)}
-              className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md"
-            >
-              Register Customer
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* Add Customer Modal -- the shared AddCustomerModal (also used from the
+          global "+ New Customer" action) so individual vs. corporate always
+          goes through the same, fully-localized, KYC-aware registration
+          flow instead of a second, divergent form. */}
+      <AddCustomerModal isOpen={addModalOpen} onClose={() => setAddModalOpen(false)} />
 
       {/* Merge Modal */}
       <Modal

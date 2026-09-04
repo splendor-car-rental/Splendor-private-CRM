@@ -11,7 +11,17 @@
   --splendor-sapphire-glow: rgba(var(--splendor-sapphire-rgb), 0.16);
 }
 
-/* Global responsive foundation: no application surface may force the viewport wider than the device. */
+/* Global responsive foundation: no application surface may force the viewport wider than the device.
+   `overflow-x: clip`, not `hidden` -- any non-`visible` overflow value on
+   html/body/#root turns that element into a CSS "scroll container", which
+   changes what "nearest scrolling ancestor" position:sticky elements
+   resolve against; confirmed by direct testing that this silently broke
+   every sticky element in the app (the sidebar included -- it scrolled
+   away with the page instead of staying pinned, on every viewport size,
+   not just short/mobile ones). `clip` clips overflowing content exactly
+   like `hidden` does (so this still fully prevents horizontal overflow)
+   without establishing that scroll container, so sticky positioning
+   resolves against the real viewport again. */
 html,
 body,
 #root {
@@ -19,7 +29,7 @@ body,
   max-width: 100%;
   min-width: 0;
   margin: 0;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 *,

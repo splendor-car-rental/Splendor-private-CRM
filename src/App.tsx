@@ -10,7 +10,6 @@ import { Header } from './components/layout/Header';
 import { PWAInstallBanner } from './components/pwa/PWAInstallBanner';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
-import { ApprovedFormsLibrary } from './components/common/ApprovedFormsLibrary';
 import { ArabicInterfaceGuard } from './components/common/ArabicInterfaceGuard';
 
 // Views
@@ -22,6 +21,7 @@ import { QuotationsView } from './components/views/QuotationsView';
 import { ReservationsView } from './components/views/ReservationsView';
 import { ContractsOpsView } from './components/views/ContractsOpsView';
 import { FinanceControlCenterView } from './components/views/FinanceControlCenterView';
+import { TaxFilingView } from './components/views/TaxFilingView';
 import { BankReconciliationView } from './components/views/BankReconciliationView';
 import { TollsParkingView } from './components/views/TollsParkingView';
 import { NotificationWhatsAppCenterView } from './components/views/NotificationWhatsAppCenterView';
@@ -77,15 +77,16 @@ const MainLayout: React.FC = () => {
       case 'reservations': return <ReservationsView />;
       case 'contracts': return <ContractsOpsView />;
       case 'finance': return <FinanceControlCenterView />;
+      case 'tax-filing': return <TaxFilingView />;
       case 'reconciliation':
       case 'bank-reconciliation': return <BankReconciliationView />;
       case 'tolls': return <TollsParkingView />;
       case 'notification-center': return <NotificationWhatsAppCenterView />;
       case 'tasks': return <TasksFollowupsView />;
-      case 'procurement':
+      case 'procurement': return <ProcurementView initialTab="suppliers" />;
       case 'purchase-orders':
       case 'lpo':
-      case 'supply-orders': return <ProcurementView />;
+      case 'supply-orders': return <ProcurementView initialTab="purchase-orders" />;
       case 'security': return <SecurityBlocklistView />;
       case 'inspections': return <VehicleInspectionsView />;
       case 'lease-to-own': return <LeaseToOwnView />;
@@ -125,8 +126,6 @@ const MainLayout: React.FC = () => {
           </ErrorBoundary>
         </main>
       </div>
-
-      <ApprovedFormsLibrary />
     </div>
   );
 };

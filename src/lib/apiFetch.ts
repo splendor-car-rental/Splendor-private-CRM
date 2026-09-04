@@ -30,7 +30,8 @@ function isCriticalFinancialWrite(url: string, method: string): boolean {
     || /^\/api\/accounting\/supplier-invoices\/[^/]+\/post$/.test(path)
     || /^\/api\/accounting\/charges\/[^/]+\/post$/.test(path)
     || /^\/api\/accounting\/deposits\/[^/]+\/(apply|refund)$/.test(path)
-    || /^\/api\/deposits\/[^/]+\/(apply|refund)$/.test(path);
+    || /^\/api\/deposits\/[^/]+\/(apply|refund)$/.test(path)
+    || /^\/api\/debts\/[^/]+\/settlements$/.test(path);
 }
 
 function makeIdempotencyKey(): string {

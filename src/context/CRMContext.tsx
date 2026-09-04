@@ -139,6 +139,7 @@ interface CRMContextType {
   
   processHandover: (contractId: string, handoverData: any) => Promise<Contract>;
   processReturn: (contractId: string, returnData: any) => Promise<Contract>;
+  closeContract: (contractId: string) => Promise<Contract>;
   
   recordPayment: (paymentData: any) => Promise<Payment>;
   applyDeposit: (depositId: string, amount: number, reason: string, chargeId: string) => Promise<Deposit>;
@@ -986,7 +987,27 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     await fetchData();
-    showToast('Return Processed', `Vehicle returned & final settlement calculated.`);
+    showToast('Return Processed', `Vehicle returned -- awaiting financial closure.`);
+    refreshFirebaseStats();
+    return data.contract;
+  };
+
+  // Issue #36: the only event that recognizes a rental's revenue and frees
+  // the vehicle for a new booking -- physical return alone never does this.
+  const closeContract = async (contractId: string) => {
+    const res = await fetch(`/api/contracts/${contractId}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    let data: { contract: Contract };
+    try {
+      data = await parseApiResponse<{ contract: Contract }>(res, 'Financial closure failed.');
+    } catch (err: any) {
+      showToast('Closure Failed', err.message, 'error');
+      throw err;
+    }
+    await fetchData();
+    showToast('Contract Closed', `Rental revenue recognized and vehicle released.`);
     refreshFirebaseStats();
     return data.contract;
   };
@@ -1680,7 +1701,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createQuotation, convertQuotationToReservation, deleteQuotation,
       createReservation, createContractFromReservation, createContract, deleteReservation, deleteContract,
       addCorporateAccount, updateCorporateAccount, deleteCorporateAccount,
-      processHandover, processReturn,
+      processHandover, processReturn, closeContract,
       recordPayment, applyDeposit, refundDeposit,
       uploadBankBatch, reconcileBankTransaction, reclassifyBankTransaction, previewBankImport, confirmBankImport, startVehicleMaintenance, logVehicleMaintenance, runAutoReconciliation,
       addCompanyBankAccount, updateCompanyBankAccount, deleteCompanyBankAccount,

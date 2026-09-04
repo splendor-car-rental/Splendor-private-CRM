@@ -12,7 +12,8 @@ import {
   validateJournalLines
 } from '../lib/accounting';
 import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting';
-import type { Invoice } from '../types';
+import { globalStore } from './dataStore';
+import type { Invoice, Payment } from '../types';
 import type {
   AccountingPeriod,
   FinancialNote,
@@ -161,7 +162,7 @@ export async function recordAtomicAccountingPayment(
     proofDocumentId: input.proofDocumentId || ''
   });
 
-  const outcome = await runIdempotent<SafeCustomerPaymentResult>(
+  const outcome = await runIdempotent<{ summary: SafeCustomerPaymentResult; paymentRecord: Payment }>(
     'accounting-payment-create',
     idempotencyKey,
     async tx => {
@@ -266,28 +267,36 @@ export async function recordAtomicAccountingPayment(
       tx.create(journalRef, journal as unknown as FirebaseFirestore.DocumentData);
 
       return {
-        paymentId,
-        receiptNumber,
-        amount,
-        allocatedAmount: requestedAllocatedAmount,
-        unallocatedAmount,
-        allocations: validatedAllocations,
-        accountingPostingStatus: 'posted',
-        accountingJournalId: journal.id
+        summary: {
+          paymentId,
+          receiptNumber,
+          amount,
+          allocatedAmount: requestedAllocatedAmount,
+          unallocatedAmount,
+          allocations: validatedAllocations,
+          accountingPostingStatus: 'posted' as const,
+          accountingJournalId: journal.id
+        },
+        paymentRecord: paymentDoc as unknown as Payment
       };
     },
     requestFingerprint
   );
 
   if (!outcome.replayed) {
+    // Mirror into the in-memory globalStore the same way every other
+    // Firestore-writing route does -- GET /api/payments still serves
+    // globalStore.payments, so skipping this would make a successfully
+    // recorded payment invisible in the UI until the process restarts.
+    globalStore.payments.unshift(outcome.result.paymentRecord);
     const auditPayload = {
       userId: actor.uid,
       userName: actor.name,
       userRole: actor.role,
       entityType: 'Payment',
-      entityId: outcome.result.paymentId,
+      entityId: outcome.result.summary.paymentId,
       action: 'create' as const,
-      newValue: `Payment ${outcome.result.paymentId} recorded atomically: ${amount.toFixed(2)} AED; allocated ${requestedAllocatedAmount.toFixed(2)}; unallocated customer credit ${unallocatedAmount.toFixed(2)}; journal ${outcome.result.accountingJournalId}.`
+      newValue: `Payment ${outcome.result.summary.paymentId} recorded atomically: ${amount.toFixed(2)} AED; allocated ${requestedAllocatedAmount.toFixed(2)}; unallocated customer credit ${unallocatedAmount.toFixed(2)}; journal ${outcome.result.summary.accountingJournalId}.`
     };
     try {
       await recordAudit(auditPayload);
@@ -297,8 +306,8 @@ export async function recordAtomicAccountingPayment(
       // audit writer was temporarily unavailable. Persist an explicit
       // recovery item instead of silently losing the audit obligation.
       console.error('[accounting] payment committed but audit write failed:', auditError);
-      await db.collection(AUDIT_RECOVERY_COLLECTION).doc(`Payment_${outcome.result.paymentId}`).set({
-        id: `Payment_${outcome.result.paymentId}`,
+      await db.collection(AUDIT_RECOVERY_COLLECTION).doc(`Payment_${outcome.result.summary.paymentId}`).set({
+        id: `Payment_${outcome.result.summary.paymentId}`,
         status: 'pending',
         auditPayload,
         error: String(auditError?.message || auditError || 'Audit write failed'),
@@ -309,5 +318,5 @@ export async function recordAtomicAccountingPayment(
     }
   }
 
-  return outcome;
+  return { result: outcome.result.summary, replayed: outcome.replayed };
 }

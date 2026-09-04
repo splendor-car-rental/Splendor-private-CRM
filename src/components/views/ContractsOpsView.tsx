@@ -19,10 +19,11 @@ import { formatDate, formatDateTime } from '../../lib/dateFormat';
 export const ContractsOpsView: React.FC = () => {
   const { language, t } = useLanguage();
   const isAr = language === 'ar';
-  const { 
-    contracts, vehicles, processHandover, processReturn,
-    selectedContractId, setSelectedContractId, setSelectedCustomerId, setActiveView 
+  const {
+    contracts, vehicles, processHandover, processReturn, closeContract,
+    selectedContractId, setSelectedContractId
   } = useCRM();
+  const [isClosing, setIsClosing] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -391,6 +392,18 @@ export const ContractsOpsView: React.FC = () => {
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>{isAr ? 'فحص الاسترجاع والتسوية' : 'Process Return'}</span>
+                  </button>
+                ) : activeContract.status === 'settlement_pending' ? (
+                  <button
+                    onClick={async () => {
+                      setIsClosing(true);
+                      try { await closeContract(activeContract.id); } finally { setIsClosing(false); }
+                    }}
+                    disabled={isClosing}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-zinc-950 text-xs font-extrabold shadow-md active:scale-95 transition-all disabled:opacity-50"
+                  >
+                    <DollarSign className="w-4 h-4" />
+                    <span>{isClosing ? (isAr ? 'جارٍ الإغلاق...' : 'Closing...') : (isAr ? 'إغلاق مالي نهائي' : 'Close & Recognize Revenue')}</span>
                   </button>
                 ) : (
                   <span className="text-xs font-bold text-sky-400 bg-sky-950/40 px-3 py-1.5 rounded-xl border border-sky-500/30">

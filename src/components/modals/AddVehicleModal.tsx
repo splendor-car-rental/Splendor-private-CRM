@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  Car, Sparkles, DollarSign, Wand2, PlusCircle, CheckCircle2, 
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Car, DollarSign, Wand2, PlusCircle, CheckCircle2, UploadCloud,
   Layers, Shield, Gauge, Fuel, Zap, Search, Filter, Check
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { apiFetch } from '../../lib/apiFetch';
+import { uploadFile } from '../../lib/upload';
 import {
   VehicleCategory, VehicleStatus, VehicleManufacturer, VehicleCatalogModel,
   VehicleBodyStyle, VehicleClassTier, VehicleSuvClass, VehiclePerformanceClass,
@@ -26,759 +27,8 @@ interface AddVehicleModalProps {
   onClose: () => void;
 }
 
-export interface VehiclePresetItem {
-  make: string;
-  model: string;
-  year: number;
-  trim?: string;
-  category: VehicleCategory;
-  group: 'economy' | 'suv' | 'business' | 'luxury';
-  color: string;
-  plateCity: string;
-  dailyRate: number;
-  weeklyRate: number;
-  monthlyRate: number;
-  securityDeposit: number;
-  mileage: number;
-  engine: string;
-  horsepower: number;
-  transmission: string;
-  drivetrain: VehicleDrivetrain;
-  fuelType: VehicleCatalogModel['fuelType'];
-  doors: number;
-  seats: number;
-  bodyStyle: VehicleBodyStyle;
-  vehicleClassTier: VehicleClassTier;
-  suvClass?: VehicleSuvClass;
-  rentalSegment: VehicleRentalSegment;
-  thumbnail: string;
-  badgeAr: string;
-  badgeEn: string;
-}
-
-const EXTENSIVE_FLEET_PRESETS: VehiclePresetItem[] = [
-  // --- ECONOMIC & DAILY FLEET (HYUNDAI / KIA / JETOUR / NISSAN / TOYOTA / MG) ---
-  {
-    make: 'Hyundai',
-    model: 'Elantra 2.0L',
-    year: 2025,
-    trim: 'Smart Plus',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Polar White',
-    plateCity: 'Dubai',
-    dailyRate: 150,
-    weeklyRate: 950,
-    monthlyRate: 3200,
-    securityDeposit: 1500,
-    mileage: 4500,
-    engine: '2.0L MPI 4-Cylinder',
-    horsepower: 147,
-    transmission: 'Smartstream IVT / CVT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'economy',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1617814076367-b759c7d7e738?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'هيونداي إلنترا 2025',
-    badgeEn: 'Hyundai Elantra 2025'
-  },
-  {
-    make: 'Hyundai',
-    model: 'Accent 1.5L',
-    year: 2025,
-    trim: 'Comfort',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Titan Gray',
-    plateCity: 'Dubai',
-    dailyRate: 120,
-    weeklyRate: 750,
-    monthlyRate: 2600,
-    securityDeposit: 1200,
-    mileage: 3200,
-    engine: '1.5L MPi 4-Cylinder',
-    horsepower: 115,
-    transmission: 'IVT Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'economy',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1541899481282-d53bffe3c35d?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'هيونداي أكسنت 2025',
-    badgeEn: 'Hyundai Accent 2025'
-  },
-  {
-    make: 'Kia',
-    model: 'Pegas 1.4L',
-    year: 2025,
-    trim: 'EX Full Option',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Sparkling Silver',
-    plateCity: 'Dubai',
-    dailyRate: 110,
-    weeklyRate: 700,
-    monthlyRate: 2400,
-    securityDeposit: 1000,
-    mileage: 5100,
-    engine: '1.4L MPI Kappa',
-    horsepower: 95,
-    transmission: '4-Speed Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'economy',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'كيا بيجاس 2025',
-    badgeEn: 'Kia Pegas 2025'
-  },
-  {
-    make: 'Kia',
-    model: 'K3 / Cerato',
-    year: 2025,
-    trim: 'GT-Line',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Abyss Black',
-    plateCity: 'Dubai',
-    dailyRate: 140,
-    weeklyRate: 900,
-    monthlyRate: 3100,
-    securityDeposit: 1500,
-    mileage: 2800,
-    engine: '1.6L MPI 4-Cylinder',
-    horsepower: 121,
-    transmission: '6-Speed Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'compact',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1590362891991-f776e747a588?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'كيا K3 سيراتو 2025',
-    badgeEn: 'Kia K3 2025'
-  },
-  {
-    make: 'Nissan',
-    model: 'Sunny 1.6L',
-    year: 2025,
-    trim: 'SV Comfort',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Aspen White',
-    plateCity: 'Dubai',
-    dailyRate: 110,
-    weeklyRate: 700,
-    monthlyRate: 2350,
-    securityDeposit: 1000,
-    mileage: 6200,
-    engine: '1.6L DOHC 16-Valve 4-Cylinder',
-    horsepower: 118,
-    transmission: 'Xtronic CVT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'economy',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'نيسان صني 2025',
-    badgeEn: 'Nissan Sunny 2025'
-  },
-  {
-    make: 'Toyota',
-    model: 'Yaris Sedan',
-    year: 2025,
-    trim: 'Y Plus',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Silver Metallic',
-    plateCity: 'Dubai',
-    dailyRate: 125,
-    weeklyRate: 800,
-    monthlyRate: 2700,
-    securityDeposit: 1200,
-    mileage: 3800,
-    engine: '1.5L Dual VVT-i',
-    horsepower: 105,
-    transmission: 'CVT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'economy',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'تويوتا ياريس 2025',
-    badgeEn: 'Toyota Yaris 2025'
-  },
-  {
-    make: 'MG',
-    model: 'MG 5 1.5L',
-    year: 2025,
-    trim: 'DEL Luxury',
-    category: 'economy_sedan',
-    group: 'economy',
-    color: 'Red Metallic',
-    plateCity: 'Dubai',
-    dailyRate: 115,
-    weeklyRate: 720,
-    monthlyRate: 2500,
-    securityDeposit: 1000,
-    mileage: 4100,
-    engine: '1.5L 4-Cylinder',
-    horsepower: 112,
-    transmission: 'i-CVT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'economy',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'إم جي 5 (MG 5) 2025',
-    badgeEn: 'MG 5 2025'
-  },
-
-  // --- POPULAR CROSSOVERS & SUVS (JETOUR / HYUNDAI / KIA / GEELY / TOYOTA) ---
-  {
-    make: 'Jetour',
-    model: 'T2 Traveller 4WD',
-    year: 2025,
-    trim: 'Adventure Luxury',
-    category: 'midsize_suv',
-    group: 'suv',
-    color: 'Highway Gray Matte',
-    plateCity: 'Dubai',
-    dailyRate: 350,
-    weeklyRate: 2200,
-    monthlyRate: 7500,
-    securityDeposit: 2500,
-    mileage: 2100,
-    engine: '2.0L Turbocharged TGDI',
-    horsepower: 251,
-    transmission: '7-Speed Dual-Clutch (DCT)',
-    drivetrain: '4wd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'midsize',
-    suvClass: 'offroad_suv',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'جيتور T2 ترافيلر الدفع الرباعي 2025',
-    badgeEn: 'Jetour T2 4WD 2025'
-  },
-  {
-    make: 'Jetour',
-    model: 'Dashing 1.6L Turbo',
-    year: 2025,
-    trim: 'Deluxe',
-    category: 'compact_suv',
-    group: 'suv',
-    color: 'Crystal Cyan Blue',
-    plateCity: 'Dubai',
-    dailyRate: 220,
-    weeklyRate: 1400,
-    monthlyRate: 4800,
-    securityDeposit: 2000,
-    mileage: 3400,
-    engine: '1.6L Turbo TGDI',
-    horsepower: 194,
-    transmission: '7-Speed DCT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'crossover',
-    vehicleClassTier: 'compact',
-    suvClass: 'compact_suv',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'جيتور داشينج 2025',
-    badgeEn: 'Jetour Dashing 2025'
-  },
-  {
-    make: 'Jetour',
-    model: 'X70 Plus 7-Seater',
-    year: 2025,
-    trim: 'Comfort 7-Seat',
-    category: 'midsize_suv',
-    group: 'suv',
-    color: 'Pearl Black',
-    plateCity: 'Dubai',
-    dailyRate: 200,
-    weeklyRate: 1300,
-    monthlyRate: 4500,
-    securityDeposit: 1800,
-    mileage: 4800,
-    engine: '1.6L Turbo I4',
-    horsepower: 194,
-    transmission: '7-Speed Dual Clutch',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 7,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'midsize',
-    suvClass: 'midsize_suv',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1519641471654-76ce0107ad1b?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'جيتور X70 بلس 7 مقاعد 2025',
-    badgeEn: 'Jetour X70 Plus (7-Seat) 2025'
-  },
-  {
-    make: 'Hyundai',
-    model: 'Creta 1.5L',
-    year: 2025,
-    trim: 'Smart Plus Panoramic',
-    category: 'compact_suv',
-    group: 'suv',
-    color: 'Lava Orange',
-    plateCity: 'Dubai',
-    dailyRate: 170,
-    weeklyRate: 1100,
-    monthlyRate: 3800,
-    securityDeposit: 1500,
-    mileage: 3900,
-    engine: '1.5L Smartstream',
-    horsepower: 115,
-    transmission: 'IVT Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'crossover',
-    vehicleClassTier: 'compact',
-    suvClass: 'compact_suv',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'هيونداي كريتا 2025',
-    badgeEn: 'Hyundai Creta 2025'
-  },
-  {
-    make: 'Hyundai',
-    model: 'Tucson 2.0L',
-    year: 2025,
-    trim: 'Premium Panoramic',
-    category: 'midsize_suv',
-    group: 'suv',
-    color: 'Amazon Gray',
-    plateCity: 'Dubai',
-    dailyRate: 220,
-    weeklyRate: 1400,
-    monthlyRate: 4900,
-    securityDeposit: 2000,
-    mileage: 3100,
-    engine: '2.0L Nu MPI',
-    horsepower: 156,
-    transmission: '6-Speed Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'midsize',
-    suvClass: 'midsize_suv',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1552519507-da3b142c6e3d?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'هيونداي توسان 2025',
-    badgeEn: 'Hyundai Tucson 2025'
-  },
-  {
-    make: 'Kia',
-    model: 'Sportage 2.0L',
-    year: 2025,
-    trim: 'EX Full Option',
-    category: 'midsize_suv',
-    group: 'suv',
-    color: 'Jungle Wood Green',
-    plateCity: 'Dubai',
-    dailyRate: 230,
-    weeklyRate: 1450,
-    monthlyRate: 5100,
-    securityDeposit: 2000,
-    mileage: 2900,
-    engine: '2.0L MPI 4-Cylinder',
-    horsepower: 154,
-    transmission: '6-Speed Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'midsize',
-    suvClass: 'midsize_suv',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'كيا سبورتاج 2025',
-    badgeEn: 'Kia Sportage 2025'
-  },
-  {
-    make: 'Kia',
-    model: 'Seltos 1.5L Turbo',
-    year: 2025,
-    trim: 'GT-Line AWD',
-    category: 'compact_suv',
-    group: 'suv',
-    color: 'Gravity Gray',
-    plateCity: 'Dubai',
-    dailyRate: 190,
-    weeklyRate: 1200,
-    monthlyRate: 4200,
-    securityDeposit: 1800,
-    mileage: 3600,
-    engine: '1.5L Turbo GDI',
-    horsepower: 158,
-    transmission: '7-Speed Dual Clutch',
-    drivetrain: 'awd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'crossover',
-    vehicleClassTier: 'compact',
-    suvClass: 'compact_suv',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1508974239320-0a029497e820?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'كيا سيلتوس GT 2025',
-    badgeEn: 'Kia Seltos 2025'
-  },
-  {
-    make: 'Geely',
-    model: 'Coolray 1.5L Turbo',
-    year: 2025,
-    trim: 'Sport Flagship',
-    category: 'compact_suv',
-    group: 'suv',
-    color: 'Cyber Blue',
-    plateCity: 'Dubai',
-    dailyRate: 180,
-    weeklyRate: 1150,
-    monthlyRate: 4000,
-    securityDeposit: 1800,
-    mileage: 2600,
-    engine: '1.5L NordThor Turbo',
-    horsepower: 172,
-    transmission: '7-Speed Wet DCT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'crossover',
-    vehicleClassTier: 'compact',
-    suvClass: 'compact_suv',
-    rentalSegment: 'economy',
-    thumbnail: 'https://images.unsplash.com/photo-1511919884226-fd3cad34687c?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'جيلي كول راي سبورت 2025',
-    badgeEn: 'Geely Coolray 2025'
-  },
-
-  // --- BUSINESS & MIDSIZE SEDANS & VANS (SONATA / K5 / CAMRY / ALTIMA / STARIA) ---
-  {
-    make: 'Hyundai',
-    model: 'Sonata 2.5L',
-    year: 2025,
-    trim: 'Smart Panoramic',
-    category: 'business_sedan',
-    group: 'business',
-    color: 'Nocturne Gray',
-    plateCity: 'Dubai',
-    dailyRate: 240,
-    weeklyRate: 1550,
-    monthlyRate: 5400,
-    securityDeposit: 2000,
-    mileage: 3200,
-    engine: '2.5L Smartstream GDI',
-    horsepower: 191,
-    transmission: '8-Speed Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'executive',
-    rentalSegment: 'premium',
-    thumbnail: 'https://images.unsplash.com/photo-1617814076367-b759c7d7e738?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'هيونداي سوناتا 2025',
-    badgeEn: 'Hyundai Sonata 2025'
-  },
-  {
-    make: 'Kia',
-    model: 'K5 2.5L GT-Line',
-    year: 2025,
-    trim: 'GT-Line',
-    category: 'business_sedan',
-    group: 'business',
-    color: 'Steel Gray Matte',
-    plateCity: 'Dubai',
-    dailyRate: 250,
-    weeklyRate: 1600,
-    monthlyRate: 5600,
-    securityDeposit: 2000,
-    mileage: 2700,
-    engine: '2.5L Turbo GDI',
-    horsepower: 290,
-    transmission: '8-Speed Wet DCT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'executive',
-    rentalSegment: 'premium',
-    thumbnail: 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'كيا K5 جي تي لاين 2025',
-    badgeEn: 'Kia K5 2025'
-  },
-  {
-    make: 'Toyota',
-    model: 'Camry 2.5L',
-    year: 2025,
-    trim: 'Grande Panoramic',
-    category: 'business_sedan',
-    group: 'business',
-    color: 'Precious Metal',
-    plateCity: 'Dubai',
-    dailyRate: 230,
-    weeklyRate: 1500,
-    monthlyRate: 5200,
-    securityDeposit: 2000,
-    mileage: 4100,
-    engine: '2.5L Dynamic Force 4-Cylinder',
-    horsepower: 204,
-    transmission: '8-Speed Direct Shift',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'executive',
-    rentalSegment: 'premium',
-    thumbnail: 'https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'تويوتا كامري 2025',
-    badgeEn: 'Toyota Camry 2025'
-  },
-  {
-    make: 'Nissan',
-    model: 'Altima 2.5L',
-    year: 2025,
-    trim: 'SL Full Option',
-    category: 'business_sedan',
-    group: 'business',
-    color: 'Gun Metallic',
-    plateCity: 'Dubai',
-    dailyRate: 210,
-    weeklyRate: 1350,
-    monthlyRate: 4700,
-    securityDeposit: 1800,
-    mileage: 4900,
-    engine: '2.5L DOHC 4-Cylinder',
-    horsepower: 188,
-    transmission: 'Xtronic CVT',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 5,
-    bodyStyle: 'sedan',
-    vehicleClassTier: 'executive',
-    rentalSegment: 'standard',
-    thumbnail: 'https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'نيسان ألتيما 2025',
-    badgeEn: 'Nissan Altima 2025'
-  },
-  {
-    make: 'Hyundai',
-    model: 'Staria 9-Seater Luxury',
-    year: 2025,
-    trim: 'Lounge 9-Seater VIP',
-    category: 'family_van',
-    group: 'business',
-    color: 'Abyss Black Pearl',
-    plateCity: 'Dubai',
-    dailyRate: 450,
-    weeklyRate: 2900,
-    monthlyRate: 9800,
-    securityDeposit: 3000,
-    mileage: 5200,
-    engine: '3.5L Smartstream V6',
-    horsepower: 272,
-    transmission: '8-Speed Automatic',
-    drivetrain: 'fwd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 9,
-    bodyStyle: 'mpv',
-    vehicleClassTier: 'executive',
-    rentalSegment: 'vip',
-    thumbnail: 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'هيونداي ستاريا VIP 9 ركاب 2025',
-    badgeEn: 'Hyundai Staria VIP 2025'
-  },
-
-  // --- LUXURY & SUPERCARS (FERRARI / ROLLS-ROYCE / LAMBORGHINI / MAYBACH / PORSCHE / PATROL NISMO) ---
-  {
-    make: 'Ferrari',
-    model: 'Purosangue V12',
-    year: 2025,
-    trim: 'V12 Active Suspension',
-    category: 'supercar',
-    group: 'luxury',
-    color: 'Rosso Corsa',
-    plateCity: 'Dubai',
-    dailyRate: 9500,
-    weeklyRate: 58000,
-    monthlyRate: 190000,
-    securityDeposit: 20000,
-    mileage: 1200,
-    engine: '6.5L Naturally Aspirated V12',
-    horsepower: 715,
-    transmission: '8-Speed Dual-Clutch F1',
-    drivetrain: 'awd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 4,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'hypercar',
-    suvClass: 'performance_suv',
-    rentalSegment: 'supercar',
-    thumbnail: 'https://images.unsplash.com/photo-1592198084033-aade902d1aae?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'فيراري بوروسانجوي V12',
-    badgeEn: 'Ferrari Purosangue V12'
-  },
-  {
-    make: 'Rolls-Royce',
-    model: 'Spectre Ultra-Electric',
-    year: 2025,
-    trim: 'Bespoke Starlight',
-    category: 'ultra_luxury_sedan',
-    group: 'luxury',
-    color: 'Two-Tone Obsidian Black & Arctic Silver',
-    plateCity: 'Dubai',
-    dailyRate: 8500,
-    weeklyRate: 52000,
-    monthlyRate: 180000,
-    securityDeposit: 25000,
-    mileage: 850,
-    engine: 'Dual Synchronous Electric Motors',
-    horsepower: 577,
-    transmission: 'Direct Drive Single-Speed',
-    drivetrain: 'awd',
-    fuelType: 'electric',
-    doors: 2,
-    seats: 4,
-    bodyStyle: 'coupe',
-    vehicleClassTier: 'ultra_luxury',
-    rentalSegment: 'ultra_luxury',
-    thumbnail: 'https://images.unsplash.com/photo-1631295868223-63265b40d9e4?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'رولز رويس سبيكتر الفاخرة',
-    badgeEn: 'Rolls-Royce Spectre 2025'
-  },
-  {
-    make: 'Lamborghini',
-    model: 'Revuelto V12 Hybrid',
-    year: 2025,
-    trim: 'HPEV Flagship',
-    category: 'supercar',
-    group: 'luxury',
-    color: 'Arancio Apodis (Orange Pearl)',
-    plateCity: 'Dubai',
-    dailyRate: 11000,
-    weeklyRate: 68000,
-    monthlyRate: 230000,
-    securityDeposit: 25000,
-    mileage: 950,
-    engine: '6.5L V12 + 3 Electric Motors',
-    horsepower: 1001,
-    transmission: '8-Speed Dual-Clutch',
-    drivetrain: 'awd',
-    fuelType: 'hybrid',
-    doors: 2,
-    seats: 2,
-    bodyStyle: 'coupe',
-    vehicleClassTier: 'hypercar',
-    rentalSegment: 'hypercar',
-    thumbnail: 'https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'لامبورغيني ريفويلتو 1001 حصان',
-    badgeEn: 'Lamborghini Revuelto V12'
-  },
-  {
-    make: 'Mercedes-Maybach',
-    model: 'GLS 600 Night Series',
-    year: 2025,
-    trim: 'Night Series First Class',
-    category: 'executive_suv',
-    group: 'luxury',
-    color: 'Kalahari Gold / Onyx Black',
-    plateCity: 'Dubai',
-    dailyRate: 6000,
-    weeklyRate: 36000,
-    monthlyRate: 120000,
-    securityDeposit: 15000,
-    mileage: 2100,
-    engine: '4.0L Biturbo V8 EQ Boost',
-    horsepower: 550,
-    transmission: '9G-TRONIC Automatic',
-    drivetrain: 'awd',
-    fuelType: 'hybrid',
-    doors: 4,
-    seats: 4,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'ultra_luxury',
-    suvClass: 'luxury_suv',
-    rentalSegment: 'vip',
-    thumbnail: 'https://images.unsplash.com/photo-1563720223185-11003d516935?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'مايباخ GLS 600 نايت سيريس',
-    badgeEn: 'Maybach GLS 600 Night Series'
-  },
-  {
-    make: 'Nissan',
-    model: 'Patrol Nismo V6 Twin-Turbo',
-    year: 2025,
-    trim: 'Nismo High Performance',
-    category: 'executive_suv',
-    group: 'luxury',
-    color: 'Pearl White / Nismo Red',
-    plateCity: 'Dubai',
-    dailyRate: 1800,
-    weeklyRate: 11000,
-    monthlyRate: 38000,
-    securityDeposit: 5000,
-    mileage: 1800,
-    engine: '3.5L Twin-Turbocharged V6',
-    horsepower: 495,
-    transmission: '9-Speed Automatic',
-    drivetrain: '4wd',
-    fuelType: 'petrol',
-    doors: 4,
-    seats: 7,
-    bodyStyle: 'suv',
-    vehicleClassTier: 'sport',
-    suvClass: 'performance_suv',
-    rentalSegment: 'vip',
-    thumbnail: 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=800&auto=format&fit=crop&q=80',
-    badgeAr: 'نيسان باترول نيسمو 2025',
-    badgeEn: 'Nissan Patrol Nismo 2025'
-  }
-];
 
 type Tab = 'basic' | 'classification' | 'technical' | 'pricing';
-type PresetGroup = 'all' | 'economy' | 'suv' | 'business' | 'luxury';
 
 const emptyForm = () => ({
   make: 'Hyundai',
@@ -813,20 +63,20 @@ const emptyForm = () => ({
   usageTypes: ['daily', 'family'] as VehicleUsageType[],
   catalogModelId: 'hyundai-elantra' as string | undefined,
   status: 'available' as VehicleStatus,
-  thumbnail: 'https://images.unsplash.com/photo-1617814076367-b759c7d7e738?w=800&auto=format&fit=crop&q=80',
-  images: ['https://images.unsplash.com/photo-1617814076367-b759c7d7e738?w=800&auto=format&fit=crop&q=80']
+  thumbnail: '',
+  images: [] as string[]
 });
 
 export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClose }) => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
-  const { addVehicle, firebaseSyncState, showToast } = useCRM();
+  const { addVehicle, showToast } = useCRM();
   const [submitting, setSubmitting] = useState(false);
   const [tab, setTab] = useState<Tab>('basic');
-  const [presetGroup, setPresetGroup] = useState<PresetGroup>('all');
-  const [presetSearch, setPresetSearch] = useState('');
 
   const [form, setForm] = useState(emptyForm());
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [manufacturers, setManufacturers] = useState<VehicleManufacturer[]>([]);
   const [selectedManufacturerId, setSelectedManufacturerId] = useState<string>('hyundai');
@@ -840,9 +90,19 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
   useEffect(() => {
     if (!isOpen) return;
     apiFetch('/api/vehicle-catalog/manufacturers')
-      .then((res) => res.ok ? res.json() : [])
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`Request failed (${res.status})`)))
       .then((data) => setManufacturers(Array.isArray(data) ? data : []))
-      .catch(() => setManufacturers([]));
+      .catch((err) => {
+        console.error('Failed to load manufacturer catalog:', err);
+        setManufacturers([]);
+        if (showToast) {
+          showToast(
+            isAr ? 'تعذر تحميل قائمة الشركات المصنّعة' : 'Could Not Load Manufacturers',
+            isAr ? 'حدث خطأ أثناء تحميل كتالوج الشركات المصنّعة. أعد فتح النافذة أو حاول مرة أخرى.' : 'Something went wrong loading the manufacturer catalog. Reopen this dialog or try again.',
+            'error'
+          );
+        }
+      });
   }, [isOpen]);
 
   useEffect(() => {
@@ -853,41 +113,6 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
       .catch(() => setCatalogModels([]));
   }, [selectedManufacturerId]);
 
-  const applyPreset = (preset: VehiclePresetItem) => {
-    setForm(prev => ({
-      ...prev,
-      make: preset.make,
-      model: preset.model,
-      year: preset.year,
-      trim: preset.trim || '',
-      category: preset.category,
-      exteriorColor: preset.color,
-      dailyRate: preset.dailyRate,
-      weeklyRate: preset.weeklyRate,
-      monthlyRate: preset.monthlyRate,
-      minDeposit: preset.securityDeposit,
-      mileage: preset.mileage,
-      engine: preset.engine,
-      horsepower: preset.horsepower,
-      transmission: preset.transmission,
-      drivetrain: preset.drivetrain,
-      fuelType: preset.fuelType,
-      doors: preset.doors,
-      seats: preset.seats,
-      bodyStyle: preset.bodyStyle,
-      vehicleClassTier: preset.vehicleClassTier,
-      suvClass: preset.suvClass,
-      rentalSegment: preset.rentalSegment,
-      thumbnail: preset.thumbnail,
-      images: [preset.thumbnail]
-    }));
-
-    // Find manufacturer id if available
-    const matched = manufacturers.find(m => m.name.toLowerCase() === preset.make.toLowerCase() || m.id.toLowerCase() === preset.make.toLowerCase());
-    if (matched) {
-      setSelectedManufacturerId(matched.id);
-    }
-  };
 
   const handleManufacturerSelect = (id: string) => {
     setSelectedManufacturerId(id);
@@ -919,6 +144,34 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
       roofType: model.roofType || prev.roofType,
       countryOfOrigin: model.countryOfOrigin || prev.countryOfOrigin
     }));
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const result = await uploadFile(file, 'vehicles');
+      if (result?.url) {
+        setForm(prev => ({
+          ...prev,
+          thumbnail: result.url,
+          images: [result.url, ...(prev.images || []).filter(img => img !== result.url)]
+        }));
+      }
+    } catch (err: any) {
+      console.error('Vehicle image upload failed:', err);
+      if (showToast) {
+        showToast(
+          isAr ? 'فشل رفع الصورة' : 'Image Upload Failed',
+          err?.message || (isAr ? 'حدث خطأ أثناء رفع صورة المركبة.' : 'Something went wrong uploading the vehicle image.'),
+          'error'
+        );
+      }
+    } finally {
+      setUploadingImage(false);
+    }
   };
 
   const toggleUsageType = (usage: VehicleUsageType) => {
@@ -958,14 +211,29 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
     try {
       await addVehicle(form);
       if (showToast) {
-        showToast(isAr ? `تمت إضافة المركبة ${form.make} ${form.model} بنجاح إلى الأسطول` : `Successfully registered ${form.make} ${form.model} to fleet`, 'success');
+        showToast(
+          isAr ? 'تمت إضافة المركبة' : 'Vehicle Added',
+          isAr ? `تمت إضافة ${form.make} ${form.model} بنجاح إلى الأسطول` : `${form.make} ${form.model} was successfully registered to the fleet.`,
+          'success'
+        );
       }
       onClose();
       setForm(emptyForm());
       setSelectedManufacturerId('');
       setTab('basic');
     } catch (err: any) {
+      // addVehicle() already raises its own toast on a server/network
+      // failure -- this one just guarantees the user sees SOMETHING even if
+      // that call is ever changed to fail silently, instead of the modal
+      // just sitting there with no visible feedback.
       console.error('Failed to add vehicle:', err);
+      if (showToast) {
+        showToast(
+          isAr ? 'تعذرت إضافة المركبة' : 'Could Not Add Vehicle',
+          err?.message || (isAr ? 'حدث خطأ أثناء حفظ بيانات المركبة. تحقق من البيانات المدخلة وحاول مرة أخرى.' : 'Something went wrong saving the vehicle. Check the entered data and try again.'),
+          'error'
+        );
+      }
     } finally {
       setSubmitting(false);
     }
@@ -978,12 +246,6 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
     { id: 'pricing', labelEn: '4. Rental Rates & Deposit', labelAr: '٤. أسعار الإيجار والتأمين' }
   ];
 
-  const filteredPresets = EXTENSIVE_FLEET_PRESETS.filter(p => {
-    const matchGroup = presetGroup === 'all' || p.group === presetGroup;
-    const s = presetSearch.toLowerCase();
-    const matchSearch = !s || p.make.toLowerCase().includes(s) || p.model.toLowerCase().includes(s) || p.badgeAr.includes(s);
-    return matchGroup && matchSearch;
-  });
 
   return (
     <Modal
@@ -994,85 +256,6 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
       maxWidth="4xl"
     >
       <form onSubmit={handleSubmit} className="space-y-5 text-zinc-100">
-        
-        {/* Quick Fleet Model Presets - Royal Sapphire Themed */}
-        <div className="p-4 rounded-2xl bg-gradient-to-br from-[#071328] via-[#0B1E3B] to-[#071328] border border-blue-900/60 shadow-xl shadow-blue-950/30">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3 border-b border-blue-900/40 pb-2.5">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-300">
-                <Sparkles className="w-4 h-4 text-blue-400" />
-              </div>
-              <div>
-                <span className="text-xs font-bold text-blue-200">
-                  {isAr ? 'نماذج سريعة التحميل (هيونداي، كيا، جيتور، تويوتا، نيسان، وفخامة سبلندر):' : 'Instant Pre-Fill Fleet Catalog Models:'}
-                </span>
-                <p className="text-[10px] text-blue-300/70">
-                  {isAr ? 'انقر على أي فئة لتعبئة جميع المواصفات والأسعار ومبالغ التأمين بنقرة واحدة' : 'Click any model to instantly populate specs, rates, seating, and deposits'}
-                </p>
-              </div>
-            </div>
-
-            {/* Filter buttons for presets */}
-            <div className="flex items-center gap-1 overflow-x-auto">
-              {[
-                { id: 'all', labelAr: 'الكل', labelEn: 'All' },
-                { id: 'economy', labelAr: 'اقتصادي ويومي', labelEn: 'Economic' },
-                { id: 'suv', labelAr: 'جيتور وSUV', labelEn: 'Jetour & SUVs' },
-                { id: 'business', labelAr: 'سيدان وفان', labelEn: 'Business & Vans' },
-                { id: 'luxury', labelAr: 'سوبركار وفارهة', labelEn: 'Supercars' }
-              ].map(grp => (
-                <button
-                  key={grp.id}
-                  type="button"
-                  onClick={() => setPresetGroup(grp.id as PresetGroup)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-all ${
-                    presetGroup === grp.id
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/40 border border-blue-400'
-                      : 'bg-[#071328] text-blue-300/80 hover:text-white border border-blue-900/40 hover:bg-blue-900/30'
-                  }`}
-                >
-                  {isAr ? grp.labelAr : grp.labelEn}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto pr-1">
-            {filteredPresets.map(p => (
-              <button
-                key={`${p.make}-${p.model}`}
-                type="button"
-                onClick={() => applyPreset(p)}
-                className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
-                  form.make === p.make && form.model === p.model
-                    ? 'bg-blue-600 text-white border-blue-300 shadow-md shadow-blue-600/40 scale-[1.02]'
-                    : 'bg-[#0B1E3B]/70 hover:bg-blue-900/40 border-blue-900/60 text-blue-200 hover:text-white hover:border-blue-500/50'
-                }`}
-              >
-                <Car className="w-3.5 h-3.5 text-blue-400" />
-                <span>{isAr ? p.badgeAr : p.badgeEn}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-950/80 border border-blue-800 text-blue-300 font-mono">
-                  {p.dailyRate} AED/d
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Live Cloud Status Banner */}
-        <div className="flex items-center justify-between px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#071328] via-[#0B1E3B] to-[#071328] border border-blue-900/50 text-xs text-blue-200">
-          <div className="flex items-center gap-2.5">
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-            <span className="font-semibold">{isAr ? 'نظام سبلندر الملكي السحابي متصل:' : 'Splendor Cloud Active:'}</span>
-            <span className="text-blue-300 font-mono text-[11px] bg-blue-950/60 px-2 py-0.5 rounded-md border border-blue-800/40">
-              {firebaseSyncState.projectId || 'production-splendor-db'}
-            </span>
-          </div>
-          <div className="text-[11px] text-blue-400 font-medium">
-            {isAr ? 'المركبة الحالية المختارة:' : 'Current Form:'} <span className="font-bold text-white">{form.make} {form.model} ({form.year})</span>
-          </div>
-        </div>
-
         {/* Navigation Tabs */}
         <div className="flex items-center gap-2 border-b border-blue-900/40 pb-2 overflow-x-auto">
           {tabs.map(tb => (
@@ -1234,34 +417,6 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
                     className="w-full px-3.5 py-2 rounded-xl bg-zinc-950/80 border border-zinc-800 text-white text-xs focus:border-blue-500 focus:outline-none" 
                   />
                 </div>
-              </div>
-            </div>
-
-            {/* Quick Country Presets Chips */}
-            <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800/80">
-              <span className="text-[11px] font-medium text-zinc-400 block mb-2">
-                {isAr ? 'اختيارات سريعة لبلد الصنع والمنشأ:' : 'Quick Country Shortcuts:'}
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {COUNTRY_OF_ORIGIN_PRESETS.map(c => {
-                  const countryLabel = `${c.flag} ${isAr ? c.nameAr : c.nameEn}`;
-                  const isSelected = form.countryOfOrigin === countryLabel || form.countryOfOrigin.includes(c.nameAr) || form.countryOfOrigin.includes(c.nameEn);
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setForm({ ...form, countryOfOrigin: countryLabel })}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1.5 transition-all ${
-                        isSelected 
-                          ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-sm' 
-                          : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-zinc-800'
-                      }`}
-                    >
-                      <span>{c.flag}</span>
-                      <span>{isAr ? c.nameAr : c.nameEn}</span>
-                    </button>
-                  );
-                })}
               </div>
             </div>
 
@@ -1452,17 +607,20 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({ isOpen, onClos
               </div>
             </div>
 
-            {/* Thumbnail URL */}
+            {/* Vehicle photo -- uploaded from the staff member's own device, never a pasted link */}
             <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">{isAr ? 'رابط صورة المركبة' : 'Vehicle Image URL'}</label>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">{isAr ? 'صورة المركبة' : 'Vehicle Photo'}</label>
               <div className="flex gap-3 items-center">
-                <input
-                  type="url"
-                  value={form.thumbnail}
-                  onChange={e => setForm({ ...form, thumbnail: e.target.value, images: [e.target.value] })}
-                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-white text-xs focus:border-blue-500 focus:outline-none"
-                  placeholder="https://..."
-                />
+                <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
+                <button
+                  type="button"
+                  disabled={uploadingImage}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-950 border border-dashed border-zinc-700 hover:border-blue-500/60 text-xs font-semibold text-zinc-200 disabled:opacity-50 transition-all"
+                >
+                  <UploadCloud className="w-4 h-4 text-blue-400" />
+                  {uploadingImage ? (isAr ? 'جاري الرفع...' : 'Uploading...') : (isAr ? 'رفع صورة من الجهاز' : 'Upload from Device')}
+                </button>
                 {form.thumbnail && (
                   <img src={form.thumbnail} alt="Preview" className="w-14 h-10 rounded-xl object-cover border border-blue-800/60 shadow" />
                 )}

@@ -1,7 +1,7 @@
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { issueNextNumber } from './idGenerator';
-import { LTO_LETTERHEAD_HEADER_PNG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
+import { LTO_LETTERHEAD_HEADER_JPEG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
 import { escapeHtml } from './htmlEscape';
 import { applyCorporateStamp } from './corporateDocumentStamp';
 
@@ -24,7 +24,10 @@ export type CorporateDocumentKind =
   | 'vehicle_record_card'
   | 'vehicle_exit_permit'
   | 'account_statement'
-  | 'quotation';
+  | 'quotation'
+  | 'payment_demand_notice'
+  | 'fleet_document_renewal_schedule'
+  | 'damage_claim_notice';
 
 export interface CorporateDocumentInput {
   kind: CorporateDocumentKind;
@@ -59,7 +62,10 @@ const META: Record<CorporateDocumentKind, { ar: string; en: string; numbering: s
   vehicle_record_card: { ar: 'بطاقة مركبة', en: 'VEHICLE RECORD CARD', numbering: 'document' },
   vehicle_exit_permit: { ar: 'تصريح خروج مركبة خارج الدولة', en: 'VEHICLE EXIT PERMIT', numbering: 'document' },
   account_statement: { ar: 'كشف حساب', en: 'ACCOUNT STATEMENT', numbering: 'accountstatement' },
-  quotation: { ar: 'عرض سعر', en: 'QUOTATION', numbering: 'quotation' }
+  quotation: { ar: 'عرض سعر', en: 'QUOTATION', numbering: 'quotation' },
+  payment_demand_notice: { ar: 'إنذار بالسداد', en: 'PAYMENT DEMAND NOTICE', numbering: 'document' },
+  fleet_document_renewal_schedule: { ar: 'جدول تجديد وثائق الأسطول', en: 'FLEET DOCUMENT RENEWAL SCHEDULE', numbering: 'document' },
+  damage_claim_notice: { ar: 'مطالبة أضرار', en: 'DAMAGE CLAIM NOTICE', numbering: 'document' }
 };
 
 function text(value: unknown): string {
@@ -130,13 +136,19 @@ function renderBody(input: CorporateDocumentInput, serial: string): string {
       return `<div class="statement-top"><div class="statement-title"><h1>كشف حساب</h1><div class="statement-en">ACCOUNT STATEMENT</div><div class="as-of">حتى تاريخ ${text(f.asOfDate || input.date) || '—'}</div></div><div class="statement-info">${fieldsBlock({ 'رقم عقد الإيجار': f.contractNumber, 'تاريخ العقد': f.contractDate, 'اسم العميل': customer.name, 'نوع السيارة': vehicle.name, 'رقم اللوحة': vehicle.plateNumber })}</div></div>${rows.length ? table(['م', 'التاريخ', 'البيان', 'مستحق (مدين)', 'مدفوع (دائن)', 'الرصيد'], rows, ['no', 'date', 'description', 'debit', 'credit', 'balance']) : ''}<div class="statement-bottom"><div class="statement-notes"><h3>ملاحظات</h3><p>الأقساط تستحق في اليوم الأول من كل شهر حسب شروط العقد الموقع بين الطرفين.</p><p>جميع مبالغ سالك والمخالفات والمواقف هي على عاتق المستأجر وفقاً لبنود العقد.</p><p>${text((input.notes || [])[0]) || 'يرجى مراجعة الكشف والتواصل مع الشركة في حال وجود أي استفسار.'}</p></div><div class="amount-due"><div class="amount-title">إجمالي المبلغ المستحق</div><div class="amount-value">${money(f.totalDue)} AED</div><div class="amount-label">رقم إيصال</div><div class="receipt-ref">${text(f.receiptNumber) || '—'}</div><p>يرجى سداد المبلغ المستحق خلال 3 أيام من تاريخ الكشف.</p></div></div><div class="statement-thanks">نشكر لكم على ثقتكم واختياركم سبلندر لتأجير السيارات، ونسعد دائماً بخدمتكم.</div>`;
     case 'quotation':
       return `${heading}<h2>بيانات العميل والمركبة</h2>${fieldsBlock({ 'اسم العميل': customer.name, 'الهاتف': customer.phone, 'البريد الإلكتروني': customer.email, 'نوع السيارة': vehicle.name, 'رقم اللوحة': vehicle.plateNumber, 'تاريخ ووقت الاستلام': f.startDate, 'تاريخ ووقت التسليم': f.endDate, 'مدة الإيجار': f.durationDays ? `${f.durationDays} يوم / Days` : '', 'صلاحية العرض حتى': f.validUntil })}<h2>تفاصيل التسعير | PRICING DETAILS</h2>${rows.length ? table(['م', 'البيان', 'المدة / الكمية', 'سعر الوحدة', 'الإجمالي'], rows, ['no', 'description', 'quantity', 'unitPrice', 'total']) : ''}${summaryBox([['قيمة الإيجار الأساسية', f.baseTotal], ['الخدمات الإضافية', f.extraServicesTotal], ['الخصم', f.discountAmount]], ['الإجمالي قبل الضريبة', f.subtotal])}${summaryBox([['ضريبة القيمة المضافة (5%)', f.vatAmount], ['مبلغ التأمين', f.securityDeposit]], ['الإجمالي النهائي شامل الضريبة', f.grandTotal])}${notesBlock(input.notes)}<section class="prose"><h3>الشروط والملاحظات</h3><p>${text(f.termsAndConditions || input.body || 'هذا العرض صالح للفترة المحددة أعلاه، ويخضع لتوافر المركبة وشروط وأحكام الإيجار المعتمدة لدى سبلندر لتأجير السيارات.')}</p></section><div class="signature-grid"><div>توقيع العميل: ____________________</div><div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div></div>`;
+    case 'payment_demand_notice':
+      return `${heading}<h2>بيانات العميل والعقد</h2>${fieldsBlock({ 'اسم العميل': customer.name, 'رقم عقد الإيجار': f.contractNumber, 'رقم اللوحة': vehicle.plateNumber, 'تاريخ استحقاق السداد': f.dueDate })}${summaryBox([['إجمالي المبلغ المستحق', f.totalDue]], ['المبلغ الواجب سداده خلال المهلة المحددة', f.totalDue])}<section class="prose"><h3>إنذار بالسداد</h3><p>${text(input.body || 'نحيطكم علمًا بوجود مبلغ مستحق على حسابكم لدى سبلندر لتأجير السيارات كما هو مبين أعلاه. يرجى المبادرة بسداد كامل المبلغ المستحق خلال المهلة المحددة أعلاه، وإلا فإن الشركة ستضطر لاتخاذ كافة الإجراءات القانونية اللازمة لتحصيل حقوقها دون أي إشعار آخر.')}</p></section>${notesBlock(input.notes)}<div class="signature-grid"><div>إقرار العميل بالاستلام: ____________________</div><div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div></div>`;
+    case 'fleet_document_renewal_schedule':
+      return `${heading}<h2>جدول تجديد وثائق الأسطول</h2>${rows.length ? table(['م', 'رقم اللوحة', 'نوع المركبة', 'نوع الوثيقة', 'تاريخ الانتهاء', 'الحالة'], rows, ['no', 'plateNumber', 'vehicleName', 'documentType', 'expiryDate', 'status']) : ''}${notesBlock(input.notes)}<div class="signature-grid"><div>إعداد قسم الأسطول: ____________________</div><div>اعتماد الإدارة: ____________________</div></div>`;
+    case 'damage_claim_notice':
+      return `${heading}<h2>بيانات العميل والعقد والمركبة</h2>${fieldsBlock({ 'اسم العميل': customer.name, 'رقم عقد الإيجار': f.contractNumber, 'رقم اللوحة': vehicle.plateNumber, 'تاريخ الاستلام': f.returnDate })}${rows.length ? table(['م', 'وصف الضرر', 'موقع الضرر', 'تكلفة الإصلاح', 'ملاحظات'], rows, ['no', 'description', 'location', 'cost', 'notes']) : ''}${summaryBox([['إجمالي تكلفة الأضرار', f.damagesTotal], ['رسوم إدارية', f.adminFees]], ['إجمالي المطالبة المستحقة', f.total])}${notesBlock(input.notes)}<div class="signature-grid"><div>إقرار العميل بالاستلام: ____________________</div><div>ختم وتوقيع سبلندر لتأجير السيارات: ____________________</div></div>`;
   }
 }
 
 export function buildCorporateDocumentHtml(input: CorporateDocumentInput, serial: string): string {
   const body = applyCorporateStamp(renderBody(input, serial));
   return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>
-@page { size:A4; margin: 30mm 0 24mm 0; }
+@page { size:A4; margin: 60mm 0 16mm 0; }
 *{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#242424;font-family:"Noto Sans Arabic","Noto Sans",Arial,sans-serif}body{font-size:10.5pt;line-height:1.65;padding:0 14mm 0 14mm}.document-heading{border-bottom:2px solid #c9a227;padding:2mm 0 4mm;margin-bottom:5mm;text-align:center}.document-heading h1{margin:0;color:#8e1118;font-size:20pt;font-weight:700}.subtitle{margin-top:1mm;color:#857d75;letter-spacing:4px;font-size:9pt}.reference{margin-top:3mm;font-size:8.5pt;color:#5f5a55}.reference strong{color:#7d0d14}.fields{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #e6dfd6;background:#fbf8f3;margin:0 0 5mm}.field{min-height:18mm;padding:3mm 4mm;border-left:1px solid #e6dfd6;border-bottom:1px solid #e6dfd6}.field:nth-child(3n){border-left:0}.field:nth-last-child(-n+3){border-bottom:0}.label{color:#8e1118;font-size:8.5pt;margin-bottom:1mm}.value{font-weight:600;color:#2e2b28;min-height:5mm}.letter-meta{display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin-bottom:6mm}.letter-body,.prose,.notes{border:1px solid #e5dfd7;padding:5mm;margin:5mm 0;background:#fff}.prose h3,.notes h3{margin:0 0 3mm;color:#8e1118;font-size:12pt}.prose p,.notes p{margin:1.5mm 0}.wide-field{border:1px solid #e5dfd7;padding:4mm;margin:4mm 0;background:#fbf8f3}.signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:18mm;margin-top:12mm;padding-top:4mm}.signature-grid>div{min-height:18mm;border-top:1px solid #c9a227;padding-top:2mm;color:#6d665f;display:flex;align-items:flex-start;justify-content:center;position:relative}.corporate-stamp-anchor{display:inline-flex;align-items:center;justify-content:center;width:42mm;height:30mm;vertical-align:middle;flex:0 0 auto}.corporate-stamp-anchor img{width:30mm;height:30mm;object-fit:contain;display:block}.corporate-approval-block{display:flex;justify-content:flex-end;margin-top:10mm;min-height:34mm}.corporate-approval-block .corporate-stamp-anchor{width:38mm;height:34mm}.corporate-approval-block .corporate-stamp-anchor img{width:34mm;height:34mm}h2{background:#8e1118;color:#fff;border-bottom:2px solid #c9a227;padding:2.5mm 4mm;margin:5mm 0 0;font-size:11.5pt}table{width:100%;border-collapse:collapse;margin:0 0 5mm;font-size:8.5pt;page-break-inside:auto}thead{display:table-header-group}tr{page-break-inside:avoid}th{background:#a90f18;color:#fff;padding:2.5mm 2mm;border:1px solid #c9a227;font-weight:700}td{padding:2.3mm 2mm;border:1px solid #e6e0d8;text-align:center}tbody tr:nth-child(even){background:#fcf5f3}.summary-box{margin:5mm 0 0 50%;border:1px solid #d9d0c6;background:#fbf8f3}.summary-line,.summary-total{display:flex;justify-content:space-between;padding:2.5mm 4mm;border-bottom:1px solid #e3ddd6}.summary-total{background:#8e1118;color:#fff;border-bottom:0;font-size:11pt}.summary-total strong{color:#fff}.statement-top{display:grid;grid-template-columns:1.05fr 1.45fr;gap:6mm;align-items:start;margin-bottom:5mm}.statement-title{padding-top:4mm;text-align:center}.statement-title h1{margin:0;color:#8e1118;font-size:23pt}.statement-en{color:#857d75;letter-spacing:3px;font-size:8.5pt;margin-top:1mm}.as-of{color:#a90f18;border-bottom:1px solid #c9a227;display:inline-block;padding:1mm 5mm;margin-top:3mm}.statement-info .fields{margin-bottom:0}.statement-info .field{min-height:15mm}.statement-bottom{display:grid;grid-template-columns:1.15fr .85fr;gap:6mm;margin-top:2mm;align-items:stretch}.statement-notes{border:1px solid #d9d0c6;background:#fbf8f3;padding:4mm}.statement-notes h3{margin:0 0 2mm;color:#8e1118;font-size:12pt}.statement-notes p{font-size:8.5pt;margin:1.5mm 0}.amount-due{background:#8e1118;color:#fff;border:2px solid #c9a227;padding:5mm;text-align:center}.amount-title{font-size:11pt}.amount-value{font-size:20pt;font-weight:800;margin:3mm 0;color:#fff}.amount-label{font-size:8.5pt;color:#f1d889}.receipt-ref{font-weight:700;font-size:10pt;margin-top:1mm}.amount-due p{font-size:7.5pt;color:#f7ead0;margin:4mm 0 0}.statement-thanks{text-align:center;color:#8e1118;font-size:8.5pt;margin-top:4mm;padding-top:3mm;border-top:1px solid #c9a227}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
 </style></head><body>${body}</body></html>`;
 }
@@ -157,9 +169,14 @@ export async function issueAndRenderCorporateDocument(input: CorporateDocumentIn
       format: 'A4',
       printBackground: true,
       displayHeaderFooter: true,
-      headerTemplate: `<div style="width:100%;margin:0;padding:0"><img src="data:image/png;base64,${LTO_LETTERHEAD_HEADER_PNG_BASE64}" style="width:100%;display:block" /></div>`,
+      headerTemplate: `<div style="width:100%;margin:0;padding:0"><img src="data:image/jpeg;base64,${LTO_LETTERHEAD_HEADER_JPEG_BASE64}" style="width:100%;display:block" /></div>`,
       footerTemplate: `<div style="width:100%;margin:0;padding:0"><img src="data:image/png;base64,${LTO_LETTERHEAD_FOOTER_PNG_BASE64}" style="width:100%;display:block" /></div>`,
-      margin: { top: '30mm', bottom: '24mm', left: '0', right: '0' }
+      // Must match the real letterhead image's own aspect ratio scaled to
+      // full A4 width (no left/right margin), or Chromium's fixed-height
+      // header/footer box clips the image instead of scaling it to fit.
+      // Header 1240x350px, footer 1240x93px -> at the A4 printable width
+      // (~793.7px), header needs ~59.3mm and footer ~15.75mm.
+      margin: { top: '60mm', bottom: '16mm', left: '0', right: '0' }
     }));
     return { serial, kind: input.kind, pdf, fileName: `${serial}-${meta.en.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf` };
   } finally {

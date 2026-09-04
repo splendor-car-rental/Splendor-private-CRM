@@ -5,7 +5,7 @@ import { issueNextNumber } from './idGenerator';
 import { globalStore } from './dataStore';
 import { LtoError, type LtoActor } from './leaseToOwn';
 import type { RecordAuditFn } from './businessRules';
-import { LTO_LETTERHEAD_HEADER_PNG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
+import { LTO_LETTERHEAD_HEADER_JPEG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
 import { escapeHtml } from './htmlEscape';
 import type { Contract, Customer, LtoInstallment, CRMDocument } from '../types';
 
@@ -34,7 +34,13 @@ function money(n: number): string {
 function arDate(iso: string | undefined): string {
   if (!iso) return '.......................';
   const d = new Date(iso);
-  return d.toLocaleDateString('ar-AE', { year: 'numeric', month: 'long', day: 'numeric', calendar: 'gregory' });
+  // This runs server-side (Vercel), whose runtime timezone is not
+  // guaranteed to be UAE's -- it's commonly UTC. Without an explicit
+  // timeZone, a timestamp close to midnight UAE time (UTC+4) can render as
+  // the wrong calendar day on a signed legal contract. Every date on this
+  // document must read as it would to someone standing in the UAE,
+  // regardless of where the rendering server physically runs.
+  return d.toLocaleDateString('ar-AE', { year: 'numeric', month: 'long', day: 'numeric', calendar: 'gregory', timeZone: 'Asia/Dubai' });
 }
 
 /** Builds the full Arabic contract HTML without performing I/O. */
@@ -114,7 +120,7 @@ export function buildLtoContractHtml(contract: Contract, customer: Customer, ins
 }
 
 function headerTemplate(): string {
-  return `<div style="width:100%;margin:0;padding:0;"><img src="data:image/png;base64,${LTO_LETTERHEAD_HEADER_PNG_BASE64}" style="width:100%;display:block;" /></div>`;
+  return `<div style="width:100%;margin:0;padding:0;"><img src="data:image/jpeg;base64,${LTO_LETTERHEAD_HEADER_JPEG_BASE64}" style="width:100%;display:block;" /></div>`;
 }
 
 function footerTemplate(): string {
@@ -130,7 +136,12 @@ export async function renderLtoContractPdf(contract: Contract, customer: Custome
     const pdf = await page.pdf({
       format: 'A4', printBackground: true, displayHeaderFooter: true,
       headerTemplate: headerTemplate(), footerTemplate: footerTemplate(),
-      margin: { top: '155px', bottom: '60px', left: '0px', right: '0px' }
+      // Header/footer margins must match the real letterhead image's own
+      // aspect ratio scaled to full A4 width (no left/right margin), or
+      // Chromium's fixed-height header/footer box clips the image instead
+      // of scaling it to fit. Header 1240x350px, footer 1240x93px -> at the
+      // A4 printable width (~793.7px), header needs ~224px and footer ~60px.
+      margin: { top: '226px', bottom: '60px', left: '0px', right: '0px' }
     });
     return Buffer.from(pdf);
   } finally {

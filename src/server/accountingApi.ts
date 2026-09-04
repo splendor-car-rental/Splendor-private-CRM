@@ -55,7 +55,16 @@ function badRequest(res: Response, error: unknown) {
 }
 
 function pathSegments(req: Request): string[] {
-  return req.path.replace(/^\/api\/accounting\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  // req.path is an Express-only convenience. handleAccountingRequest is
+  // invoked directly from api/index.ts's bare Vercel serverless handler
+  // (no Express in front of it there), where req.path is not reliably
+  // populated -- reading .replace() off it then threw "Cannot read
+  // properties of undefined" for every single /api/accounting/* call,
+  // which is every request the Finance Control Center screen makes.
+  // req.url is present on both a real Express request and Vercel's raw
+  // request object, so derive the path from that instead.
+  const path = req.path || (req.url ? req.url.split('?')[0] : '') || '';
+  return path.replace(/^\/api\/accounting\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
 }
 
 function assertFinanceActor(actor: AccountingActor) {

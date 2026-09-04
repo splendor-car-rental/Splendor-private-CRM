@@ -9,7 +9,13 @@ describe('purchase-order source of truth', () => {
     const app = read('src/App.tsx');
 
     expect(app).not.toContain("./components/views/PurchaseOrdersManagementView");
-    expect(app).toMatch(/case 'procurement':[\s\S]*case 'purchase-orders':[\s\S]*case 'lpo':[\s\S]*case 'supply-orders': return <ProcurementView \/>/);
+    // Both the "Procurement & Suppliers" and the "Purchase Orders" sidebar
+    // entries render the one durable ProcurementView -- never a second,
+    // parallel component -- but each opens on the internal tab its own
+    // label promised (initialTab) instead of both always landing on
+    // Purchase Orders regardless of which was clicked.
+    expect(app).toMatch(/case 'procurement': return <ProcurementView initialTab="suppliers" \/>/);
+    expect(app).toMatch(/case 'purchase-orders':[\s\S]*case 'lpo':[\s\S]*case 'supply-orders': return <ProcurementView initialTab="purchase-orders" \/>/);
   });
 
   it('does not navigate from the durable register into the browser-only shadow register', () => {

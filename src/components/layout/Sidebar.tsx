@@ -175,6 +175,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <Receipt className="w-4 h-4" />
         },
         {
+          id: 'tax-filing',
+          label: language === 'ar' ? 'الضرائب والإقرارات' : 'Tax & Filing',
+          icon: <Calculator className="w-4 h-4" />
+        },
+        {
           id: 'corporate-branches',
           label: language === 'ar' ? 'الشركات والائتمان والفروع' : 'Corporate & Branches',
           icon: <Building2 className="w-4 h-4 text-blue-400" />,

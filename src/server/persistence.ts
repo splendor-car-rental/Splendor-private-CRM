@@ -31,6 +31,12 @@ function requireDb() {
   return admin.firestore();
 }
 
+function assertPhysicalDeleteAllowed(collection: string): void {
+  if (collection === 'vehicles') {
+    throw new PersistenceError('Physical deletion of vehicle master records is prohibited. Use the audited archive lifecycle instead.');
+  }
+}
+
 /**
  * Creates a new document with a guaranteed-fresh id (normally issued by
  * issueNextNumber() just before this call). Uses Firestore's `.create()`
@@ -57,8 +63,9 @@ export async function updateDurable(collection: string, id: string, data: Record
   }
 }
 
-/** Deletes a document. */
+/** Deletes a document. Vehicle master records are explicitly non-destructive. */
 export async function deleteDurable(collection: string, id: string): Promise<void> {
+  assertPhysicalDeleteAllowed(collection);
   try {
     await requireDb().collection(collection).doc(id).delete();
   } catch (err) {
@@ -79,6 +86,9 @@ export type BatchOp =
 
 export async function runDurableBatch(ops: BatchOp[]): Promise<void> {
   if (ops.length === 0) return;
+  for (const op of ops) {
+    if (op.type === 'delete') assertPhysicalDeleteAllowed(op.collection);
+  }
   const db = requireDb();
   try {
     const batch = db.batch();

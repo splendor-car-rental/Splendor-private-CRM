@@ -17,7 +17,7 @@ for (const u of users) {
     if (e.code !== 'auth/uid-already-exists') throw e;
   }
   await admin.firestore().collection('users').doc(u.uid).set({
-    name: u.name, email: u.email, role: u.role, isActive: true, createdAt: new Date().toISOString()
+    name: u.name, email: u.email, role: u.role, status: 'active', createdAt: new Date().toISOString()
   }, { merge: true });
   console.log('seeded', u.uid, u.role);
 }

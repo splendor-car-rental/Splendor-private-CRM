@@ -268,6 +268,41 @@ export interface VatSummary {
   vatPayable: number;
 }
 
+/**
+ * A Tax Period is a review-and-sign-off record, never a filing: this app
+ * has no Filing API and never will short of the user's own explicit,
+ * separate authorization outside this codebase (see Splendor OS 3.0
+ * execution blueprint, Rule 15). 'reviewed' means "an authorized second
+ * person has confirmed these figures against the current accounting
+ * evidence" -- nothing more. There is deliberately no 'filed' or
+ * 'ready_for_filing' status.
+ */
+export type TaxPeriodStatus = 'draft' | 'under_review' | 'reviewed';
+
+export interface TaxPeriod {
+  id: string; // periodKey, YYYY-MM
+  periodKey: string;
+  startDate: string;
+  endDate: string;
+  status: TaxPeriodStatus;
+  outputVat: number;
+  inputVat: number;
+  vatPayable: number;
+  postingGapCount: number;
+  /** Hash of every posted journal in this period at the moment this snapshot was taken -- lets a later read detect that new postings landed after a 'reviewed' sign-off (see reviewTaxPeriod/getTaxPeriodView in taxPeriods.ts). */
+  evidenceRevision: string;
+  pendingApprovalRequestId?: string;
+  preparedBy?: string;
+  preparedByName?: string;
+  preparedAt?: string;
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  staleNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CashBookRow {
   journalId: string;
   date: string;

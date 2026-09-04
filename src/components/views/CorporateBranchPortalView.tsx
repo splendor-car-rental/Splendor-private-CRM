@@ -11,26 +11,17 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { formatAED } from '../../lib/currency';
 import { formatDate } from '../../lib/dateFormat';
+import { SOVEREIGN_BRANCHES } from '../../config/branches';
+import { AddCorporateAccountModal } from '../modals/AddCorporateAccountModal';
 import { CorporateAccount } from '../../types';
-
-const SOVEREIGN_BRANCHES = [
-  { id: 'DXB_BB', nameEn: 'Dubai Flagship • Business Bay', nameAr: 'الفرع الرئيسي • الخليج التجاري', code: 'DXB-01' },
-  { id: 'DXB_DIFC', nameEn: 'DIFC Executive Hub & Lounge', nameAr: 'مركز دبي المالي العالمي (DIFC)', code: 'DXB-02' },
-  { id: 'DXB_PALM', nameEn: 'Palm Jumeirah VIP Concierge', nameAr: 'نخلة جميرا (VIP)', code: 'DXB-03' },
-  { id: 'AUH_HUB', nameEn: 'Abu Dhabi Sovereign Hub', nameAr: 'فرع العاصمة أبوظبي', code: 'AUH-01' }
-];
 
 export const CorporateBranchPortalView: React.FC = () => {
   const { language } = useLanguage();
   const { currentUser } = useAuth();
-  const { 
-    corporateAccounts, 
-    contracts, 
-    vehicles,
-    addCorporateAccount,
+  const {
+    corporateAccounts,
     updateCorporateAccount,
-    deleteCorporateAccount,
-    showToast
+    deleteCorporateAccount
   } = useCRM();
 
   const isManagement = currentUser?.role === 'ceo' || currentUser?.role === 'admin';
@@ -94,28 +85,6 @@ export const CorporateBranchPortalView: React.FC = () => {
 
   const totalAvailableCredit = Math.max(0, totalCreditAllocated - totalExposureUsed);
 
-  const handleOpenCreate = () => {
-    setFormData({
-      legalName: '',
-      legalNameAr: '',
-      tradeLicenseNumber: '',
-      trnVatNumber: '',
-      licenseExpiry: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split('T')[0],
-      branchId: 'DXB_BB',
-      primaryContact: {
-        name: '',
-        email: '',
-        phone: '',
-        designation: ''
-      },
-      creditLimitAed: 150000,
-      paymentTermsDays: 30,
-      status: 'active',
-      notes: ''
-    });
-    setIsCreateModalOpen(true);
-  };
-
   const handleOpenEdit = (corp: CorporateAccount) => {
     setFormData({
       legalName: corp.legalName || '',
@@ -136,25 +105,6 @@ export const CorporateBranchPortalView: React.FC = () => {
       notes: corp.notes || ''
     });
     setIsEditModalOpen(true);
-  };
-
-  const handleSaveCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.legalName.trim()) {
-      showToast('Validation Error', 'Legal Company Name is required', 'error');
-      return;
-    }
-    try {
-      const created = await addCorporateAccount({
-        ...formData,
-        creditLimitAed: Number(formData.creditLimitAed) || 0,
-        paymentTermsDays: Number(formData.paymentTermsDays) || 30
-      });
-      if (created?.id) setSelectedCorpId(created.id);
-      setIsCreateModalOpen(false);
-    } catch (err: any) {
-      // toast shown in context
-    }
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
@@ -214,7 +164,7 @@ export const CorporateBranchPortalView: React.FC = () => {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={handleOpenCreate}
+            onClick={() => setIsCreateModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-blue-600/30 transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
@@ -331,7 +281,7 @@ export const CorporateBranchPortalView: React.FC = () => {
                     : 'Sample data has been removed. Use the button above to register your actual corporate clients.'}
                 </p>
                 <button
-                  onClick={handleOpenCreate}
+                  onClick={() => setIsCreateModalOpen(true)}
                   className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
@@ -481,7 +431,7 @@ export const CorporateBranchPortalView: React.FC = () => {
               {selectedCorp.primaryContact && (
                 <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-2 text-xs">
                   <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
-                    {language === 'ar' ? 'المسؤول المعتمد' : 'Authorized Representative'}
+                    {language === 'ar' ? 'الشخص المخوّل بالتوقيع' : 'Authorized Signatory'}
                   </div>
                   <div className="font-semibold text-zinc-200">{selectedCorp.primaryContact.name || '—'}</div>
                   <div className="text-zinc-400 text-[11px]">{selectedCorp.primaryContact.designation || 'Contact Person'}</div>
@@ -492,6 +442,37 @@ export const CorporateBranchPortalView: React.FC = () => {
                     {selectedCorp.primaryContact.email && (
                       <span className="flex items-center gap-1"><Mail className="w-3 h-3 text-blue-400" /> {selectedCorp.primaryContact.email}</span>
                     )}
+                  </div>
+                  {(selectedCorp.primaryContact.authorizationType || selectedCorp.primaryContact.authorizationRef) && (
+                    <div className="pt-2 mt-1 border-t border-zinc-800/80 text-[11px] text-zinc-400 space-y-0.5">
+                      {selectedCorp.primaryContact.authorizationType && (
+                        <div>{language === 'ar' ? 'نوع التفويض: ' : 'Authorization: '}<span className="text-zinc-300">{selectedCorp.primaryContact.authorizationType.replace(/_/g, ' ')}</span></div>
+                      )}
+                      {selectedCorp.primaryContact.authorizationRef && (
+                        <div className="font-mono">{language === 'ar' ? 'المرجع: ' : 'Ref: '}{selectedCorp.primaryContact.authorizationRef}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Client's Own Branch Network */}
+              {selectedCorp.branches && selectedCorp.branches.length > 0 && (
+                <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-2 text-xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider flex items-center gap-1.5">
+                    <MapPin className="w-3 h-3 text-blue-400" />
+                    {language === 'ar' ? 'فروع الشركة (مكاتب العميل)' : "Client's Own Branch Network"}
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedCorp.branches.map(branch => (
+                      <div key={branch.id} className="flex items-center justify-between text-[11px] text-zinc-300 p-1.5 rounded-lg bg-zinc-950/60">
+                        <span>
+                          {branch.branchName || '—'}
+                          {branch.isHeadOffice && <span className="ms-1.5 text-[9px] text-blue-400 font-mono">HQ</span>}
+                        </span>
+                        <span className="text-zinc-500">{branch.emirate}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -525,207 +506,15 @@ export const CorporateBranchPortalView: React.FC = () => {
 
       </div>
 
-      {/* CREATE CORPORATE ACCOUNT MODAL */}
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-fade-in">
-          <div className="bg-zinc-950 border border-blue-900/50 rounded-3xl p-6 w-full max-w-2xl shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <div className="flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-blue-400" />
-                <h3 className="text-lg font-bold text-zinc-100">
-                  {language === 'ar' ? 'تسجيل حساب شركة جديدة (بيانات حقيقية)' : 'Register Real Corporate Client'}
-                </h3>
-              </div>
-              <button
-                onClick={() => setIsCreateModalOpen(false)}
-                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveCreate} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'اسم الشركة الرسمي (English) *' : 'Legal Company Name (EN) *'}</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.legalName}
-                    onChange={e => setFormData({ ...formData, legalName: e.target.value })}
-                    placeholder="e.g. Al Futtaim Group LLC"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'اسم الشركة بالعربي' : 'Company Name (AR)'}</label>
-                  <input
-                    type="text"
-                    value={formData.legalNameAr}
-                    onChange={e => setFormData({ ...formData, legalNameAr: e.target.value })}
-                    placeholder="مثال: مجموعة الفطيم ش.ذ.م.م"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'رقم الرخصة التجارية' : 'Trade License No.'}</label>
-                  <input
-                    type="text"
-                    value={formData.tradeLicenseNumber}
-                    onChange={e => setFormData({ ...formData, tradeLicenseNumber: e.target.value })}
-                    placeholder="CN-1234567"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'الرقم الضريبي TRN' : 'VAT TRN Number'}</label>
-                  <input
-                    type="text"
-                    value={formData.trnVatNumber}
-                    onChange={e => setFormData({ ...formData, trnVatNumber: e.target.value })}
-                    placeholder="100293847500003"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'انتهاء الرخصة' : 'License Expiry'}</label>
-                  <input
-                    type="date"
-                    value={formData.licenseExpiry}
-                    onChange={e => setFormData({ ...formData, licenseExpiry: e.target.value })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'الفرع المسؤول' : 'Assigned Branch'}</label>
-                  <select
-                    value={formData.branchId}
-                    onChange={e => setFormData({ ...formData, branchId: e.target.value })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                  >
-                    {SOVEREIGN_BRANCHES.map(b => (
-                      <option key={b.id} value={b.id}>{language === 'ar' ? b.nameAr : b.nameEn}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'سقف الائتمان المعتمد (AED)' : 'Credit Limit (AED)'}</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="5000"
-                    value={formData.creditLimitAed}
-                    onChange={e => setFormData({ ...formData, creditLimitAed: Number(e.target.value) })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'فترة السداد (أيام)' : 'Payment Terms (Days)'}</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.paymentTermsDays}
-                    onChange={e => setFormData({ ...formData, paymentTermsDays: Number(e.target.value) })}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Primary Contact Section */}
-              <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3">
-                <div className="font-semibold text-zinc-300">{language === 'ar' ? 'بيانات جهة الاتصال المعتمدة' : 'Primary Authorized Contact'}</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'الاسم الكامل' : 'Contact Person Name'}</label>
-                    <input
-                      type="text"
-                      value={formData.primaryContact.name}
-                      onChange={e => setFormData({
-                        ...formData,
-                        primaryContact: { ...formData.primaryContact, name: e.target.value }
-                      })}
-                      placeholder="e.g. John Doe"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'المسمى الوظيفي' : 'Designation / Title'}</label>
-                    <input
-                      type="text"
-                      value={formData.primaryContact.designation}
-                      onChange={e => setFormData({
-                        ...formData,
-                        primaryContact: { ...formData.primaryContact, designation: e.target.value }
-                      })}
-                      placeholder="e.g. Fleet Procurement Director"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'رقم الهاتف' : 'Phone Number'}</label>
-                    <input
-                      type="text"
-                      value={formData.primaryContact.phone}
-                      onChange={e => setFormData({
-                        ...formData,
-                        primaryContact: { ...formData.primaryContact, phone: e.target.value }
-                      })}
-                      placeholder="+971 50 000 0000"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'البريد الإلكتروني' : 'Email Address'}</label>
-                    <input
-                      type="email"
-                      value={formData.primaryContact.email}
-                      onChange={e => setFormData({
-                        ...formData,
-                        primaryContact: { ...formData.primaryContact, email: e.target.value }
-                      })}
-                      placeholder="corporate@company.ae"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 mb-1">{language === 'ar' ? 'ملاحظات وشروط خاصة' : 'Special Notes & Terms'}</label>
-                <textarea
-                  rows={2}
-                  value={formData.notes}
-                  onChange={e => setFormData({ ...formData, notes: e.target.value })}
-                  placeholder="Additional agreements, VIP driver notes..."
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold cursor-pointer"
-                >
-                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-600/30 cursor-pointer"
-                >
-                  {language === 'ar' ? 'حفظ وتسجيل الشركة' : 'Save Corporate Account'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* CREATE CORPORATE ACCOUNT MODAL -- shared with the "Add Customer" corporate track (AddCorporateAccountModal), so there is one registration form instead of two diverging ones */}
+      <AddCorporateAccountModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onCreated={(created) => {
+          setSelectedCorpId(created.id);
+          setIsCreateModalOpen(false);
+        }}
+      />
 
       {/* EDIT CORPORATE ACCOUNT MODAL */}
       {isEditModalOpen && selectedCorp && (

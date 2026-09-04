@@ -10,6 +10,7 @@ import { formatDate } from '../../lib/dateFormat';
 import { downloadElementAsPdf, printElementDirectly } from '../../lib/pdfDownloader';
 import { Modal } from '../common/Modal';
 import { OfficialLetterheadLayout } from '../common/OfficialLetterheadLayout';
+import { CorporateStampMark } from '../common/CorporateStampMark';
 
 interface OfficialQuotationPrintModalProps {
   isOpen: boolean;
@@ -258,7 +259,8 @@ export const OfficialQuotationPrintModal: React.FC<OfficialQuotationPrintModalPr
 
             <div className="space-y-2">
               <p className="font-bold text-zinc-900 text-xs">ختم واعتماد شركة سبلندر</p>
-              <div className="h-10 flex items-end justify-center border-b-2 border-dashed border-zinc-400">
+              <div className="h-10 flex items-end justify-center gap-2 border-b-2 border-dashed border-zinc-400">
+                <CorporateStampMark className="w-8 h-8 shrink-0" />
                 <span className="text-[10px] text-[#991b1b] font-bold">شركة سبلندر لتأجير السيارات ش.ذ.م.م</span>
               </div>
             </div>

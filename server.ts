@@ -4,17 +4,19 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction } from './src/types';
+import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction, KycDocument, DocumentCategory } from './src/types';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
-import { vatPortion, applyVat } from './src/config/tax';
+import { calculateVatOnNet, extractVatFromGross, applyVat } from './src/config/tax';
 import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
+import { formatDate } from './src/lib/dateFormat';
 import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
 import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
 import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/server/bankImportGuard';
 import { parseBankStatementExcel, parseBankStatementCsv, type ParsedBankStatementFile, type ParsedBankStatementRow } from './src/server/bankStatementParsers';
 import { classifyBankRow, findUnmatchedCrmPayments } from './src/server/bankReconciliation';
 import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
+import { assignPlateAtomically } from './src/server/atomicPlateAssignment';
 import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
 import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
 import { NOTIFICATION_EVENTS } from './src/config/notificationEvents';
@@ -26,6 +28,7 @@ import { createContractDurable, ContractValidationError } from './src/server/con
 import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
 import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
 import { createBlocklistEntry, checkBlocklist, listBlocklistEntries, requestUnblock, BlocklistError } from './src/server/blocklist';
+import { KycEngine } from './src/server/kycEngine';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
@@ -37,8 +40,10 @@ import {
   decideCatalogUpdate, listCatalogUpdateRequests, VehicleCatalogError
 } from './src/server/vehicleCatalog';
 import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate';
-import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './src/server/payments';
-import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './src/server/deposits';
+import { handleSafeManualDepositCreate } from './src/server/safeManualDepositCreate';
+import { handleSafeLegacyDepositMutation, handleSafeCustomerPaymentRequest } from './src/server/accountingApi';
+import { recordAccountingAudit } from './src/server/accountingAudit';
+import { executeContractExtensionTransaction, ContractExtensionRecoveryError } from './src/server/contractExtensionRecovery';
 import {
   createPaymentIntent, getPaymentIntent, refundPaymentIntent, releaseSecurityDepositHold,
   handleGatewayWebhook, PaymentIntentError
@@ -91,6 +96,7 @@ import {
   type ProcurementApprovalRequest, type ProcurementApprovalActor
 } from './src/server/procurementApprovals';
 import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
+import { getTaxPeriodView, listTaxPeriods, prepareTaxPeriod, requestTaxPeriodReview, TaxPeriodError } from './src/server/taxPeriods';
 import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance';
 import {
   startInspection, updateInspectionDetails, addDamageMarker, reviewDamageLiability,
@@ -339,10 +345,26 @@ function publicRateLimiter(maxRequestsPerMinute: number = 60) {
   };
 }
 
-/** Looks up the caller's role from their Firestore users/{uid} profile. */
+/**
+ * Looks up the caller's role from their Firestore users/{uid} profile --
+ * but only if that profile's own status is 'active'. A valid Firebase Auth
+ * session alone (requireAuth) says nothing about whether Splendor itself
+ * still considers this person an active staff member: this used to return
+ * the role unconditionally, so a deactivated/suspended/terminated account
+ * whose Firebase Auth session simply hadn't expired yet retained full
+ * role-based access to every route requireRole() guards -- the entire
+ * application surface except the small set of routes api/index.ts
+ * separately hardens with getVerifiedActiveStaff (src/server/
+ * activeStaffAuth.ts), which already enforces this correctly. Canonical
+ * check, matched exactly: `status === 'active'`, never `status || 'active'`
+ * (a missing/malformed status field must fail closed, not open).
+ */
 async function getRequesterRole(uid: string): Promise<string | null> {
   const snap = await admin.firestore().collection('users').doc(uid).get();
-  return snap.exists ? ((snap.data() as any)?.role ?? null) : null;
+  if (!snap.exists) return null;
+  const data = snap.data() as any;
+  if (data?.status !== 'active') return null;
+  return data?.role ?? null;
 }
 
 /**
@@ -1419,20 +1441,33 @@ app.delete('/api/fleet/holds/:id', asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
-// Plate Assignment & Transfer with Historical Audit Trail
+// Plate Assignment & Transfer with Historical Audit Trail. Delegates to the
+// same assignPlateAtomically() the Vercel serverless boundary (api/index.ts)
+// already uses for this exact path -- previously this route ran a second,
+// non-transactional implementation (SplendorConnectEngine.assignPlateToVehicle)
+// that also trusted a client-supplied assignedBy/assignedByName as the
+// actor's identity. api/index.ts shadows this route in production (it
+// intercepts POST /api/fleet/:id/assign-plate before falling through to this
+// Express app), so the gap only ever showed up running this app directly
+// (local dev's `tsx server.ts`, or a test hitting this app) -- but a route
+// only being safe through one specific entrypoint is exactly the kind of
+// split-brain this stabilization pass exists to close.
 app.post('/api/fleet/:id/assign-plate', requireRole('ceo', 'admin', 'fleet'), asyncHandler(async (req, res) => {
-  const { plateNumber, plateCity, reason, assignedBy, assignedByName, effectiveDate } = req.body;
+  const { plateNumber, plateCity, reason, effectiveDate } = req.body;
   if (!plateNumber || !plateCity) {
     return res.status(400).json({ error: 'Plate number and city are required' });
   }
 
-  const result = await SplendorConnectEngine.assignPlateToVehicle({
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+
+  const result = await assignPlateAtomically({
     vehicleId: req.params.id,
     newPlateNumber: plateNumber,
     newPlateCity: plateCity,
     reason: reason || 'Plate updated by fleet operations',
-    assignedBy: assignedBy || 'USR-002',
-    assignedByName: assignedByName || 'Fleet Manager',
+    assignedBy: actor.uid,
+    assignedByName: actor.name,
     effectiveDate
   });
 
@@ -2001,7 +2036,7 @@ app.post('/api/quotations', asyncHandler(async (req, res) => {
     : requestedDiscountAmount;
   const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
   const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
-  const vatAmount = vatPortion(subtotal);
+  const vatAmount = calculateVatOnNet(subtotal);
   const grandTotal = subtotal + vatAmount;
 
   const quote = {
@@ -2076,7 +2111,7 @@ registerApprovalHandler('Quotation', 'discount_override', async (request: Procur
     const discountAmount = Math.min(requestedDiscountAmount, preDiscountSubtotal);
     const discountPercentage = preDiscountSubtotal > 0 ? (discountAmount / preDiscountSubtotal) * 100 : 0;
     const subtotal = Math.max(0, preDiscountSubtotal - discountAmount);
-    const vatAmount = vatPortion(subtotal);
+    const vatAmount = calculateVatOnNet(subtotal);
     const grandTotal = subtotal + vatAmount;
     const patch = {
       discountAmount, discountPercentage, vatAmount, grandTotal,
@@ -2288,12 +2323,15 @@ app.post('/api/reservations/:id/create-contract', requireRole('ceo', 'admin', 'o
       const customer = customerSnap.exists ? (customerSnap.data() as any) : null;
       const vehicle = vehicleSnap.exists ? (vehicleSnap.data() as any) : null;
 
-      // reserv.totalAmount is VAT-inclusive; vatPortion() backs out the
-      // configured rate instead of a raw 5/105 literal, so this stays
-      // correct if the VAT rate in src/config/tax.ts ever changes (Phase
-      // 23.0 audit finding: this used to drift from every other
-      // money-touching route, which all already used the shared helper).
-      const vatAmount = vatPortion(reserv.totalAmount);
+      // reserv.totalAmount is VAT-inclusive (the frontend sends
+      // applyVat(dailyRate * days) when creating the reservation) --
+      // extractVatFromGross() correctly backs the VAT portion out of a
+      // gross figure (gross * rate/(1+rate)). This route used to call
+      // calculateVatOnNet()/vatPortion() here instead, which computes
+      // gross * rate -- a different, larger number that overstates VAT
+      // collected and understates net rental revenue on every contract
+      // created from a reservation (Tax/VAT governance audit finding).
+      const vatAmount = extractVatFromGross(reserv.totalAmount);
       const rentalTotal = reserv.totalAmount - vatAmount;
 
       const contract = {
@@ -2562,24 +2600,28 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
       const snap = await tx.get(contractRef);
       if (!snap.exists) throw new PersistenceError('Contract not found');
       const contract = snap.data() as any;
-      if (contract.status === 'completed') throw new PersistenceError('This contract has already been returned.');
+      if (contract.status === 'settlement_pending' || contract.status === 'completed') {
+        throw new PersistenceError('This contract has already been returned.');
+      }
       if (contract.status !== 'active') {
         throw new PersistenceError(`This contract is ${contract.status}, not active, and cannot be returned yet.`);
       }
 
       const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
       const vehicleSnap = await tx.get(vehicleRef);
-      const customerRef = db.collection('customers').doc(contract.customerId);
-      const customerSnap = await tx.get(customerRef);
 
-      const updated = { ...contract, returnDetails: returnData, status: 'completed', updatedAt: now };
+      // Physical return records evidence and stops the rental clock, but is
+      // NOT financial closure (Issue #36): the vehicle stays unavailable
+      // (a pending settlement/inspection dispute could still change the
+      // final charges) and the customer's lifetimeValue is not recognized
+      // yet -- only POST /api/contracts/:id/close does that, exactly once.
+      const updated = { ...contract, returnDetails: returnData, status: 'settlement_pending', updatedAt: now };
       tx.set(contractRef, updated, { merge: true });
 
       if (vehicleSnap.exists) {
         const v = vehicleSnap.data() as any;
         const vehicleUpdate: Record<string, unknown> = {
-          status: 'available', currentCustomerId: null, currentContractId: null,
-          totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now
+          status: 'unavailable', currentCustomerId: null, currentContractId: null, updatedAt: now
         };
         if (returnData.endMileage) {
           vehicleUpdate.mileage = returnData.endMileage;
@@ -2592,10 +2634,6 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
         tx.set(vehicleRef, vehicleUpdate, { merge: true });
       }
 
-      if (customerSnap.exists) {
-        tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
-      }
-
       let charge: any = null;
       if (returnData.totalAdditionalCharges > 0) {
         const chargeId = await issueNextNumber('Charge');
@@ -2603,7 +2641,7 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
           id: chargeId,
           type: 'other',
           amount: returnData.totalAdditionalCharges,
-          vatAmount: vatPortion(returnData.totalAdditionalCharges),
+          vatAmount: calculateVatOnNet(returnData.totalAdditionalCharges),
           totalAmount: applyVat(returnData.totalAdditionalCharges),
           relatedContractId: contract.id,
           customerId: contract.customerId,
@@ -2630,17 +2668,14 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   if (index !== -1) globalStore.contracts[index] = updatedContract;
   const vehicle = globalStore.vehicles.find(v => v.id === updatedContract.vehicleId);
   if (vehicle) {
-    vehicle.status = 'available';
+    vehicle.status = 'unavailable';
     vehicle.currentCustomerId = undefined;
     vehicle.currentContractId = undefined;
     if (returnData.endMileage) {
       Object.assign(vehicle, computeMaintenanceScheduleUpdate(vehicle, returnData.endMileage));
       vehicle.mileage = returnData.endMileage;
     }
-    vehicle.totalRevenue += updatedContract.grandTotal;
   }
-  const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
-  if (customer) customer.lifetimeValue += updatedContract.grandTotal;
   if (chargeDoc) globalStore.charges.push(chargeDoc);
 
   await recordAudit({
@@ -2651,14 +2686,14 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
     entityId: updatedContract.id,
     action: 'status_change',
     previousValue: 'Status: Active',
-    newValue: `Status: Completed (Vehicle Return Verified. Additional Charges: ${returnData.totalAdditionalCharges} AED)`,
-    reason: 'Vehicle return inspection finalized'
+    newValue: `Status: Settlement Pending (Vehicle Return Verified. Additional Charges: ${returnData.totalAdditionalCharges} AED). Awaiting financial closure.`,
+    reason: 'Vehicle return inspection finalized -- vehicle held unavailable pending settlement, revenue not yet recognized'
   });
 
   try {
     await dispatchNotificationEvent('contract_return',
-      `Vehicle returned and contract ${updatedContract.id} closed for ${updatedContract.customerName}.`,
-      `تم استلام المركبة وإغلاق العقد ${updatedContract.id} للعميل ${updatedContract.customerName}.`
+      `Vehicle returned for contract ${updatedContract.id} (${updatedContract.customerName}) -- awaiting financial closure.`,
+      `تم استلام المركبة لعقد ${updatedContract.id} (${updatedContract.customerName}) -- بانتظار التسوية المالية النهائية.`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (contract_return):', err);
@@ -2667,146 +2702,132 @@ app.post('/api/contracts/:id/return', requireRole('ceo', 'admin', 'operations'),
   res.json({ success: true, contract: updatedContract });
 }));
 
+// Final financial closure (Issue #36): the ONLY event that recognizes a
+// completed rental's revenue. Physical return (above) only ever moves a
+// contract to 'settlement_pending' -- this is a distinct, explicit action a
+// human takes once the return-time charges are settled, so lifetimeValue
+// and vehicle.totalRevenue are counted exactly once, at the moment the
+// business actually considers the rental closed.
+app.post('/api/contracts/:id/close', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
+  const { actorId, actorName } = req.body || {};
+  const now = new Date().toISOString();
+  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
+
+  let updatedContract: any;
+  try {
+    updatedContract = await runDurableTransaction(async (tx, db) => {
+      const snap = await tx.get(contractRef);
+      if (!snap.exists) throw new PersistenceError('Contract not found');
+      const contract = snap.data() as any;
+      if (contract.status === 'completed') throw new PersistenceError('This contract has already been financially closed.');
+      if (contract.status !== 'settlement_pending') {
+        throw new PersistenceError(`This contract is ${contract.status}, not settlement_pending, and cannot be closed yet.`);
+      }
+
+      const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
+      const vehicleSnap = await tx.get(vehicleRef);
+      const customerRef = db.collection('customers').doc(contract.customerId);
+      const customerSnap = await tx.get(customerRef);
+
+      const updated = { ...contract, status: 'completed', updatedAt: now };
+      tx.set(contractRef, updated, { merge: true });
+
+      if (vehicleSnap.exists) {
+        const v = vehicleSnap.data() as any;
+        tx.set(vehicleRef, { status: 'available', totalRevenue: (v.totalRevenue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
+      }
+      if (customerSnap.exists) {
+        tx.set(customerRef, { lifetimeValue: ((customerSnap.data() as any).lifetimeValue || 0) + contract.grandTotal, updatedAt: now }, { merge: true });
+      }
+
+      return updated;
+    });
+  } catch (err) {
+    if (err instanceof PersistenceError && (err.message === 'Contract not found' || err.message.startsWith('This contract'))) {
+      return res.status(err.message === 'Contract not found' ? 404 : 409).json({ error: err.message });
+    }
+    throw err;
+  }
+
+  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
+  if (index !== -1) globalStore.contracts[index] = updatedContract;
+  const vehicle = globalStore.vehicles.find(v => v.id === updatedContract.vehicleId);
+  if (vehicle) {
+    vehicle.status = 'available';
+    vehicle.totalRevenue += updatedContract.grandTotal;
+  }
+  const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
+  if (customer) customer.lifetimeValue += updatedContract.grandTotal;
+
+  await recordAudit({
+    userId: actorId || 'USR-002',
+    userName: actorName || 'Finance',
+    userRole: 'finance',
+    entityType: 'Contract',
+    entityId: updatedContract.id,
+    action: 'status_change',
+    previousValue: 'Status: Settlement Pending',
+    newValue: `Status: Completed (Financial closure -- ${updatedContract.grandTotal.toLocaleString()} AED recognized, vehicle released).`,
+    reason: 'Final financial closure -- return-time charges settled'
+  });
+
+  res.json({ success: true, contract: updatedContract });
+}));
+
 // ----------------------------------------------------
 // CONTRACT EXTENSION ADDENDUM & FORMAL RENEWAL ENGINE
 // ----------------------------------------------------
+// Same executeContractExtensionTransaction() the Vercel serverless boundary
+// (api/contract-extension-safe.ts, the route Vercel actually rewrites this
+// exact path to per vercel.json) already uses -- previously this route ran
+// its own inline transaction here, and it wrote tx.set(contractRef, ...)
+// before tx.get(vehicleRef), the exact real-Firestore-rejected read-after-
+// write ordering bug Issue #35 tracks. Same split-brain pattern as plate
+// assignment, deposits, and payments above: this was reachable (and still
+// broken) via local dev and every test that calls server.ts directly.
 app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations', 'sales'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
   const contractId = req.params.id;
-  const { 
-    newEndDateTime, 
-    dailyRate: customDailyRate,
-    currentOdometerKm,
-    paymentMethod = 'credit_card',
-    paymentMethodLabel,
-    issueDate,
-    notes,
-    actorId,
-    actorName
-  } = req.body;
+  const { newEndDateTime, dailyRate: customDailyRate, currentOdometerKm, paymentMethod, paymentMethodLabel, issueDate, notes } = req.body;
 
   if (!newEndDateTime) {
     return res.status(400).json({ error: 'newEndDateTime is required for extending the contract.' });
   }
 
-  const now = new Date().toISOString();
-  const contractRef = admin.firestore().collection('contracts').doc(contractId);
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
 
-  let updatedContract: any;
-  let newAddendum: any;
-  let calculatedExtraDays = 0;
-  let calculatedExtraAmount = 0;
+  const addendumId = await issueNextNumber('Addendum');
 
+  let outcome: Awaited<ReturnType<typeof executeContractExtensionTransaction>>;
   try {
-    const outcome = await runDurableTransaction(async (tx, db) => {
-      const snap = await tx.get(contractRef);
-      if (!snap.exists) throw new PersistenceError('Contract not found');
-      const contract = snap.data() as any;
-
-      if (contract.status === 'completed' || contract.status === 'cancelled') {
-        throw new PersistenceError(`Cannot extend a contract with status '${contract.status}'.`);
-      }
-
-      const prevEnd = new Date(contract.endDateTime).getTime();
-      const nextEnd = new Date(newEndDateTime).getTime();
-
-      if (isNaN(nextEnd) || nextEnd <= prevEnd) {
-        throw new PersistenceError('New end date/time must be strictly after the current contract end date/time.');
-      }
-
-      const diffMs = nextEnd - prevEnd;
-      const extraDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-      const rate = customDailyRate !== undefined && customDailyRate > 0 ? Number(customDailyRate) : (contract.dailyRate || 0);
-      const periodRentalAmount = rate * extraDays;
-      const vatRatePercent = 5;
-      const vatAmount = Math.round((periodRentalAmount * 0.05) * 100) / 100;
-      const totalExtensionAmount = periodRentalAmount + vatAmount;
-
-      calculatedExtraDays = extraDays;
-      calculatedExtraAmount = totalExtensionAmount;
-
-      const addendumId = await issueNextNumber('Addendum');
-      const addendumSeq = ((contract.extensions?.length || 0) + 1).toString().padStart(4, '0');
-      const addendumNumber = `EXT-${new Date().getFullYear()}-${addendumSeq}`;
-
-      const addendumRecord = {
-        id: addendumId,
-        addendumNumber,
-        contractId: contract.id,
-        contractNumber: contract.contractNumber || contract.id,
-        issueDate: issueDate || new Date().toISOString().split('T')[0],
-        customerName: contract.customerName,
-        customerPhone: contract.customerPhone,
-        plateNumber: contract.vehiclePlate,
-        vehicleName: contract.vehicleName,
-        currentEndDateTime: contract.endDateTime,
-        newEndDateTime,
-        extensionDurationDays: extraDays,
-        currentOdometerKm: Number(currentOdometerKm) || (contract.handover?.startMileage || 0),
-        dailyRate: rate,
-        periodRentalAmount,
-        vatRatePercent,
-        vatAmount,
-        totalExtensionAmount,
-        paymentMethod,
-        paymentMethodLabel: paymentMethodLabel || paymentMethod,
-        bankDetails: {
-          bankName: 'بنك الإمارات دبي الوطني (Emirates NBD)',
-          accountNumber: '1015963340001',
-          iban: 'AE220260001015963340001'
-        },
-        notes: notes || `Contract extension for ${extraDays} day(s).`,
-        createdBy: actorId || 'USR-001',
-        createdByName: actorName || 'Operations Specialist',
-        createdAt: now,
-        updatedAt: now
-      };
-
-      const updatedExtensions = [...(contract.extensions || []), addendumRecord];
-      const updatedTotal = (contract.grandTotal || 0) + totalExtensionAmount;
-      const updatedRentalTotal = (contract.rentalTotal || 0) + periodRentalAmount;
-      const updatedVatAmount = (contract.vatAmount || 0) + vatAmount;
-
-      const updated = {
-        ...contract,
-        endDateTime: newEndDateTime,
-        dailyRate: rate,
-        rentalTotal: updatedRentalTotal,
-        vatAmount: updatedVatAmount,
-        grandTotal: updatedTotal,
-        extensions: updatedExtensions,
-        updatedAt: now
-      };
-
-      tx.set(contractRef, updated, { merge: true });
-
-      if (contract.vehicleId) {
-        const vehicleRef = db.collection('vehicles').doc(contract.vehicleId);
-        const vSnap = await tx.get(vehicleRef);
-        if (vSnap.exists) {
-          tx.set(vehicleRef, { updatedAt: now }, { merge: true });
-        }
-      }
-
-      return { updated, addendumRecord };
+    outcome = await executeContractExtensionTransaction(admin.firestore(), {
+      contractId,
+      newEndDateTime,
+      customDailyRate,
+      currentOdometerKm,
+      paymentMethod,
+      paymentMethodLabel,
+      issueDate,
+      notes,
+      actor,
+      addendumId
     });
-
-    updatedContract = outcome.updated;
-    newAddendum = outcome.addendumRecord;
   } catch (err) {
-    if (err instanceof PersistenceError) {
-      return res.status(400).json({ error: err.message });
+    if (err instanceof ContractExtensionRecoveryError) {
+      return res.status(err.status).json({ error: err.message });
     }
     throw err;
   }
 
-  const cIndex = globalStore.contracts.findIndex(c => c.id === contractId);
-  if (cIndex !== -1) globalStore.contracts[cIndex] = updatedContract;
+  const { contract: updatedContract, addendum: newAddendum, extraDays: calculatedExtraDays, extraAmount: calculatedExtraAmount } = outcome;
 
-  const actor = await getRequesterActor(req);
+  const cIndex = globalStore.contracts.findIndex(c => c.id === contractId);
+  if (cIndex !== -1) globalStore.contracts[cIndex] = updatedContract as unknown as Contract;
+
   await recordAudit({
-    userId: actor?.uid || actorId || 'USR-001',
-    userName: actor?.name || actorName || 'Operations Specialist',
-    userRole: (actor?.role as any) || 'operations',
+    userId: actor.uid,
+    userName: actor.name,
+    userRole: actor.role as any,
     entityType: 'Contract',
     entityId: updatedContract.id,
     action: 'update',
@@ -2817,8 +2838,8 @@ app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations', 
 
   try {
     await dispatchNotificationEvent('contract_extended',
-      `Contract ${updatedContract.contractNumber} extended by ${calculatedExtraDays} day(s) until ${new Date(newEndDateTime).toLocaleDateString()} (+${calculatedExtraAmount.toLocaleString()} AED).`,
-      `تم تمديد العقد رقم ${updatedContract.contractNumber} لمدة ${calculatedExtraDays} يوم حتى تاريخ ${new Date(newEndDateTime).toLocaleDateString()} (إجمالي الإضافة ${calculatedExtraAmount.toLocaleString()} درهم).`
+      `Contract ${updatedContract.contractNumber} extended by ${calculatedExtraDays} day(s) until ${formatDate(newEndDateTime, 'Asia/Dubai')} (+${calculatedExtraAmount.toLocaleString()} AED).`,
+      `تم تمديد العقد رقم ${updatedContract.contractNumber} لمدة ${calculatedExtraDays} يوم حتى تاريخ ${formatDate(newEndDateTime, 'Asia/Dubai')} (إجمالي الإضافة ${calculatedExtraAmount.toLocaleString()} درهم).`
     );
   } catch (err) {
     console.error('WhatsApp dispatch failed (contract_extended):', err);
@@ -2944,6 +2965,273 @@ app.delete('/api/customers/:id', requireRole('ceo', 'admin'), asyncHandler(async
   });
 
   res.json({ success: true, message: `Customer ${customerId} successfully deleted.` });
+}));
+
+// --- KYC (src/server/kycEngine.ts + src/components/common/KycManagerCard.tsx +
+// src/components/views/PublicKycPortalView.tsx). The engine and both UI
+// components existed already but had no routes connecting them -- these
+// close that gap. Every profile mutation goes through KycEngine's own
+// state machine (reconcileProfileState) rather than being set directly, so
+// VERIFIED can never be reached without real accepted, unexpired documents
+// and a confirmed date of birth.
+const VALID_KYC_DOCUMENT_CATEGORIES: DocumentCategory[] = [
+  'EMIRATES_ID_FRONT', 'EMIRATES_ID_BACK', 'PASSPORT', 'VISA_ENTRY_STAMP',
+  'DRIVING_LICENSE_FRONT', 'DRIVING_LICENSE_BACK', 'INTL_DRIVING_PERMIT'
+];
+
+app.get('/api/kyc/:customerId', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet', 'finance'), asyncHandler(async (req, res) => {
+  const customer = globalStore.customers.find(c => c.id === req.params.customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  await updateDurable('customers', customer.id, customer as any);
+
+  const eligibility = KycEngine.evaluateCustomerKycEligibility(customer.id);
+  res.json({ profile, eligibility });
+}));
+
+app.post('/api/kyc/generate-link', requireRole('ceo', 'admin', 'operations', 'sales', 'fleet'), asyncHandler(async (req, res) => {
+  const { customerId, expiresInHours } = req.body || {};
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const { token, expiresAt } = KycEngine.generateIntakeToken(customerId, Number(expiresInHours) || 48);
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const intakeUrl = `${origin}/kyc?token=${token}`;
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  await updateDurable('customers', customer.id, customer as any);
+
+  const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('REQUIRED', customer as any, intakeUrl);
+  try {
+    await dispatchCustomerNotification('kyc_link_generated', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage);
+  } catch (err) {
+    console.error('WhatsApp dispatch failed (kyc_link_generated):', err);
+  }
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    newValue: `Generated a KYC intake link (expires ${expiresAt}).`,
+    reason: 'KYC document collection'
+  });
+
+  res.json({ success: true, intakeUrl, expiresAt, profile });
+}));
+
+app.post('/api/kyc/verify-document', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const { customerId, documentId, action, rejectionReason, expiryDate, issuingCountry } = req.body || {};
+  if (!customerId || !documentId || !action) {
+    return res.status(400).json({ error: 'customerId, documentId, and action are required.' });
+  }
+  if (!['APPROVE', 'REJECT'].includes(action)) {
+    return res.status(400).json({ error: 'action must be APPROVE or REJECT.' });
+  }
+  if (action === 'REJECT' && !String(rejectionReason || '').trim()) {
+    return res.status(400).json({ error: 'A reason is required to reject a document.' });
+  }
+
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const doc = (profile.documents || []).find(d => d.id === documentId);
+  if (!doc) return res.status(404).json({ error: "Document not found on this customer's KYC profile." });
+
+  const actor = await getRequesterActor(req);
+  const now = new Date().toISOString();
+  const previousStatus = doc.status;
+  if (action === 'APPROVE') {
+    doc.status = 'ACCEPTED';
+    doc.rejectionReason = undefined;
+  } else {
+    doc.status = 'REJECTED';
+    doc.rejectionReason = String(rejectionReason).trim();
+  }
+  doc.verifiedAt = now;
+  doc.verifiedBy = actor?.uid || 'USR-001';
+  doc.verifiedByName = actor?.name || 'Staff';
+  if (expiryDate) doc.expiryDate = expiryDate;
+  if (issuingCountry) doc.issuingCountry = issuingCountry;
+
+  KycEngine.reconcileProfileState(profile, customer as any);
+  profile.updatedAt = now;
+  await updateDurable('customers', customer.id, customer as any);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    previousValue: `Document ${doc.category}: ${previousStatus}`,
+    newValue: `Document ${doc.category} marked ${doc.status}${action === 'REJECT' ? ` (${doc.rejectionReason})` : ''}.`,
+    reason: 'KYC document review'
+  });
+
+  if (profile.status === 'VERIFIED') {
+    const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('VERIFIED', customer as any);
+    try { await dispatchCustomerNotification('kyc_verified', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage); }
+    catch (err) { console.error('WhatsApp dispatch failed (kyc_verified):', err); }
+  } else if (action === 'REJECT') {
+    const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('REJECTED', customer as any, undefined, doc.rejectionReason);
+    try { await dispatchCustomerNotification('kyc_rejected', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage); }
+    catch (err) { console.error('WhatsApp dispatch failed (kyc_rejected):', err); }
+  }
+
+  res.json({ success: true, profile });
+}));
+
+app.post('/api/kyc/update-status', requireRole('ceo', 'admin', 'operations'), asyncHandler(async (req, res) => {
+  const { customerId, customerCategory } = req.body || {};
+  if (!customerId || !customerCategory) return res.status(400).json({ error: 'customerId and customerCategory are required.' });
+  if (!['UAE_RESIDENT', 'GCC_NATIONAL', 'TOURIST'].includes(customerCategory)) {
+    return res.status(400).json({ error: 'Invalid customerCategory.' });
+  }
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const previousCategory = profile.customerCategory;
+  profile.customerCategory = customerCategory;
+  KycEngine.reconcileProfileState(profile, customer as any);
+  profile.updatedAt = new Date().toISOString();
+  await updateDurable('customers', customer.id, customer as any);
+
+  const actor = await getRequesterActor(req);
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'Staff',
+    userRole: (actor?.role as any) || 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    previousValue: `KYC category: ${previousCategory}`,
+    newValue: `KYC category: ${customerCategory}`,
+    reason: 'KYC jurisdiction category correction'
+  });
+
+  res.json({ success: true, profile });
+}));
+
+app.post('/api/kyc/grant-ceo-exception', requireRole('ceo'), asyncHandler(async (req, res) => {
+  const { customerId, reason } = req.body || {};
+  if (!customerId || !String(reason || '').trim()) {
+    return res.status(400).json({ error: 'customerId and a written executive justification are required.' });
+  }
+  const customer = globalStore.customers.find(c => c.id === customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const actor = await getRequesterActor(req);
+  profile.ceoExceptionGranted = true;
+  profile.ceoExceptionReason = String(reason).trim();
+  profile.ceoExceptionGrantedAt = new Date().toISOString();
+  profile.ceoExceptionGrantedBy = actor?.uid || 'USR-001';
+  profile.updatedAt = new Date().toISOString();
+  await updateDurable('customers', customer.id, customer as any);
+
+  await recordAudit({
+    userId: actor?.uid || 'USR-001',
+    userName: actor?.name || 'CEO',
+    userRole: 'ceo',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    newValue: `CEO exception granted for the supercar under-25 age policy. Justification: ${profile.ceoExceptionReason}`,
+    reason: 'Executive KYC age-policy exception'
+  });
+
+  res.json({ success: true, profile });
+}));
+
+// Public, token-gated intake -- no staff session exists for a customer
+// filling this out from a WhatsApp link, so trust comes entirely from
+// KycEngine.verifyIntakeToken's HMAC check, not from req.authUser (this
+// route sits under /public/, exempted from the requireAuth gate above).
+app.post('/api/public/kyc/upload', asyncHandler(async (req, res) => {
+  const { token, category, fileName, fileType, dataBase64, documentNumber, expiryDate, issuingCountry } = req.body || {};
+  const verification = KycEngine.verifyIntakeToken(String(token || ''));
+  if (!verification.isValid || !verification.customerId) {
+    return res.status(401).json({ error: verification.error || 'Invalid or expired verification link.' });
+  }
+
+  const customer = globalStore.customers.find(c => c.id === verification.customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer record not found.' });
+
+  if (!VALID_KYC_DOCUMENT_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Invalid document category.' });
+  }
+  if (!fileName || !dataBase64) {
+    return res.status(400).json({ error: 'A file is required.' });
+  }
+
+  const base64Data = String(dataBase64).includes(',') ? String(dataBase64).split(',').pop()! : String(dataBase64);
+  const buffer = Buffer.from(base64Data, 'base64');
+  if (buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'File is too large (10MB max).' });
+  }
+
+  const signatureCheck = KycEngine.validateFileSignature(buffer);
+  if (!signatureCheck.isValid) {
+    return res.status(400).json({ error: signatureCheck.error || 'Invalid file.' });
+  }
+
+  const storagePath = `customer-documents/${customer.id}/kyc-${category}-${Date.now()}-${String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const bucket = admin.storage().bucket();
+  await bucket.file(storagePath).save(buffer, { metadata: { contentType: signatureCheck.detectedMime || fileType || 'application/octet-stream' } });
+
+  const profile = KycEngine.getOrCreateKycProfile(customer as any);
+  const docId = `KYC-DOC-${Date.now()}-${(profile.documents || []).length + 1}`;
+  const newDoc: KycDocument = {
+    id: docId,
+    customerId: customer.id,
+    category,
+    storagePath,
+    fileUrl: `/api/documents/file?path=${encodeURIComponent(storagePath)}`,
+    fileName: String(fileName),
+    fileType: signatureCheck.detectedMime,
+    documentNumberMasked: documentNumber ? KycEngine.maskDocumentNumber(category, String(documentNumber)) : undefined,
+    documentNumberRaw: documentNumber ? String(documentNumber) : undefined,
+    expiryDate: expiryDate || undefined,
+    issuingCountry: issuingCountry || undefined,
+    status: 'PENDING',
+    uploadedAt: new Date().toISOString()
+  };
+  // A re-upload of the same category before staff review supersedes the
+  // earlier pending copy; an already-ACCEPTED/REJECTED document is kept as
+  // real review history rather than silently overwritten.
+  profile.documents = (profile.documents || []).filter(d => !(d.category === category && d.status === 'PENDING'));
+  profile.documents.push(newDoc);
+  KycEngine.reconcileProfileState(profile, customer as any);
+  profile.updatedAt = new Date().toISOString();
+  await updateDurable('customers', customer.id, customer as any);
+
+  try {
+    const { textEn, textAr } = KycEngine.getWhatsAppKycNotification('DOCS_RECEIVED', customer as any);
+    await dispatchCustomerNotification('kyc_docs_received', customer.id, customer.fullName, customer.phone, textEn, textAr, customer.preferredLanguage);
+  } catch (err) {
+    console.error('WhatsApp dispatch failed (kyc_docs_received):', err);
+  }
+
+  await recordAudit({
+    userId: 'PUBLIC_KYC_PORTAL',
+    userName: customer.fullName,
+    userRole: 'operations',
+    entityType: 'Customer',
+    entityId: customer.id,
+    action: 'update',
+    newValue: `Customer self-uploaded a ${category} document via the public KYC intake portal.`,
+    reason: 'Public KYC document intake'
+  });
+
+  res.json({ success: true, documentId: docId });
 }));
 
 app.delete('/api/leads/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
@@ -3080,8 +3368,19 @@ app.post('/api/corporate-accounts', requireRole('ceo', 'admin', 'sales', 'financ
       name: req.body.primaryContact?.name || '',
       email: req.body.primaryContact?.email || '',
       phone: req.body.primaryContact?.phone || '',
-      designation: req.body.primaryContact?.designation || ''
+      designation: req.body.primaryContact?.designation || '',
+      idNumber: req.body.primaryContact?.idNumber || undefined,
+      authorizationType: req.body.primaryContact?.authorizationType || undefined,
+      authorizationRef: req.body.primaryContact?.authorizationRef || undefined
     },
+    branches: Array.isArray(req.body.branches) ? req.body.branches.map((b: any) => ({
+      id: String(b?.id || ''),
+      branchName: String(b?.branchName || ''),
+      emirate: String(b?.emirate || ''),
+      address: String(b?.address || ''),
+      phone: b?.phone || undefined,
+      isHeadOffice: Boolean(b?.isHeadOffice)
+    })) : undefined,
     creditLimitAed: Number(req.body.creditLimitAed) || 0,
     usedExposureAed: 0,
     paymentTermsDays: Number(req.body.paymentTermsDays) || 30,
@@ -3590,82 +3889,12 @@ app.get('/api/lto/vehicles/:id/summary', asyncHandler(async (req, res) => {
   res.json(await getLtoSummaryForVehicle(req.params.id));
 }));
 
-// Extends an active contract's end date -- e.g. a customer wants a few more
-// days. Recalculates the rental total/VAT/grand total for the added days
-// at the contract's existing daily rate, logs an audit entry, and sends the
-// customer a WhatsApp "extension addendum" notice (the spec's explicit
-// "ملحق تمديد للعقد" -- extension addendum -- requirement).
-app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations'), requireOperationEnabled('contractLifecycle'), asyncHandler(async (req, res) => {
-  const { newEndDateTime, actorId, actorName } = req.body || {};
-  if (!newEndDateTime) return res.status(400).json({ error: 'newEndDateTime is required.' });
-  const now = new Date().toISOString();
-  const contractRef = admin.firestore().collection('contracts').doc(req.params.id);
-
-  let outcome: { updated: any; extraDays: number; extraAmount: number };
-  try {
-    outcome = await runDurableTransaction(async (tx) => {
-      const snap = await tx.get(contractRef);
-      if (!snap.exists) throw new PersistenceError('Contract not found.');
-      const contract = snap.data() as any;
-
-      const oldEnd = contract.endDateTime;
-      const newEndMs = new Date(newEndDateTime).getTime();
-      const oldEndMs = new Date(oldEnd).getTime();
-      // Naturally idempotent: once endDateTime is updated to newEndDateTime,
-      // a repeat of the exact same request fails this same check (new <=
-      // old) instead of double-extending.
-      if (Number.isNaN(newEndMs) || newEndMs <= oldEndMs) {
-        throw new PersistenceError('The new end date must be after the current end date.');
-      }
-
-      const extraDays = Math.ceil((newEndMs - oldEndMs) / 86400000);
-      const extraRental = extraDays * contract.dailyRate;
-      const extraVat = vatPortion(extraRental);
-      const updated = {
-        ...contract,
-        endDateTime: newEndDateTime,
-        rentalTotal: contract.rentalTotal + extraRental,
-        vatAmount: contract.vatAmount + extraVat,
-        grandTotal: contract.grandTotal + extraRental + extraVat,
-        updatedAt: now
-      };
-      tx.set(contractRef, updated, { merge: true });
-      return { updated, extraDays, extraAmount: Math.round((extraRental + extraVat) * 100) / 100 };
-    });
-  } catch (err) {
-    if (err instanceof PersistenceError && (err.message === 'Contract not found.' || err.message.startsWith('The new end date'))) {
-      return res.status(err.message === 'Contract not found.' ? 404 : 400).json({ error: err.message });
-    }
-    throw err;
-  }
-
-  const { updated: updatedContract, extraDays, extraAmount } = outcome;
-  const index = globalStore.contracts.findIndex(c => c.id === req.params.id);
-  if (index !== -1) globalStore.contracts[index] = updatedContract;
-
-  await recordAudit({
-    userId: actorId || 'USR-001',
-    userName: actorName || 'Operations',
-    userRole: 'operations',
-    entityType: 'Contract',
-    entityId: updatedContract.id,
-    action: 'update',
-    previousValue: `End date: ${updatedContract.endDateTime}`,
-    newValue: `Extended to ${newEndDateTime} (+${extraDays} day(s), +${extraAmount.toLocaleString()} AED)`,
-    reason: 'Contract extension'
-  });
-
-  try {
-    const customer = globalStore.customers.find(c => c.id === updatedContract.customerId);
-    await dispatchCustomerNotification('customer_contract_extended', updatedContract.customerId, updatedContract.customerName, customer?.phone,
-      `Your contract ${updatedContract.id} has been extended by ${extraDays} day(s) -- new return date ${newEndDateTime.slice(0, 10)}. Additional amount: ${extraAmount.toLocaleString()} AED.`,
-      `تم تمديد عقدكم رقم ${updatedContract.id} لمدة ${extraDays} يوم/أيام -- تاريخ التسليم الجديد ${newEndDateTime.slice(0, 10)}. المبلغ الإضافي: ${extraAmount.toLocaleString()} درهم.`);
-  } catch (err) {
-    console.error('WhatsApp dispatch failed (customer_contract_extended):', err);
-  }
-
-  res.json({ success: true, contract: updatedContract, extraDays, extraAmount });
-}));
+// A second, older /api/contracts/:id/extend handler used to live here --
+// dead code (Express dispatches only the first matching route registered
+// above, at the top of this file, to the shared executeContractExtensionTransaction()
+// implementation), but it duplicated the same read-after-write ordering bug
+// Issue #35 tracks and was removed rather than left as a live trap for a
+// future refactor that reorders route registration.
 
 // ----------------------------------------------------
 // 8. CHARGES, DEPOSITS, PAYMENTS & STATEMENTS
@@ -3677,7 +3906,7 @@ app.get('/api/charges', (req, res) => {
 app.post('/api/charges', requireRole('ceo', 'admin', 'operations', 'finance'), requireOperationEnabled('financialAdjustments'), asyncHandler(async (req, res) => {
   const newId = await issueNextNumber('Charge');
   const amount = Number(req.body.amount) || 0;
-  const vat = vatPortion(amount);
+  const vat = calculateVatOnNet(amount);
   const charge = {
     ...req.body,
     id: newId,
@@ -3720,107 +3949,34 @@ app.get('/api/deposits', (req, res) => {
   res.json(globalStore.deposits);
 });
 
+// Same handleSafeManualDepositCreate() the Vercel serverless boundary
+// (api/index.ts) already uses for this exact path -- previously this route
+// ran a second, non-idempotent implementation (createSecurityDeposit in
+// deposits.ts) that posted no accounting journal at all and had no
+// protection against a double-click/retry creating two deposits. Same
+// split-brain pattern as plate assignment (see assign-plate above).
 app.post('/api/deposits', requireRole('finance', 'ceo', 'admin', 'operations', 'sales'), asyncHandler(async (req, res) => {
-  const deposit = await createSecurityDeposit(req.body || {}, recordAudit);
-  res.status(201).json(deposit);
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeManualDepositCreate(req, res, actor, recordAccountingAudit);
 }));
 
-// Rule: no direct deduction from a security deposit -- a charge/claim must
-// already exist and already be approved before any amount can be taken
-// from the deposit against it. A chargeId is mandatory; the referenced
-// AdditionalCharge is validated (belongs to the same customer, approved,
-// not already used to justify a prior deduction, and the amount taken
-// can't exceed what the charge itself is for) and marked consumed in the
-// same transaction, so it can never be deducted twice.
+// Same handleSafeLegacyDepositMutation() the Vercel serverless boundary
+// (api/index.ts) already uses for this exact path -- previously this route
+// ran its own inline transaction here, correct on its own terms (real
+// read-before-write, mandatory approved chargeId, anti-double-deduction)
+// but never posting an accounting journal, unlike the safe implementation.
+// Same split-brain pattern as plate assignment and deposit creation above.
 app.post('/api/deposits/:id/apply', requireRole('finance', 'ceo', 'admin'), asyncHandler(async (req, res) => {
-  const { applyAmount, reason, chargeId, actorId, actorName } = req.body;
-  const amt = Number(applyAmount);
-  const now = new Date().toISOString();
-
-  if (!chargeId) {
-    return res.status(400).json({ error: 'chargeId is required -- a deposit can only be deducted against an existing, approved charge/claim, never a free-text reason alone.' });
-  }
-
-  const depositRef = admin.firestore().collection('deposits').doc(req.params.id);
-  const chargeRef = admin.firestore().collection('charges').doc(chargeId);
-  let updatedDeposit: any;
-  try {
-    updatedDeposit = await runDurableTransaction(async (tx, db) => {
-      const snap = await tx.get(depositRef);
-      if (!snap.exists) throw new PersistenceError('Deposit not found');
-      const deposit = snap.data() as any;
-      if (amt > deposit.balance) throw new PersistenceError('Apply amount exceeds held balance');
-
-      const chargeSnap = await tx.get(chargeRef);
-      if (!chargeSnap.exists) throw new PersistenceError('Charge not found');
-      const charge = chargeSnap.data() as any;
-      if (charge.customerId !== deposit.customerId) throw new PersistenceError('Charge does not belong to this deposit\'s customer');
-      if (charge.approvalStatus !== 'approved') throw new PersistenceError('Charge must be approved before it can justify a deposit deduction');
-      if (charge.deductedFromDepositId) throw new PersistenceError('Charge has already been deducted from a deposit');
-      if (amt > charge.totalAmount) throw new PersistenceError('Apply amount exceeds the charge\'s own total amount');
-
-      // Real Firestore transactions require all reads before any writes --
-      // read the customer now, before the deposit/charge writes below.
-      const customerRef = deposit.customerId ? db.collection('customers').doc(deposit.customerId) : null;
-      const customerSnap = customerRef ? await tx.get(customerRef) : null;
-
-      const updated = {
-        ...deposit,
-        appliedAmount: deposit.appliedAmount + amt,
-        balance: deposit.balance - amt,
-        appliedReason: reason || `${charge.type}: ${charge.description}`,
-        status: deposit.balance - amt === 0 ? 'applied' : 'held',
-        updatedAt: now
-      };
-      tx.set(depositRef, updated, { merge: true });
-      tx.set(chargeRef, { deductedFromDepositId: deposit.id }, { merge: true });
-
-      if (customerRef && customerSnap?.exists) {
-        const held = (customerSnap.data() as any).securityDepositsHeld || 0;
-        tx.set(customerRef, { securityDepositsHeld: Math.max(0, held - amt), updatedAt: now }, { merge: true });
-      }
-      return updated;
-    });
-  } catch (err) {
-    if (err instanceof PersistenceError) {
-      const notFound = err.message === 'Deposit not found' || err.message === 'Charge not found';
-      return res.status(notFound ? 404 : 400).json({ error: err.message });
-    }
-    throw err;
-  }
-
-  const index = globalStore.deposits.findIndex(d => d.id === req.params.id);
-  if (index !== -1) globalStore.deposits[index] = updatedDeposit;
-  const customer = globalStore.customers.find(c => c.id === updatedDeposit.customerId);
-  if (customer) customer.securityDepositsHeld = Math.max(0, customer.securityDepositsHeld - amt);
-  const chargeIndex = globalStore.charges.findIndex(c => c.id === chargeId);
-  if (chargeIndex !== -1) globalStore.charges[chargeIndex] = { ...globalStore.charges[chargeIndex], deductedFromDepositId: updatedDeposit.id };
-
-  await recordAudit({
-    userId: actorId || 'USR-004',
-    userName: actorName || 'Finance Manager',
-    userRole: 'finance',
-    entityType: 'Deposit',
-    entityId: updatedDeposit.id,
-    action: 'update',
-    newValue: `Applied ${amt} AED from deposit against charge ${chargeId}: ${reason || ''}`,
-    reason: reason || `Deducted against charge ${chargeId}`
-  });
-
-  res.json({ success: true, deposit: updatedDeposit });
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeLegacyDepositMutation(req, res, actor, req.params.id, 'apply');
 }));
 
 app.post('/api/deposits/:id/refund', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
-  const { refundAmount, actorId, actorName } = req.body;
-  try {
-    const updatedDeposit = await refundOrReleaseDeposit(req.params.id, refundAmount, { id: actorId || 'USR-004', name: actorName || 'Finance Manager' }, recordAudit);
-    res.json({ success: true, deposit: updatedDeposit });
-  } catch (err) {
-    if (err instanceof DepositError && (err.message === 'Deposit not found' || err.message === 'Refund amount exceeds held balance')) {
-      return res.status(err.message === 'Deposit not found' ? 404 : 400).json({ error: err.message });
-    }
-    throw err;
-  }
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeLegacyDepositMutation(req, res, actor, req.params.id, 'refund');
 }));
 
 app.get('/api/invoices', (req, res) => {
@@ -3831,20 +3987,18 @@ app.get('/api/payments', (req, res) => {
   res.json(globalStore.payments);
 });
 
-// Idempotency-Key protected: a double-click or network retry on this route
-// previously created two separate Payment records, each independently
-// decrementing invoice.paidAmount and customer.outstandingBalance --
-// double-crediting the customer. The whole payment+invoice+customer write
-// is now one atomic transaction, replayed (not repeated) on a matching key.
+// Same handleSafeCustomerPaymentRequest() the Vercel serverless boundary
+// (api/index.ts) already uses for this exact path -- previously this route
+// called createConfirmedPayment directly, which posted no accounting
+// journal, required no settlement account, and (unlike the safe
+// implementation) let 'corporate_credit' be recorded as if real cash had
+// been received rather than what it actually is: an invoice staying
+// outstanding on the corporate account. Same split-brain pattern as
+// plate assignment and deposits above.
 app.post('/api/payments', requireRole('finance', 'ceo', 'admin'), requireOperationEnabled('paymentsRefunds'), asyncHandler(async (req, res) => {
-  const idempotencyKey = (req.header('Idempotency-Key') || req.body?.idempotencyKey || null) as string | null;
-  try {
-    const { result: payment } = await createConfirmedPayment(req.body || {}, idempotencyKey, recordAudit);
-    res.status(201).json(payment);
-  } catch (err) {
-    if (err instanceof PaymentError) return res.status(400).json({ error: err.message });
-    throw err;
-  }
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  return handleSafeCustomerPaymentRequest(req, res, actor);
 }));
 
 // Sets a Payment's human verification status -- separate from and never
@@ -5534,6 +5688,7 @@ app.post('/api/blocklist', requireRole('ceo', 'admin', 'operations'), asyncHandl
       identifierValue: body.identifierValue,
       identifierCountry: body.identifierCountry,
       customerName: body.customerName,
+      nationality: body.nationality,
       tier: body.tier,
       reason: body.reason,
       conditionalNote: body.conditionalNote,
@@ -7752,6 +7907,7 @@ app.post('/api/debts/:id/settlements', requireRole('ceo', 'admin', 'finance'), a
   const actor = await getRequesterActor(req);
   if (!actor) return res.status(401).json({ error: 'Authentication required.' });
   const body = req.body || {};
+  const idempotencyKey = (req.header('Idempotency-Key') || body.idempotencyKey || undefined) as string | undefined;
 
   try {
     const debt = await addDebtSettlement({
@@ -7761,13 +7917,20 @@ app.post('/api/debts/:id/settlements', requireRole('ceo', 'admin', 'finance'), a
       amount: body.amount,
       recordedBy: actor.uid,
       recordedByName: actor.name,
-      recordedByRole: actor.role as any
+      recordedByRole: actor.role as any,
+      idempotencyKey
     }, recordAudit);
     const index = globalStore.debts.findIndex(d => d.id === debt.id);
     if (index !== -1) globalStore.debts[index] = debt;
     res.json(debt);
   } catch (error: any) {
-    if (error instanceof DebtError) return res.status(400).json({ error: error.message });
+    if (error instanceof PersistenceError) {
+      const lowered = String(error.message).toLowerCase();
+      const status = lowered.includes('not found') ? 404
+        : lowered.includes('idempotency-key') || lowered.includes('already') ? 409
+          : 400;
+      return res.status(status).json({ error: error.message });
+    }
     throw error;
   }
 }));
@@ -8582,6 +8745,55 @@ app.post('/api/procurement/approvals/:id/decide', requireRole('ceo', 'admin'), a
     // float balance changed between request and decision) -- surface that
     // as a normal 400, not an unhandled 500.
     if (error instanceof PersistenceError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+// ----------------------------------------------------
+// TAX / VAT GOVERNANCE (Splendor OS 3.0, P2) -- a review-and-sign-off
+// workflow over figures buildVatSummary already computes correctly. There
+// is deliberately no filing/submit route and no DELETE here: see
+// src/server/taxPeriods.ts's file header for why. Review decisions go
+// through the generic POST /api/procurement/approvals/:id/decide route
+// above (entityType 'TaxPeriod', action 'review_tax_period'), reusing the
+// same Four-Eyes engine as every other approval in this codebase.
+// ----------------------------------------------------
+app.get('/api/tax/periods', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  res.json(await listTaxPeriods());
+}));
+
+app.get('/api/tax/periods/:periodKey', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  try {
+    res.json(await getTaxPeriodView(req.params.periodKey));
+  } catch (error: any) {
+    if (error instanceof TaxPeriodError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tax/periods/:periodKey/prepare', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  try {
+    res.json(await prepareTaxPeriod(req.params.periodKey, { uid: actor.uid, name: actor.name, role: actor.role as any }, recordAudit));
+  } catch (error: any) {
+    if (error instanceof TaxPeriodError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/tax/periods/:periodKey/request-review', requireRole('ceo', 'admin', 'finance'), asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  const reason = String(req.body?.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'A reason is required to request this period\'s review.' });
+  try {
+    const { taxPeriod, approvalRequestId } = await requestTaxPeriodReview(
+      req.params.periodKey, { uid: actor.uid, name: actor.name, role: actor.role as any }, reason, recordAudit
+    );
+    res.status(201).json({ taxPeriod, approvalRequestId });
+  } catch (error: any) {
+    if (error instanceof TaxPeriodError) return res.status(409).json({ error: error.message });
     throw error;
   }
 }));

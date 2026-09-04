@@ -10,6 +10,7 @@ import { formatDate } from '../../lib/dateFormat';
 import { downloadElementAsPdf, printElementDirectly } from '../../lib/pdfDownloader';
 import { Modal } from '../common/Modal';
 import { OfficialLetterheadLayout } from '../common/OfficialLetterheadLayout';
+import { CorporateStampMark } from '../common/CorporateStampMark';
 
 interface TaxInvoicePrintModalProps {
   isOpen: boolean;
@@ -243,7 +244,8 @@ export const TaxInvoicePrintModal: React.FC<TaxInvoicePrintModalProps> = ({
 
             <div className="space-y-3">
               <p className="font-bold text-zinc-900 text-xs">ختم الشركة المالي</p>
-              <div className="h-12 flex items-end justify-center border-b-2 border-dashed border-zinc-400">
+              <div className="h-12 flex items-end justify-center gap-2 border-b-2 border-dashed border-zinc-400">
+                <CorporateStampMark className="w-9 h-9 shrink-0" />
                 <span className="text-[10px] text-[#991b1b] font-bold">شركة سبلندر لتأجير السيارات ش.ذ.م.م</span>
               </div>
             </div>

@@ -30,7 +30,7 @@ vi.mock('firebase-admin', () => {
     get: async () => {
       if (collectionName === 'users') {
         const u = usersDb.get(id);
-        return { exists: !!u, data: () => u, id };
+        return { exists: !!u, data: () => (u ? { status: 'active', ...u } : u), id };
       }
       const data = collectionOf(collectionName).get(id);
       return { exists: data !== undefined, data: () => data, id };
@@ -1228,6 +1228,7 @@ describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective
     const firstSettle = await request(app)
       .post(`/api/debts/${createRes.body.id}/settlements`)
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'debt-settle-1a')
       .send({ method: 'cash', amount: 200 });
     expect(firstSettle.status).toBe(200);
     expect(firstSettle.body.status).toBe('partially_paid');
@@ -1236,11 +1237,48 @@ describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective
     const secondSettle = await request(app)
       .post(`/api/debts/${createRes.body.id}/settlements`)
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'debt-settle-1b')
       .send({ method: 'bank_transfer', amount: 300 });
     expect(secondSettle.status).toBe(200);
     expect(secondSettle.body.status).toBe('paid');
     expect(secondSettle.body.remainingAmount).toBe(0);
     expect(secondSettle.body.settlements).toHaveLength(2);
+  });
+
+  it('rejects a settlement with no Idempotency-Key -- a double-click/retry must never silently double-record a customer payment', async () => {
+    const createRes = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .send({ customerId: 'CUS-DBT-IDEMP-1', customerName: 'Idempotency Test Customer', type: 'salik', description: 'Toll charges', originalAmount: 200 });
+    const res = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .send({ method: 'cash', amount: 100 });
+    expect(res.status).toBe(409);
+  });
+
+  it('replays the same settlement result for a retried Idempotency-Key instead of recording it twice', async () => {
+    const createRes = await request(app)
+      .post('/api/debts')
+      .set(authAs(OPS_UID))
+      .send({ customerId: 'CUS-DBT-IDEMP-2', customerName: 'Idempotency Test Customer 2', type: 'salik', description: 'Toll charges', originalAmount: 200 });
+    const key = 'debt-settle-retry-key-1';
+    const first = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', key)
+      .send({ method: 'cash', amount: 100 });
+    expect(first.status).toBe(200);
+    expect(first.body.settlements).toHaveLength(1);
+
+    const second = await request(app)
+      .post(`/api/debts/${createRes.body.id}/settlements`)
+      .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', key)
+      .send({ method: 'cash', amount: 100 });
+    expect(second.status).toBe(200);
+    expect(second.body.settlements).toHaveLength(1); // replayed, not a second movement
+    expect(second.body.remainingAmount).toBe(first.body.remainingAmount);
   });
 
   it('rejects a settlement exceeding the remaining debt', async () => {
@@ -1251,6 +1289,7 @@ describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective
     const res = await request(app)
       .post(`/api/debts/${createRes.body.id}/settlements`)
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'debt-settle-2')
       .send({ method: 'cash', amount: 500 });
     expect(res.status).toBe(400);
   });
@@ -1263,6 +1302,7 @@ describe('Debts: fixed types, lifecycle, multiple settlement methods, corrective
     const settleRes = await request(app)
       .post(`/api/debts/${createRes.body.id}/settlements`)
       .set(authAs(FINANCE_UID))
+      .set('Idempotency-Key', 'debt-settle-3')
       .send({ method: 'cash', amount: 400 });
     expect(settleRes.body.status).toBe('paid');
     const movementId = settleRes.body.settlements[0].id;

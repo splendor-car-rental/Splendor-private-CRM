@@ -101,6 +101,9 @@ export const FinanceControlCenterView: React.FC = () => {
   const [payablePaymentModalOpen, setPayablePaymentModalOpen] = useState(false);
   const [selectedSupplierInvoice, setSelectedSupplierInvoice] = useState<SupplierInvoiceLite | null>(null);
   const [selectedPayable, setSelectedPayable] = useState<AccountsPayableEntry | null>(null);
+  const [gapPostModalOpen, setGapPostModalOpen] = useState(false);
+  const [selectedGap, setSelectedGap] = useState<PostingGap | null>(null);
+  const [gapPostAccountCode, setGapPostAccountCode] = useState('');
   const [noteType, setNoteType] = useState<'credit_note' | 'debit_note'>('credit_note');
   const [workingId, setWorkingId] = useState<string | null>(null);
 
@@ -116,30 +119,40 @@ export const FinanceControlCenterView: React.FC = () => {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    try {
-      const [dash, coa, exp, ar, ap, payableList, journalList, periodList, vehicleList, gaps, reportData, noteList, supplierInvoiceList] = await Promise.all([
-        getJson<FinanceDashboardSummary>('/api/accounting/dashboard'),
-        getJson<AccountingAccount[]>('/api/accounting/chart-of-accounts'),
-        getJson<FinanceExpense[]>('/api/accounting/expenses'),
-        getJson<ARAgingRow[]>('/api/accounting/ar-aging'),
-        getJson<APAgingRow[]>('/api/accounting/ap-aging'),
-        getJson<AccountsPayableEntry[]>('/api/accounting/payables'),
-        getJson<JournalEntry[]>('/api/accounting/journals?limit=500'),
-        getJson<AccountingPeriod[]>('/api/accounting/periods'),
-        getJson<VehicleProfitabilityRow[]>('/api/accounting/vehicle-profitability'),
-        getJson<PostingGap[]>('/api/accounting/posting-gaps'),
-        getJson<FinanceReports>('/api/accounting/reports'),
-        getJson<FinancialNote[]>('/api/accounting/financial-notes'),
-        getJson<SupplierInvoiceLite[]>('/api/supplier-invoices').catch(() => [])
-      ]);
-      setDashboard(dash); setAccounts(coa); setExpenses(exp); setArRows(ar); setApRows(ap); setPayables(payableList);
-      setJournals(journalList); setPeriods(periodList); setVehicleRows(vehicleList); setPostingGaps(gaps); setReports(reportData); setNotes(noteList);
-      setSupplierInvoices(supplierInvoiceList);
-    } catch (error: any) {
-      showToast('تعذر تحميل المركز المالي', error?.message || 'حدث خطأ أثناء تحميل بيانات المحاسبة.', 'error');
-    } finally {
-      setLoading(false);
+    // Each section is fetched independently (Promise.allSettled, not
+    // Promise.all): one broken endpoint used to blank out the ENTIRE
+    // Finance Control Center with a single generic "failed to load" toast,
+    // hiding every other section that loaded fine. Now a failing section
+    // just falls back to empty/zero and is named in the toast, while every
+    // section that DID load renders normally.
+    const sections: Array<{ label: string; run: () => Promise<void> }> = [
+      { label: 'لوحة المؤشرات المالية', run: async () => setDashboard(await getJson<FinanceDashboardSummary>('/api/accounting/dashboard')) },
+      { label: 'دليل الحسابات', run: async () => setAccounts(await getJson<AccountingAccount[]>('/api/accounting/chart-of-accounts')) },
+      { label: 'المصروفات', run: async () => setExpenses(await getJson<FinanceExpense[]>('/api/accounting/expenses')) },
+      { label: 'أعمار ذمم العملاء', run: async () => setArRows(await getJson<ARAgingRow[]>('/api/accounting/ar-aging')) },
+      { label: 'أعمار ذمم الموردين', run: async () => setApRows(await getJson<APAgingRow[]>('/api/accounting/ap-aging')) },
+      { label: 'مستحقات الموردين', run: async () => setPayables(await getJson<AccountsPayableEntry[]>('/api/accounting/payables')) },
+      { label: 'دفتر اليومية', run: async () => setJournals(await getJson<JournalEntry[]>('/api/accounting/journals?limit=500')) },
+      { label: 'الفترات المحاسبية', run: async () => setPeriods(await getJson<AccountingPeriod[]>('/api/accounting/periods')) },
+      { label: 'ربحية المركبات', run: async () => setVehicleRows(await getJson<VehicleProfitabilityRow[]>('/api/accounting/vehicle-profitability')) },
+      { label: 'فجوات الترحيل', run: async () => setPostingGaps(await getJson<PostingGap[]>('/api/accounting/posting-gaps')) },
+      { label: 'التقارير المالية', run: async () => setReports(await getJson<FinanceReports>('/api/accounting/reports')) },
+      { label: 'الإشعارات الدائنة والمدينة', run: async () => setNotes(await getJson<FinancialNote[]>('/api/accounting/financial-notes')) },
+      { label: 'فواتير الموردين', run: async () => setSupplierInvoices(await getJson<SupplierInvoiceLite[]>('/api/supplier-invoices')) }
+    ];
+    const results = await Promise.allSettled(sections.map(s => s.run()));
+    const failed = results
+      .map((result, idx) => ({ result, label: sections[idx].label }))
+      .filter((entry): entry is { result: PromiseRejectedResult; label: string } => entry.result.status === 'rejected');
+    if (failed.length > 0) {
+      console.error('[Finance] Sections failed to load:', failed.map(f => `${f.label}: ${f.result.reason?.message || f.result.reason}`));
+      showToast(
+        'تعذر تحميل بعض أقسام المركز المالي',
+        `الأقسام التالية لم تُحمّل: ${failed.map(f => f.label).join('، ')}. باقي الأقسام تم تحميلها بنجاح.`,
+        'error'
+      );
     }
+    setLoading(false);
   }, [showToast]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -244,6 +257,36 @@ export const FinanceControlCenterView: React.FC = () => {
 
   const closeAllowed = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
+  // Posting a gap from the Integrity tab reuses the same accounting.ts
+  // functions the AP/notes flows already call (postInvoiceToAccounting /
+  // postPaymentToAccounting / the deposit lifecycle's 'post' action) -- this
+  // is the missing link that lets staff actually turn "recorded operationally"
+  // (a customer payment, invoice or deposit) into a posted ledger entry that
+  // feeds the P&L, VAT and tax-filing reports, instead of that step being
+  // invisible and undiscoverable.
+  const openGapPost = (gap: PostingGap) => {
+    setSelectedGap(gap);
+    setGapPostAccountCode(gap.sourceType === 'Invoice' ? (revenueAccounts[0]?.code || '4000') : (settlementAccounts[0]?.code || '1100'));
+    setGapPostModalOpen(true);
+  };
+
+  const postGap = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedGap) return;
+    setWorkingId(`gap-${selectedGap.sourceType}-${selectedGap.sourceId}`);
+    try {
+      const endpoint = selectedGap.sourceType === 'Invoice' ? `/api/accounting/invoices/${encodeURIComponent(selectedGap.sourceId)}/post`
+        : selectedGap.sourceType === 'Payment' ? `/api/accounting/payments/${encodeURIComponent(selectedGap.sourceId)}/post`
+        : `/api/accounting/deposits/${encodeURIComponent(selectedGap.sourceId)}/post`;
+      const body = selectedGap.sourceType === 'Invoice' ? { revenueAccountCode: gapPostAccountCode } : { settlementAccountCode: gapPostAccountCode };
+      await getJson(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      setGapPostModalOpen(false);
+      showToast('تم الترحيل إلى دفتر الأستاذ', `${selectedGap.sourceType} ${selectedGap.sourceId} أصبح له الآن قيد محاسبي مرحّل.`, 'success');
+      await refresh();
+    } catch (error: any) { showToast('تعذر الترحيل', error.message, 'error'); }
+    finally { setWorkingId(null); }
+  };
+
   return (
     <div className="space-y-5 animate-fade-in pb-12" dir={isAr ? 'rtl' : 'ltr'}>
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -253,6 +296,7 @@ export const FinanceControlCenterView: React.FC = () => {
           <p className="text-xs text-zinc-400 mt-1 max-w-3xl">دفتر أستاذ مزدوج القيد، المصروفات، ذمم العملاء والموردين، الضريبة، التدفقات النقدية، إقفال الفترات وربحية المركبات مع سجل تدقيق وترحيل محكوم.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setTab('operations')} className="px-4 py-2.5 rounded-xl bg-emerald-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-emerald-400 transition-colors"><CircleDollarSign className="w-4 h-4" />تسجيل إيراد / دفعة عميل</button>
           <button onClick={() => setExpenseModalOpen(true)} className="px-4 py-2.5 rounded-xl bg-blue-500 text-zinc-950 font-bold text-xs flex items-center gap-2 hover:bg-blue-400 transition-colors"><Plus className="w-4 h-4" />تسجيل مصروف</button>
           <button onClick={() => { setNoteType('credit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FileMinus2 className="w-4 h-4" />إشعار دائن</button>
           <button onClick={() => { setNoteType('debit_note'); setNoteModalOpen(true); }} className="px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs flex items-center gap-2"><FilePlus2 className="w-4 h-4" />إشعار مدين</button>
@@ -282,7 +326,7 @@ export const FinanceControlCenterView: React.FC = () => {
         {tab === 'ledger' && <LedgerView journals={journals} accounts={accounts} reports={reports} />}
         {tab === 'periods' && <PeriodsView periods={periods} closeAllowed={closeAllowed} onClose={() => setPeriodModalOpen(true)} />}
         {tab === 'vehicles' && <VehicleProfitabilityTable rows={vehicleRows} />}
-        {tab === 'integrity' && <PostingGapsTable gaps={postingGaps} />}
+        {tab === 'integrity' && <PostingGapsTable gaps={postingGaps} workingId={workingId} onPost={openGapPost} />}
       </>}
 
       <Modal isOpen={expenseModalOpen} onClose={() => setExpenseModalOpen(false)} title="تسجيل مصروف جديد" subtitle="يُسجل أولًا كقيد معلق ولا يُرحّل قبل اعتماد شخص آخر" maxWidth="4xl">
@@ -332,6 +376,21 @@ export const FinanceControlCenterView: React.FC = () => {
         <form onSubmit={closePeriod} className="space-y-4 text-xs"><Field label="الفترة"><input type="month" required value={closeForm.period} onChange={e => setCloseForm({ ...closeForm, period: e.target.value })} className="field" /></Field><Field label="سبب الإقفال"><textarea required rows={3} value={closeForm.reason} onChange={e => setCloseForm({ ...closeForm, reason: e.target.value })} className="field" /></Field><div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300">بعد الإقفال، التصحيح يتم بقيد عكسي أو قيد تسوية في فترة مفتوحة. لا يتم حذف أو تعديل القيود المرحلة.</div><div className="flex justify-end gap-2"><button type="button" onClick={() => setPeriodModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800">إلغاء</button><button className="px-5 py-2 rounded-xl bg-rose-500 text-white font-bold">تأكيد الإقفال</button></div></form>
       </Modal>
 
+      <Modal isOpen={gapPostModalOpen} onClose={() => setGapPostModalOpen(false)} title="ترحيل عملية إلى دفتر الأستاذ" subtitle="اختر الحساب المناسب ثم أكّد -- سيُنشأ قيد محاسبي واحد ذرّي لهذه العملية فقط" maxWidth="md">
+        <form onSubmit={postGap} className="space-y-4 text-xs">
+          <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800 text-zinc-300">{selectedGap?.sourceType} — {selectedGap?.sourceId} — {selectedGap?.description} — {money(selectedGap?.amount ?? undefined)}</div>
+          <Field label={selectedGap?.sourceType === 'Invoice' ? 'حساب الإيراد' : 'حساب الخزينة / البنك'}>
+            <select required value={gapPostAccountCode} onChange={e => setGapPostAccountCode(e.target.value)} className="field">
+              {(selectedGap?.sourceType === 'Invoice' ? revenueAccounts : settlementAccounts).map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}
+            </select>
+          </Field>
+          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800">
+            <button type="button" onClick={() => setGapPostModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">إلغاء</button>
+            <button disabled={Boolean(selectedGap && workingId === `gap-${selectedGap.sourceType}-${selectedGap.sourceId}`)} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold flex items-center gap-2">{selectedGap && workingId === `gap-${selectedGap.sourceType}-${selectedGap.sourceId}` && <Loader2 className="w-4 h-4 animate-spin" />}ترحيل الآن</button>
+          </div>
+        </form>
+      </Modal>
+
       <Modal isOpen={noteModalOpen} onClose={() => setNoteModalOpen(false)} title={noteType === 'credit_note' ? 'إصدار إشعار دائن' : 'إصدار إشعار مدين'} subtitle="يتم إنشاء مستند وقيد مستقل دون تعديل الفاتورة الأصلية" maxWidth="lg">
         <form onSubmit={createNote} className="space-y-4 text-xs"><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><Field label="رقم الفاتورة"><input required value={noteForm.invoiceId} onChange={e => setNoteForm({ ...noteForm, invoiceId: e.target.value })} className="field" /></Field><Field label="تاريخ الإصدار"><input type="date" required value={noteForm.issueDate} onChange={e => setNoteForm({ ...noteForm, issueDate: e.target.value })} className="field" /></Field><Field label="المبلغ قبل الضريبة"><input type="number" min="0.01" step="0.01" required value={noteForm.amountBeforeVat} onChange={e => setNoteForm({ ...noteForm, amountBeforeVat: Number(e.target.value) })} className="field" /></Field><Field label="الضريبة"><input type="number" min="0" step="0.01" required value={noteForm.vatAmount} onChange={e => setNoteForm({ ...noteForm, vatAmount: Number(e.target.value) })} className="field" /></Field><Field label="حساب الإيراد"><select value={noteForm.revenueAccountCode} onChange={e => setNoteForm({ ...noteForm, revenueAccountCode: e.target.value })} className="field">{revenueAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.nameAr}</option>)}</select></Field></div><Field label="السبب"><textarea required rows={3} value={noteForm.reason} onChange={e => setNoteForm({ ...noteForm, reason: e.target.value })} className="field" /></Field><div className="flex justify-end gap-2"><button type="button" onClick={() => setNoteModalOpen(false)} className="px-4 py-2 rounded-xl border border-zinc-800">إلغاء</button><button disabled={workingId === 'financial-note'} className="px-5 py-2 rounded-xl bg-blue-500 text-zinc-950 font-bold flex items-center gap-2">{workingId === 'financial-note' && <Loader2 className="w-4 h-4 animate-spin" />}إصدار وترحيل</button></div></form>
       </Modal>
@@ -360,7 +419,7 @@ const CashFlowRow: React.FC<{ label: string; section: { inflows: number; outflow
 const LedgerView: React.FC<{ journals: JournalEntry[]; accounts: AccountingAccount[]; reports: FinanceReports | null }> = ({ journals, accounts, reports }) => <div className="space-y-4"><div className="grid grid-cols-2 md:grid-cols-4 gap-3"><Mini label="إجمالي مدين ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.debit, 0))} /><Mini label="إجمالي دائن ميزان المراجعة" value={money(reports?.trialBalance?.reduce((s, r) => s + r.credit, 0))} /><Mini label="عدد القيود" value={String(journals.length)} /><Mini label="الحسابات النشطة" value={String(accounts.filter(a => a.active).length)} /></div><TableShell title="القيود المرحلة"><table className="w-full text-xs min-w-[900px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>القيد</Th><Th>التاريخ</Th><Th>المصدر</Th><Th>المرجع</Th><Th>البيان</Th><Th>مدين</Th><Th>دائن</Th></tr></thead><tbody>{journals.map(j => <tr key={j.id} className="border-b border-zinc-800/50"><Td mono>{j.id}</Td><Td>{j.date}</Td><Td>{j.sourceType}</Td><Td mono>{j.reference || j.sourceId}</Td><Td>{j.memo}</Td><Td>{money(j.totalDebit)}</Td><Td>{money(j.totalCredit)}</Td></tr>)}</tbody></table></TableShell></div>;
 const PeriodsView: React.FC<{ periods: AccountingPeriod[]; closeAllowed: boolean; onClose: () => void }> = ({ periods, closeAllowed, onClose }) => <div className="space-y-4">{closeAllowed && <div className="flex justify-end"><button onClick={onClose} className="px-4 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-2"><CalendarClock className="w-4 h-4" />إقفال فترة</button></div>}<TableShell title="الفترات المقفلة"><table className="w-full text-xs"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>الفترة</Th><Th>من</Th><Th>إلى</Th><Th>الحالة</Th><Th>تاريخ الإقفال</Th><Th>بواسطة</Th></tr></thead><tbody>{periods.map(p => <tr key={p.id} className="border-b border-zinc-800/50"><Td mono>{p.id}</Td><Td>{p.startDate}</Td><Td>{p.endDate}</Td><Td>{p.status === 'closed' ? 'مقفلة' : 'مفتوحة'}</Td><Td>{p.closedAt?.slice(0, 10) || '—'}</Td><Td>{p.closedByName || '—'}</Td></tr>)}</tbody></table></TableShell><div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400">إعادة فتح فترة مقفلة غير متاحة من هذه الواجهة عمدًا. أي تغيير في هذا السلوك يحتاج قرار حوكمة مستقل؛ التصحيح الحالي يتم بقيد عكسي أو قيد تسوية في فترة مفتوحة.</div></div>;
 const VehicleProfitabilityTable: React.FC<{ rows: VehicleProfitabilityRow[] }> = ({ rows }) => <TableShell title="ربحية المركبات من القيود المرتبطة بالمركبة"><table className="w-full text-xs min-w-[980px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>المركبة</Th><Th>الإيراد</Th><Th>الصيانة</Th><Th>التأمين</Th><Th>الترخيص</Th><Th>التمويل</Th><Th>التجهيز</Th><Th>إجمالي التكلفة</Th><Th>صافي الربح</Th><Th>العائد</Th></tr></thead><tbody>{rows.map(r => <tr key={r.vehicleId} className="border-b border-zinc-800/50"><Td>{r.vehicleName || r.vehicleId}</Td><Td>{money(r.revenue)}</Td><Td>{money(r.maintenanceCost)}</Td><Td>{money(r.insuranceCost)}</Td><Td>{money(r.registrationCost)}</Td><Td>{money(r.financeCost)}</Td><Td>{money(r.cleaningCost)}</Td><Td>{money(r.totalCost)}</Td><Td>{money(r.netProfit)}</Td><Td>{r.roiPercent == null ? '—' : `${r.roiPercent}%`}</Td></tr>)}</tbody></table></TableShell>;
-const PostingGapsTable: React.FC<{ gaps: PostingGap[] }> = ({ gaps }) => <div className="space-y-4"><div className={`p-4 rounded-2xl border text-xs flex items-start gap-3 ${gaps.length === 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{gaps.length === 0 ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}<div><p className="font-bold">{gaps.length === 0 ? 'لا توجد فجوات ترحيل مكتشفة' : `${gaps.length} عملية تشغيلية تحتاج ربطًا محاسبيًا`}</p><p className="opacity-80 mt-1">لا يقوم النظام بأي ترحيل رجعي تلقائي للبيانات التاريخية. تظهر الفجوة للمراجعة ولا يتم اختراع حساب أو ضريبة أو تاريخ استحقاق.</p></div></div><TableShell title="فجوات الترحيل التاريخية والحالية"><table className="w-full text-xs min-w-[860px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>النوع</Th><Th>المرجع</Th><Th>التاريخ</Th><Th>البيان</Th><Th>المبلغ</Th><Th>سبب الفجوة</Th></tr></thead><tbody>{gaps.map((g, i) => <tr key={`${g.sourceType}-${g.sourceId}-${i}`} className="border-b border-zinc-800/50"><Td>{g.sourceType}</Td><Td mono>{g.sourceId}</Td><Td>{g.date || '—'}</Td><Td>{g.description}</Td><Td>{g.amount == null ? '—' : money(g.amount)}</Td><Td>{g.reason}</Td></tr>)}</tbody></table></TableShell></div>;
+const PostingGapsTable: React.FC<{ gaps: PostingGap[]; workingId: string | null; onPost: (gap: PostingGap) => void }> = ({ gaps, workingId, onPost }) => <div className="space-y-4"><div className={`p-4 rounded-2xl border text-xs flex items-start gap-3 ${gaps.length === 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-300'}`}>{gaps.length === 0 ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}<div><p className="font-bold">{gaps.length === 0 ? 'لا توجد فجوات ترحيل مكتشفة' : `${gaps.length} عملية تشغيلية تحتاج ربطًا محاسبيًا`}</p><p className="opacity-80 mt-1">لا يقوم النظام بأي ترحيل رجعي تلقائي للبيانات التاريخية. اضغط «ترحيل الآن» لكل عملية إيراد أو دفعة أو تأمين لإدخالها في دفتر الأستاذ بنفسك -- لا يتم اختراع حساب أو ضريبة أو تاريخ استحقاق.</p></div></div><TableShell title="فجوات الترحيل التاريخية والحالية"><table className="w-full text-xs min-w-[960px]"><thead><tr className="text-zinc-500 border-b border-zinc-800"><Th>النوع</Th><Th>المرجع</Th><Th>التاريخ</Th><Th>البيان</Th><Th>المبلغ</Th><Th>سبب الفجوة</Th><Th>الإجراء</Th></tr></thead><tbody>{gaps.map((g, i) => <tr key={`${g.sourceType}-${g.sourceId}-${i}`} className="border-b border-zinc-800/50"><Td>{g.sourceType}</Td><Td mono>{g.sourceId}</Td><Td>{g.date || '—'}</Td><Td>{g.description}</Td><Td>{g.amount == null ? '—' : money(g.amount)}</Td><Td>{g.reason}</Td><Td>{(g.sourceType === 'Invoice' || g.sourceType === 'Payment' || g.sourceType === 'Deposit') ? <button disabled={workingId === `gap-${g.sourceType}-${g.sourceId}`} onClick={() => onPost(g)} className="px-3 py-1.5 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 font-bold whitespace-nowrap">ترحيل الآن</button> : <span className="text-zinc-600">—</span>}</Td></tr>)}</tbody></table></TableShell></div>;
 const TableShell: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => <div className="rounded-3xl bg-zinc-900/70 border border-zinc-800 overflow-hidden"><div className="px-4 py-3 border-b border-zinc-800 font-bold text-sm text-zinc-100">{title}</div><div className="overflow-x-auto">{children}</div></div>;
 const Th: React.FC<{ children: React.ReactNode }> = ({ children }) => <th className="p-3 text-start font-medium whitespace-nowrap">{children}</th>;
 const Td: React.FC<{ children: React.ReactNode; mono?: boolean }> = ({ children, mono }) => <td className={`p-3 text-zinc-300 whitespace-nowrap ${mono ? 'font-mono' : ''}`}>{children}</td>;
