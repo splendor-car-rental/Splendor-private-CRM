@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
-import { parseSalikExcel, parseGenericTollExcel } from '../src/server/tollFileParsers';
+import { parseSalikExcel, parseGenericTollExcel, parseSalikPdfText } from '../src/server/tollFileParsers';
 
 function bufferFromAoa(aoa: any[][]): Buffer {
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -174,5 +174,91 @@ describe('parseGenericTollExcel -- generic Date/Amount column detection (Darb fa
   it('throws a controlled error when no Date+Amount header can be detected', async () => {
     const aoa = [['Foo', 'Bar', 'Baz'], [1, 2, 3]];
     await expect(parseGenericTollExcel(bufferFromAoa(aoa))).rejects.toThrow(/Could not detect a header row/i);
+  });
+});
+
+describe('parseSalikPdfText -- Monthly Statements PDF', () => {
+  it('parses the original single-account flat layout (plate+tag inline on every row)', () => {
+    const text = [
+      'Account # 123456',
+      'Transaction Date/Time     Plate     Tag         Location                              Direction        Amount',
+      '01-Jan-2026 10:00:00 AM A12345 TAG001 Al Garhoud Bridge  To Dubai 4',
+      '02-Jan-2026 11:00:00 AM B67890 TAG002 Al Maktoum Bridge  To Sharjah 4.5'
+    ].join('\n');
+    const result = parseSalikPdfText(text);
+    expect(result.meta.accountNumber).toBe('123456');
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]).toMatchObject({
+      date: '2026-01-01', plateNumber: 'A12345', tagNumber: 'TAG001',
+      locationName: 'Al Garhoud Bridge', direction: 'To Dubai', actualCompanyCost: 4
+    });
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('parses a fleet/corporate statement grouped under "Tag No:" section headers', () => {
+    const text = [
+      'Account # 999000',
+      'Tag No: TAG100',
+      '01-Jan-2026 08:00:00 AM Al Garhoud Bridge  To Dubai 4',
+      '01-Jan-2026 09:30:00 AM Al Maktoum Bridge  To Sharjah 4.5',
+      'Tag No: TAG200',
+      '02-Jan-2026 10:00:00 AM Business Bay Crossing  From Dubai 4'
+    ].join('\n');
+    const result = parseSalikPdfText(text);
+    expect(result.rows).toHaveLength(3);
+    expect(result.rows[0]).toMatchObject({ tagNumber: 'TAG100', plateNumber: undefined, locationName: 'Al Garhoud Bridge', actualCompanyCost: 4 });
+    expect(result.rows[1]).toMatchObject({ tagNumber: 'TAG100', locationName: 'Al Maktoum Bridge' });
+    expect(result.rows[2]).toMatchObject({ tagNumber: 'TAG200', locationName: 'Business Bay Crossing', direction: 'From Dubai' });
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('parses a fleet statement grouped under "Plate No:" section headers', () => {
+    const text = [
+      'Plate No: A 55555',
+      '03-Jan-2026 07:15:00 AM Al Barsha Gate  To Dubai 4',
+      '03-Jan-2026 12:00:00 PM Al Barsha Gate  From Dubai 4'
+    ].join('\n');
+    const result = parseSalikPdfText(text);
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]).toMatchObject({ plateNumber: 'A 55555', tagNumber: undefined, locationName: 'Al Barsha Gate' });
+  });
+
+  it('starting a new "Tag No:" group does not leak the previous group\'s plate into the new group', () => {
+    const text = [
+      'Plate No: A 11111',
+      '01-Jan-2026 08:00:00 AM Gate One  To Dubai 4',
+      'Tag No: TAG999',
+      '01-Jan-2026 09:00:00 AM Gate Two  To Dubai 4'
+    ].join('\n');
+    const result = parseSalikPdfText(text);
+    expect(result.rows[0]).toMatchObject({ plateNumber: 'A 11111', tagNumber: undefined });
+    expect(result.rows[1]).toMatchObject({ tagNumber: 'TAG999', plateNumber: undefined });
+  });
+
+  it('correctly parses an Arabic gate name on a single line', () => {
+    const text = [
+      'Tag No: TAG300',
+      '01-Jan-2026 08:00:00 AM بوابة الجرهود  To Dubai 4'
+    ].join('\n');
+    const result = parseSalikPdfText(text);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].locationName).toBe('بوابة الجرهود');
+  });
+
+  it('merges a wrapped Arabic gate-name continuation line into the previous row (was Latin-only before)', () => {
+    const text = [
+      'Tag No: TAG400',
+      '01-Jan-2026 08:00:00 AM بوابة جسر  To Dubai 4',
+      'مكتوم'
+    ].join('\n');
+    const result = parseSalikPdfText(text);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].locationName).toBe('بوابة جسر مكتوم');
+  });
+
+  it('reports no rows and a clear warning for text with no recognizable transaction lines', () => {
+    const result = parseSalikPdfText('Monthly Statements\nAccount # 1\nRun Date: 01-Jan-2026');
+    expect(result.rows).toHaveLength(0);
+    expect(result.warnings.some(w => /no transaction rows/i.test(w))).toBe(true);
   });
 });

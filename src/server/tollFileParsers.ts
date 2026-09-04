@@ -30,6 +30,14 @@
 // by any code that runs in production or touches a real uploaded file.
 import { readSheet } from 'read-excel-file/node';
 import type { Row } from 'read-excel-file/node';
+import { readLegacyXlsGrid } from './legacyXlsReader.js';
+
+/** OLE2/BIFF8 compound-file signature -- see tollImportGuard.ts's detectTollImportFileKind, which classifies both this and OOXML as kind 'excel'; this is the finer-grained check readGridFromBuffer needs to route to the right reader. */
+function isLegacyXlsBuffer(buffer: Buffer): boolean {
+  return buffer.length >= 8
+    && buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0
+    && buffer[4] === 0xa1 && buffer[5] === 0xb1 && buffer[6] === 0x1a && buffer[7] === 0xe1;
+}
 
 export interface ParsedTollRow {
   date: string; // ISO yyyy-mm-dd
@@ -99,8 +107,19 @@ function cellToString(value: unknown): string {
   return String(value);
 }
 
-/** Reads the first sheet of an uploaded workbook as a plain string grid -- the one thing every parser below needs, isolated here so the rest of each parser's logic (header detection, column matching, row parsing) never has to know which library produced it. */
+/**
+ * Reads the first sheet of an uploaded workbook as a plain string grid --
+ * the one thing every parser below needs, isolated here so the rest of
+ * each parser's logic (header detection, column matching, row parsing)
+ * never has to know which library/format produced it. Legacy .xls
+ * (OLE2/BIFF8, still what Salik's own portal sometimes exports) is routed
+ * to legacyXlsReader.ts's dependency-free reader rather than read-excel-file,
+ * which only understands modern .xlsx (OOXML).
+ */
 async function readGridFromBuffer(buffer: Buffer): Promise<string[][]> {
+  if (isLegacyXlsBuffer(buffer)) {
+    return readLegacyXlsGrid(buffer);
+  }
   const rows: Row[] = await readSheet(buffer);
   return rows.map(row => row.map(cellToString));
 }
@@ -182,8 +201,29 @@ export async function parseSalikExcel(buffer: Buffer): Promise<ParsedTollFile> {
   return { rows, meta: { accountNumber, periodStart, periodEnd }, warnings };
 }
 
+// The original, single-account "Monthly Statements" export: one flat
+// sequence of rows, each carrying its own plate + tag inline.
 const SALIK_PDF_ROW_REGEX =
-  /^\s*(\d{1,2}-[A-Za-z]{3}-\d{4})\s+(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s+(\S+)\s+(\S+)\s+(.+?)\s{2,}(To\s+.+?)\s+([\d.]+)\s*$/;
+  /^\s*(\d{1,2}-[A-Za-z]{3}-\d{4})\s+(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s+(\S+)\s+(\S+)\s+(.+?)\s{2,}((?:To|From|إلى|من)\s+.+?)\s+([\d.]+)\s*$/;
+
+// A fleet/corporate statement instead groups trips under a per-vehicle
+// section: a "Tag No: ..." / "Plate No: ..." header line (English or
+// Arabic label), followed by rows that carry only date/time/location/
+// direction/amount -- the plate and tag are implied by the group's own
+// header, not repeated on every row.
+const SALIK_PDF_GROUPED_ROW_REGEX =
+  /^\s*(\d{1,2}-[A-Za-z]{3}-\d{4})\s+(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s+(.+?)\s{2,}((?:To|From|إلى|من)\s+.+?)\s+([\d.]+)\s*$/;
+
+const SALIK_PDF_TAG_HEADER_REGEX = /^(?:Tag\s*(?:No\.?|Number)?|رقم\s*(?:ال)?تاق)\s*[:#]\s*([A-Za-z0-9]+)/i;
+const SALIK_PDF_PLATE_HEADER_REGEX = /^(?:Plate\s*(?:No\.?|Number)?|رقم\s*(?:ال)?لوحة)\s*[:#]\s*([A-Za-z0-9؀-ۿ \-]+?)\s*$/i;
+
+// A wrapped continuation line of a row's Location cell (e.g. "Bridge" on
+// its own line, from "Al Garhoud New Bridge"), or its Arabic equivalent
+// (e.g. "جسر" continuing "بوابة جسر مكتوم") -- gate names on Salik/Darb
+// statements are never anything but Arabic or Latin script, so both
+// ranges are accepted; anything else (digits, punctuation-only lines) is
+// left to the ignore/unparsed handling below.
+const SALIK_PDF_LOCATION_CONTINUATION_REGEX = /^[A-Za-z؀-ۿ][A-Za-z؀-ۿ\s]*$/;
 
 const SALIK_PDF_IGNORE_REGEX =
   /^(Monthly Statements|Statement (Date|Filter)|Account #|Total transactions|Run Date|Page \d|Transaction Date\/Time|Transactions for Tag|Name|Email|Statements generated)/i;
@@ -194,6 +234,12 @@ const SALIK_PDF_IGNORE_REGEX =
  * guaranteed to be pixel-identical across libraries, so this is
  * intentionally tolerant of extra/variable whitespace, and any line it
  * can't confidently parse is counted in `warnings` rather than guessed at.
+ *
+ * Two real layouts are handled: a single-account statement (one flat
+ * sequence of rows, each with its own plate+tag), and a fleet/corporate
+ * statement (rows grouped under a "Tag No:"/"Plate No:" section header,
+ * plate/tag implied rather than repeated per row) -- see
+ * SALIK_PDF_GROUPED_ROW_REGEX and the two header regexes above.
  */
 export function parseSalikPdfText(text: string): ParsedTollFile {
   const lines = text.split('\n');
@@ -204,6 +250,8 @@ export function parseSalikPdfText(text: string): ParsedTollFile {
   const rows: ParsedTollRow[] = [];
   let lastRow: ParsedTollRow | null = null;
   let unparsedCount = 0;
+  let currentGroupTag: string | undefined;
+  let currentGroupPlate: string | undefined;
 
   for (const rawLine of lines) {
     const line = rawLine.replace(/\r/g, '');
@@ -219,27 +267,64 @@ export function parseSalikPdfText(text: string): ParsedTollFile {
     const topUpMatch = trimmed.match(/Total Payments Amount\s*\(AED\)\s+([\d,.]+)/i);
     if (topUpMatch) totalTopUps = parseFloat(topUpMatch[1].replace(/,/g, ''));
 
-    const m = line.match(SALIK_PDF_ROW_REGEX);
-    if (m) {
-      const [, dateStr, timeStr, plate, tag, location, direction, amountStr] = m;
-      const row: ParsedTollRow = {
-        date: normalizeDate(dateStr),
-        time: timeStr.trim(),
-        locationName: location.trim(),
-        direction: direction.trim(),
-        tagNumber: tag,
-        plateNumber: plate,
-        actualCompanyCost: parseFloat(amountStr) || 0
-      };
-      rows.push(row);
-      lastRow = row;
+    const tagHeaderMatch = trimmed.match(SALIK_PDF_TAG_HEADER_REGEX);
+    if (tagHeaderMatch) {
+      currentGroupTag = tagHeaderMatch[1].trim();
+      currentGroupPlate = undefined; // a new section starts a fresh group -- don't carry over the previous vehicle's plate
+      lastRow = null;
+      continue;
+    }
+    const plateHeaderMatch = trimmed.match(SALIK_PDF_PLATE_HEADER_REGEX);
+    if (plateHeaderMatch) {
+      currentGroupPlate = plateHeaderMatch[1].trim();
+      lastRow = null;
       continue;
     }
 
-    // A short, letters-only line right after a row is almost always a
-    // wrapped continuation of that row's Location cell (e.g. "Bridge" on
-    // its own line, from "Al Garhoud New Bridge").
-    if (lastRow && /^[A-Za-z][A-Za-z\s]*$/.test(trimmed) && trimmed.length < 40) {
+    // Once a "Tag No:"/"Plate No:" section header has been seen, every row
+    // in that section is the grouped (no inline plate/tag) shape ONLY --
+    // the flat-row regex is never attempted there. Both regexes can
+    // otherwise match the same line (a 3-word location reads as "plate tag
+    // location" just as easily as a real flat row), so which one applies
+    // is decided by which layout the document has committed to, not by
+    // trying both and hoping only one matches.
+    if (currentGroupTag || currentGroupPlate) {
+      const gm = line.match(SALIK_PDF_GROUPED_ROW_REGEX);
+      if (gm) {
+        const [, dateStr, timeStr, location, direction, amountStr] = gm;
+        const row: ParsedTollRow = {
+          date: normalizeDate(dateStr),
+          time: timeStr.trim(),
+          locationName: location.trim(),
+          direction: direction.trim(),
+          tagNumber: currentGroupTag,
+          plateNumber: currentGroupPlate,
+          actualCompanyCost: parseFloat(amountStr) || 0
+        };
+        rows.push(row);
+        lastRow = row;
+        continue;
+      }
+    } else {
+      const m = line.match(SALIK_PDF_ROW_REGEX);
+      if (m) {
+        const [, dateStr, timeStr, plate, tag, location, direction, amountStr] = m;
+        const row: ParsedTollRow = {
+          date: normalizeDate(dateStr),
+          time: timeStr.trim(),
+          locationName: location.trim(),
+          direction: direction.trim(),
+          tagNumber: tag,
+          plateNumber: plate,
+          actualCompanyCost: parseFloat(amountStr) || 0
+        };
+        rows.push(row);
+        lastRow = row;
+        continue;
+      }
+    }
+
+    if (lastRow && SALIK_PDF_LOCATION_CONTINUATION_REGEX.test(trimmed) && trimmed.length < 40) {
       lastRow.locationName = `${lastRow.locationName} ${trimmed}`.trim();
       continue;
     }

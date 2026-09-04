@@ -2,7 +2,7 @@ import { createDurable, runDurableTransaction, PersistenceError } from './persis
 import { issueNextNumber } from './idGenerator.js';
 import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
 import type { RecordAuditFn } from './businessRules.js';
-import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier, UserRole } from '../types/index.js';
+import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier, BlocklistBanType, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // SECURITY BLOCKLIST / WATCHLIST (Splendor Master Rule Set, Module 03)
@@ -36,9 +36,14 @@ export interface CreateBlocklistEntryInput {
   identifierCountry?: string;
   customerName?: string;
   nationality?: string;
+  mobile?: string;
+  idExpiryDate?: string;
+  incidentDate?: string;
   tier: BlocklistTier;
   reason: string;
   conditionalNote?: string;
+  banType?: BlocklistBanType;
+  expiryDate?: string;
   createdBy: string;
   createdByName: string;
   createdByRole: UserRole;
@@ -60,6 +65,10 @@ export async function createBlocklistEntry(input: CreateBlocklistEntryInput, rec
   if (input.tier === 'conditional' && (!input.conditionalNote || !input.conditionalNote.trim())) {
     throw new BlocklistError('A conditional block requires a note describing what is required to proceed (e.g. a raised deposit amount, or which manager must authorize an exception).');
   }
+  const banType: BlocklistBanType = input.banType || 'permanent';
+  if (banType === 'temporary' && (!input.expiryDate || !input.expiryDate.trim())) {
+    throw new BlocklistError('A temporary block requires an expiry date.');
+  }
 
   const id = await issueNextNumber('BlocklistEntry');
   const now = new Date().toISOString();
@@ -70,9 +79,14 @@ export async function createBlocklistEntry(input: CreateBlocklistEntryInput, rec
     identifierCountry: input.identifierType === 'passport' ? normalizeIdentifier(input.identifierCountry!) : undefined,
     customerName: input.customerName,
     nationality: input.nationality,
+    mobile: input.mobile,
+    idExpiryDate: input.idExpiryDate,
+    incidentDate: input.incidentDate,
     tier: input.tier,
     reason: input.reason,
     conditionalNote: input.conditionalNote,
+    banType,
+    expiryDate: banType === 'temporary' ? input.expiryDate : undefined,
     status: 'active',
     createdBy: input.createdBy,
     createdByName: input.createdByName,

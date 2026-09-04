@@ -1,15 +1,23 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ShieldAlert, Plus, Check, X, Loader2, Undo2, AlertTriangle, UploadCloud, CheckCircle2 } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ShieldAlert, Plus, Check, X, Loader2, Undo2, AlertTriangle, UploadCloud, CheckCircle2, Search, CalendarClock } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
-import { formatDateTime } from '../../lib/dateFormat';
+import { formatDate, formatDateTime, formatPhoneNumber } from '../../lib/dateFormat';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
+import { EmiratesIdInput } from '../common/EmiratesIdInput';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { ALL_COUNTRIES } from '../../lib/customerData';
-import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier } from '../../types';
+import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier, BlocklistBanType } from '../../types';
+
+function isBanExpired(entry: BlocklistEntry): boolean {
+  if (entry.banType !== 'temporary' || !entry.expiryDate) return false;
+  return new Date(entry.expiryDate).getTime() < Date.now();
+}
 
 /**
  * Security Blocklist / Watchlist (Splendor Master Rule Set, Module 03).
@@ -49,6 +57,9 @@ export const SecurityBlocklistView: React.FC = () => {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [newModalOpen, setNewModalOpen] = useState(false);
   const [unblockModalEntry, setUnblockModalEntry] = useState<BlocklistEntry | null>(null);
+  const [searchText, setSearchText] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,6 +107,20 @@ export const SecurityBlocklistView: React.FC = () => {
   };
 
   const pendingApprovals = approvals.filter(a => a.status === 'pending');
+
+  const filteredEntries = useMemo(() => {
+    const text = searchText.trim().toLowerCase();
+    return entries.filter(entry => {
+      if (text) {
+        const haystack = [entry.id, entry.identifierValue, entry.customerName, entry.nationality, entry.mobile, entry.reason]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(text)) return false;
+      }
+      if (dateFrom && entry.createdAt.slice(0, 10) < dateFrom) return false;
+      if (dateTo && entry.createdAt.slice(0, 10) > dateTo) return false;
+      return true;
+    });
+  }, [entries, searchText, dateFrom, dateTo]);
 
   const entryContext = (a: ProcurementApproval): BlocklistEntry | undefined => entries.find(e => e.id === a.entityId);
 
@@ -186,10 +211,41 @@ export const SecurityBlocklistView: React.FC = () => {
 
       <div>
         <h3 className="text-sm font-bold text-zinc-100 mb-2">
-          {language === 'ar' ? `الإدخالات (${entries.length})` : `Entries (${entries.length})`}
+          {language === 'ar' ? `الإدخالات (${filteredEntries.length}/${entries.length})` : `Entries (${filteredEntries.length}/${entries.length})`}
         </h3>
+        <div className="flex flex-wrap items-end gap-3 mb-3 p-3 rounded-xl bg-zinc-900/50 border border-zinc-800/80">
+          <div className="flex-1 min-w-[12rem]">
+            <label className="block text-[11px] text-zinc-400 mb-1">{language === 'ar' ? 'بحث فوري' : 'Instant search'}</label>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                value={searchText}
+                onChange={e => setSearchText(e.target.value)}
+                placeholder={language === 'ar' ? 'الاسم، المعرّف، الهاتف، السبب...' : 'Name, identifier, phone, reason...'}
+                className="w-full pl-8 pr-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[11px] text-zinc-400 mb-1">{language === 'ar' ? 'من تاريخ' : 'From date'}</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none" />
+          </div>
+          <div>
+            <label className="block text-[11px] text-zinc-400 mb-1">{language === 'ar' ? 'إلى تاريخ' : 'To date'}</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none" />
+          </div>
+          {(searchText || dateFrom || dateTo) && (
+            <button
+              type="button"
+              onClick={() => { setSearchText(''); setDateFrom(''); setDateTo(''); }}
+              className="px-3 py-2 rounded-lg border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs"
+            >
+              {language === 'ar' ? 'مسح الفلاتر' : 'Clear filters'}
+            </button>
+          )}
+        </div>
         <div className="space-y-2.5">
-          {entries.map(entry => {
+          {filteredEntries.map(entry => {
             const hasPendingUnblock = pendingApprovals.some(a => a.entityId === entry.id);
             return (
               <div key={entry.id} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
@@ -206,13 +262,32 @@ export const SecurityBlocklistView: React.FC = () => {
                     <Badge variant={entry.status === 'active' ? 'rose' : 'zinc'} size="sm">
                       {entry.status === 'active' ? (language === 'ar' ? 'نشط' : 'Active') : (language === 'ar' ? 'مُزال' : 'Removed')}
                     </Badge>
+                    <Badge variant={entry.banType === 'temporary' ? 'sky' : 'purple'} size="sm">
+                      {entry.banType === 'temporary' ? (language === 'ar' ? 'حظر مؤقت' : 'Temporary') : (language === 'ar' ? 'حظر دائم' : 'Permanent')}
+                    </Badge>
+                    {entry.status === 'active' && isBanExpired(entry) && (
+                      <Badge variant="amber" size="sm" icon={<CalendarClock className="w-3 h-3" />}>
+                        {language === 'ar' ? 'يحتاج مراجعة -- انتهت المدة' : 'Needs review -- expired'}
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-zinc-500 font-mono">{entry.id}</p>
                 </div>
-                {entry.customerName && <p className="text-zinc-400 mt-1">{entry.customerName}{entry.nationality ? ` · ${entry.nationality}` : ''}</p>}
+                {entry.customerName && (
+                  <p className="text-zinc-400 mt-1">
+                    {entry.customerName}{entry.nationality ? ` · ${entry.nationality}` : ''}{entry.mobile ? ` · ${formatPhoneNumber(entry.mobile)}` : ''}
+                  </p>
+                )}
                 <p className="text-zinc-300 mt-1.5">{entry.reason}</p>
                 {entry.conditionalNote && (
                   <p className="text-amber-400 mt-1">{language === 'ar' ? 'الشرط:' : 'Condition:'} {entry.conditionalNote}</p>
+                )}
+                {(entry.incidentDate || entry.idExpiryDate || entry.expiryDate) && (
+                  <p className="text-zinc-500 text-[10px] mt-1.5 flex flex-wrap gap-x-3">
+                    {entry.incidentDate && <span>{language === 'ar' ? 'تاريخ الحادثة:' : 'Incident date:'} {formatDate(entry.incidentDate)}</span>}
+                    {entry.idExpiryDate && <span>{language === 'ar' ? 'انتهاء الهوية:' : 'ID expiry:'} {formatDate(entry.idExpiryDate)}</span>}
+                    {entry.banType === 'temporary' && entry.expiryDate && <span>{language === 'ar' ? 'انتهاء الحظر:' : 'Ban expiry:'} {formatDate(entry.expiryDate)}</span>}
+                  </p>
                 )}
                 <p className="text-zinc-600 text-[10px] mt-1.5">{entry.createdByName} · {formatDateTime(entry.createdAt)}</p>
                 {entry.status === 'removed' && entry.removedByName && (
@@ -234,6 +309,7 @@ export const SecurityBlocklistView: React.FC = () => {
             );
           })}
           {entries.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد إدخالات في القائمة المحظورة.' : 'No blocklist entries.'}</p>}
+          {entries.length > 0 && filteredEntries.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد نتائج مطابقة للفلاتر الحالية.' : 'No entries match the current filters.'}</p>}
         </div>
       </div>
 
@@ -253,22 +329,31 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
   const [identifierCountry, setIdentifierCountry] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [nationality, setNationality] = useState('Emirati');
+  const [mobile, setMobile] = useState('');
+  const [incidentDate, setIncidentDate] = useState('');
+  const [idExpiryDate, setIdExpiryDate] = useState('');
   const [tier, setTier] = useState<BlocklistTier>('full');
   const [conditionalNote, setConditionalNote] = useState('');
+  const [banType, setBanType] = useState<BlocklistBanType>('permanent');
+  const [expiryDate, setExpiryDate] = useState('');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createdEntry, setCreatedEntry] = useState<BlocklistEntry | null>(null);
   const [uploading, setUploading] = useState(false);
+  const submitLockRef = React.useRef(false);
 
   useEffect(() => {
     if (isOpen) {
       setIdentifierType('emirates_id'); setIdentifierValue(''); setIdentifierCountry('');
-      setCustomerName(''); setNationality('Emirati'); setTier('full'); setConditionalNote(''); setReason('');
+      setCustomerName(''); setNationality('Emirati'); setMobile(''); setIncidentDate(''); setIdExpiryDate('');
+      setTier('full'); setConditionalNote(''); setBanType('permanent'); setExpiryDate(''); setReason('');
       setCreatedEntry(null);
+      submitLockRef.current = false;
     }
   }, [isOpen]);
 
-  const valid = identifierValue.trim() && customerName.trim() && reason.trim() && (identifierType !== 'passport' || identifierCountry.trim()) && (tier !== 'conditional' || conditionalNote.trim());
+  const valid = identifierValue.trim() && customerName.trim() && reason.trim() && (identifierType !== 'passport' || identifierCountry.trim())
+    && (tier !== 'conditional' || conditionalNote.trim()) && (banType !== 'temporary' || expiryDate.trim());
 
   // Real, evidence-based duplicate check against the active entries already
   // loaded -- matched only by the exact identifier pair (same rule the
@@ -286,7 +371,15 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!valid || duplicateMatch) return;
+    // A synchronous lock, checked before React's async setSubmitting(true)
+    // re-render commits -- a fast double-click/double-Enter on the same
+    // submit event could otherwise fire this handler twice before the
+    // disabled button state takes effect, creating two blocklist entries
+    // for one user action. apiFetch also attaches its own short-lived
+    // Idempotency-Key for this route, so even a request that slips past
+    // this lock (e.g. a genuine network retry) cannot double-create.
+    if (!valid || duplicateMatch || submitLockRef.current) return;
+    submitLockRef.current = true;
     setSubmitting(true);
     try {
       const res = await apiFetch('/api/blocklist', {
@@ -294,7 +387,10 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           identifierType, identifierValue, identifierCountry: identifierType === 'passport' ? identifierCountry : undefined,
-          customerName: customerName.trim(), nationality, tier, conditionalNote: tier === 'conditional' ? conditionalNote : undefined, reason
+          customerName: customerName.trim(), nationality, mobile: mobile.trim() || undefined,
+          idExpiryDate: idExpiryDate || undefined, incidentDate: incidentDate || undefined,
+          tier, conditionalNote: tier === 'conditional' ? conditionalNote : undefined,
+          banType, expiryDate: banType === 'temporary' ? expiryDate : undefined, reason
         })
       });
       const data = await res.json();
@@ -303,6 +399,7 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
       setCreatedEntry(data);
     } catch (err: any) {
       showToast(language === 'ar' ? 'فشل الإنشاء' : 'Creation failed', err?.message || '');
+      submitLockRef.current = false;
     } finally {
       setSubmitting(false);
     }
@@ -393,10 +490,20 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
             <option value="gcc_id">{language === 'ar' ? 'هوية خليجية' : 'GCC National ID'}</option>
           </select>
         </div>
-        <div>
-          <label className="block text-zinc-400 font-medium mb-1">{identifierType === 'passport' ? (language === 'ar' ? 'رقم الجواز *' : 'Passport number *') : identifierType === 'gcc_id' ? (language === 'ar' ? 'رقم الهوية الخليجية *' : 'GCC National ID number *') : (language === 'ar' ? 'رقم الهوية *' : 'Emirates ID number *')}</label>
-          <input required value={identifierValue} onChange={e => setIdentifierValue(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
-        </div>
+        {identifierType === 'emirates_id' ? (
+          <EmiratesIdInput
+            label={language === 'ar' ? 'رقم الهوية *' : 'Emirates ID number *'}
+            required
+            value={identifierValue}
+            onChange={setIdentifierValue}
+            isAr={isAr}
+          />
+        ) : (
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{identifierType === 'passport' ? (language === 'ar' ? 'رقم الجواز *' : 'Passport number *') : (language === 'ar' ? 'رقم الهوية الخليجية *' : 'GCC National ID number *')}</label>
+            <input required value={identifierValue} onChange={e => setIdentifierValue(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          </div>
+        )}
         {identifierType === 'passport' && (
           <div>
             <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'دولة الإصدار *' : 'Issuing country *'}</label>
@@ -417,6 +524,26 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
             ))}
           </select>
         </div>
+        <PhoneNumberInput
+          label={language === 'ar' ? 'رقم الهاتف' : 'Mobile Number'}
+          value={mobile}
+          onChange={setMobile}
+          isAr={isAr}
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <DayMonthYearDateInput
+            label={language === 'ar' ? 'تاريخ الحادثة' : 'Incident date'}
+            value={incidentDate}
+            onChange={setIncidentDate}
+            isAr={isAr}
+          />
+          <DayMonthYearDateInput
+            label={language === 'ar' ? 'تاريخ انتهاء الهوية' : 'ID expiry date'}
+            value={idExpiryDate}
+            onChange={setIdExpiryDate}
+            isAr={isAr}
+          />
+        </div>
         <div>
           <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'مستوى الحظر *' : 'Block tier *'}</label>
           <select value={tier} onChange={e => setTier(e.target.value as BlocklistTier)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
@@ -429,6 +556,22 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
             <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الشروط المطلوبة *' : 'Required conditions *'}</label>
             <input required value={conditionalNote} onChange={e => setConditionalNote(e.target.value)} placeholder={language === 'ar' ? 'مثال: وديعة مرفوعة 5000 درهم وموافقة مدير العمليات' : 'e.g. Raised deposit of 5,000 AED and operations-manager sign-off'} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
           </div>
+        )}
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'مدة الحظر *' : 'Ban duration *'}</label>
+          <select value={banType} onChange={e => setBanType(e.target.value as BlocklistBanType)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="permanent">{language === 'ar' ? 'دائم' : 'Permanent'}</option>
+            <option value="temporary">{language === 'ar' ? 'مؤقت -- ينتهي بتاريخ محدد' : 'Temporary -- ends on a set date'}</option>
+          </select>
+        </div>
+        {banType === 'temporary' && (
+          <DayMonthYearDateInput
+            label={language === 'ar' ? 'تاريخ انتهاء الحظر *' : 'Ban expiry date *'}
+            value={expiryDate}
+            onChange={setExpiryDate}
+            required
+            isAr={isAr}
+          />
         )}
         <div>
           <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'السبب *' : 'Reason *'}</label>
