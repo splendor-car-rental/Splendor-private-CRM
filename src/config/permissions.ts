@@ -18,7 +18,7 @@ export function assignableRoles(role: UserRole): UserRole[] {
 
 export type ViewKey =
   | 'dashboard' | 'customers' | 'leads' | 'fleet' | 'quotations' | 'reservations'
-  | 'contracts' | 'finance' | 'reconciliation' | 'tolls' | 'notification-center'
+  | 'contracts' | 'finance' | 'tax-filing' | 'reconciliation' | 'tolls' | 'notification-center'
   | 'tasks' | 'ai-studio' | 'test-suite' | 'settings' | 'procurement'
   | 'purchase-orders' | 'security' | 'inspections' | 'whatsapp-inbox'
   | 'lease-to-own' | 'vip-tiers' | 'fleet-acquisition-roi' | 'live-radar'
@@ -26,7 +26,7 @@ export type ViewKey =
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
-  'contracts', 'finance', 'reconciliation', 'tolls', 'notification-center', 'tasks',
+  'contracts', 'finance', 'tax-filing', 'reconciliation', 'tolls', 'notification-center', 'tasks',
   'ai-studio', 'test-suite', 'settings', 'procurement', 'purchase-orders', 'security',
   'inspections', 'whatsapp-inbox', 'lease-to-own', 'vip-tiers', 'fleet-acquisition-roi',
   'live-radar', 'operations-control-room', 'corporate-branches', 'corporate-documents'
@@ -38,7 +38,7 @@ export const ROLE_VIEWS: Record<UserRole, ViewKey[]> = {
   operations: ['dashboard', 'fleet', 'contracts', 'reservations', 'tasks', 'customers', 'tolls', 'procurement', 'purchase-orders', 'security', 'inspections', 'whatsapp-inbox', 'lease-to-own', 'vip-tiers', 'live-radar', 'operations-control-room', 'corporate-documents'],
   sales: ['dashboard', 'leads', 'quotations', 'reservations', 'customers', 'tolls', 'whatsapp-inbox', 'lease-to-own', 'vip-tiers', 'corporate-branches', 'corporate-documents'],
   fleet: ['dashboard', 'fleet', 'contracts', 'tolls', 'procurement', 'purchase-orders', 'inspections', 'live-radar', 'fleet-acquisition-roi', 'operations-control-room', 'corporate-documents'],
-  finance: ['dashboard', 'finance', 'reconciliation', 'customers', 'tolls', 'procurement', 'purchase-orders', 'lease-to-own', 'fleet-acquisition-roi', 'vip-tiers', 'corporate-branches', 'corporate-documents']
+  finance: ['dashboard', 'finance', 'tax-filing', 'reconciliation', 'customers', 'tolls', 'procurement', 'purchase-orders', 'lease-to-own', 'fleet-acquisition-roi', 'vip-tiers', 'corporate-branches', 'corporate-documents']
 };
 
 const VIEW_ALIASES: Record<string, ViewKey> = {
