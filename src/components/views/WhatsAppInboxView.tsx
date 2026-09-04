@@ -40,7 +40,7 @@ export const WhatsAppInboxView: React.FC = () => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
   const { staffDirectory } = useAuth();
-  const { customers, showToast } = useCRM();
+  const { showToast } = useCRM();
 
   const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
   const [loading, setLoading] = useState(true);
