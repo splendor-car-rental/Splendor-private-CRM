@@ -41,8 +41,9 @@ export const SettingsAuditView: React.FC = () => {
     try {
       const rep = await getReconciliationReport();
       setReconciliationReport(rep);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      showToast('Load Failed', e?.message || 'Failed to load the website reconciliation report.', 'error');
     } finally {
       setLoadingReport(false);
     }

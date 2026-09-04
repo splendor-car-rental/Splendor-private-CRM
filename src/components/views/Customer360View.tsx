@@ -376,10 +376,10 @@ export const Customer360View: React.FC = () => {
             </div>
 
             {/* 360 Tab Navigation */}
-            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
+            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto no-scrollbar">
               <button
                 onClick={() => setActiveTab('overview')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'overview' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -387,7 +387,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('rentals')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'rentals' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -396,7 +396,7 @@ export const Customer360View: React.FC = () => {
               {customerLtoContracts.length > 0 && (
                 <button
                   onClick={() => setActiveTab('lto')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                     activeTab === 'lto' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
@@ -405,7 +405,7 @@ export const Customer360View: React.FC = () => {
               )}
               <button
                 onClick={() => setActiveTab('statement')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'statement' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -413,7 +413,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('comms')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'comms' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -421,7 +421,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('docs')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'docs' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -429,7 +429,7 @@ export const Customer360View: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('kyc')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                   activeTab === 'kyc' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
