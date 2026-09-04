@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageCircle, Bot, UserCog, Send, RefreshCw, Loader2 } from 'lucide-react';
+import { MessageCircle, Bot, UserCog, Send, RefreshCw, Loader2, Search, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -42,7 +42,10 @@ export const WhatsAppInboxView: React.FC = () => {
 
   const [conversations, setConversations] = useState<WhatsAppConversation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [configured, setConfigured] = useState<boolean | null>(null);
   const [filter, setFilter] = useState<'all' | 'needs_human' | 'unread'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [thread, setThread] = useState<(WhatsAppConversation & { messages: WhatsAppConversationMessage[] }) | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -53,33 +56,37 @@ export const WhatsAppInboxView: React.FC = () => {
   const loadList = useCallback(async () => {
     try {
       const res = await apiFetch('/api/whatsapp/conversations');
-      if (res.ok) {
-        const data: WhatsAppConversation[] = await res.json();
-        setConversations(data);
-      }
-    } catch (e) {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `${res.status}`);
+      setConversations(Array.isArray(data) ? data : []);
+      setLoadError(null);
+    } catch (e: any) {
       console.error('Failed to load WhatsApp conversations', e);
+      setLoadError(e?.message || (isAr ? 'تعذر تحميل المحادثات' : 'Failed to load conversations'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAr]);
 
   const loadThread = useCallback(async (phone: string) => {
     setThreadLoading(true);
     try {
       const res = await apiFetch(`/api/whatsapp/conversations/${phone}`);
-      if (res.ok) {
-        const data = await res.json();
-        setThread(data);
-        setConversations(prev => prev.map(c => c.phone === phone ? { ...c, unread: false } : c));
-      }
-    } catch (e) {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `${res.status}`);
+      setThread(data);
+      setConversations(prev => prev.map(c => c.phone === phone ? { ...c, unread: false } : c));
+    } catch (e: any) {
       console.error('Failed to load conversation thread', e);
+      showToast(isAr ? 'تعذر تحميل المحادثة' : 'Failed to load conversation', e?.message || '', 'error');
     } finally {
       setThreadLoading(false);
     }
-  }, []);
+  }, [isAr, showToast]);
 
+  useEffect(() => {
+    apiFetch('/api/whatsapp/status').then(res => res.json()).then(data => setConfigured(!!data?.configured)).catch(() => setConfigured(null));
+  }, []);
   useEffect(() => { loadList(); }, [loadList]);
   useEffect(() => {
     const interval = setInterval(() => {
@@ -92,11 +99,20 @@ export const WhatsAppInboxView: React.FC = () => {
   useEffect(() => { if (selectedPhone) loadThread(selectedPhone); }, [selectedPhone, loadThread]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [thread?.messages?.length]);
 
-  const filtered = conversations.filter(c => {
-    if (filter === 'needs_human') return c.state === 'HUMAN_ASSISTANCE';
-    if (filter === 'unread') return c.unread;
-    return true;
-  });
+  const needsHumanCount = conversations.filter(c => c.state === 'HUMAN_ASSISTANCE').length;
+  const unreadCount = conversations.filter(c => c.unread).length;
+
+  const filtered = conversations
+    .filter(c => {
+      if (filter === 'needs_human') return c.state === 'HUMAN_ASSISTANCE';
+      if (filter === 'unread') return c.unread;
+      return true;
+    })
+    .filter(c => {
+      if (!searchTerm.trim()) return true;
+      const term = searchTerm.trim().toLowerCase();
+      return (c.customerName || '').toLowerCase().includes(term) || c.phone.toLowerCase().includes(term);
+    });
 
   const handleHandoff = async (botActive: boolean) => {
     if (!thread) return;
@@ -115,23 +131,31 @@ export const WhatsAppInboxView: React.FC = () => {
   const handleAssign = async (employeeId: string, employeeName: string) => {
     if (!thread) return;
     try {
-      await apiFetch(`/api/whatsapp/conversations/${thread.phone}/assign`, {
+      const res = await apiFetch(`/api/whatsapp/conversations/${thread.phone}/assign`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ employeeId, employeeName })
       });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error);
       loadThread(thread.phone);
       loadList();
-    } catch (e) { console.error(e); }
+    } catch (e: any) {
+      console.error(e);
+      showToast(isAr ? 'تعذر تعيين الموظف' : 'Failed to assign', e?.message || '', 'error');
+    }
   };
 
   const handlePriority = async (priority: WhatsAppConversationPriority) => {
     if (!thread) return;
     try {
-      await apiFetch(`/api/whatsapp/conversations/${thread.phone}/assign`, {
+      const res = await apiFetch(`/api/whatsapp/conversations/${thread.phone}/assign`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority })
       });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error);
       loadThread(thread.phone);
       loadList();
-    } catch (e) { console.error(e); }
+    } catch (e: any) {
+      console.error(e);
+      showToast(isAr ? 'تعذر تغيير الأولوية' : 'Failed to change priority', e?.message || '', 'error');
+    }
   };
 
   const handleSendReply = async () => {
@@ -167,25 +191,53 @@ export const WhatsAppInboxView: React.FC = () => {
         </button>
       </div>
 
+      {configured === false && (
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span>{isAr ? 'حساب واتساب غير مفعّل بعد على هذا الخادم (المفاتيح غير مُعدّة) -- المحادثات الظاهرة أدناه تاريخية، والإرسال والاستقبال الحقيقي لن يعملا حتى يتم إعداد بيانات اعتماد واتساب بيزنس.' : "WhatsApp is not yet activated on this server (credentials not configured) -- conversations below are historical, and real send/receive won't work until WhatsApp Business credentials are set."}</span>
+        </div>
+      )}
+
+      {loadError && (
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span>{isAr ? `تعذر تحميل المحادثات: ${loadError}` : `Failed to load conversations: ${loadError}`}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 h-[calc(100vh-220px)] min-h-[500px]">
         {/* Conversation list */}
         <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 flex flex-col overflow-hidden">
-          <div className="p-2.5 border-b border-zinc-800 flex gap-1.5">
-            {(['all', 'needs_human', 'unread'] as const).map(f => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`flex-1 px-2 py-1.5 rounded-lg text-[10px] font-semibold uppercase tracking-wide ${filter === f ? 'bg-[#D4AF37] text-zinc-950' : 'bg-zinc-950/60 text-zinc-500 hover:text-zinc-300'}`}
-              >
-                {f === 'all' ? (isAr ? 'الكل' : 'All') : f === 'needs_human' ? (isAr ? 'يحتاج موظف' : 'Needs Human') : (isAr ? 'غير مقروء' : 'Unread')}
-              </button>
-            ))}
+          <div className="p-2.5 border-b border-zinc-800 space-y-2">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-zinc-600 absolute top-1/2 -translate-y-1/2 start-2.5" />
+              <input
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                placeholder={isAr ? 'بحث بالاسم أو الرقم...' : 'Search by name or number...'}
+                className="w-full ps-8 pe-2.5 py-1.5 rounded-lg bg-zinc-950/60 border border-zinc-800 text-zinc-200 text-[11px] placeholder:text-zinc-600"
+              />
+            </div>
+            <div className="flex gap-1.5">
+              {(['all', 'needs_human', 'unread'] as const).map(f => {
+                const count = f === 'needs_human' ? needsHumanCount : f === 'unread' ? unreadCount : conversations.length;
+                return (
+                  <button
+                    key={f}
+                    onClick={() => setFilter(f)}
+                    className={`flex-1 px-2 py-1.5 rounded-lg text-[10px] font-semibold uppercase tracking-wide ${filter === f ? 'bg-[#D4AF37] text-zinc-950' : 'bg-zinc-950/60 text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    {(f === 'all' ? (isAr ? 'الكل' : 'All') : f === 'needs_human' ? (isAr ? 'يحتاج موظف' : 'Needs Human') : (isAr ? 'غير مقروء' : 'Unread'))} ({count})
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto divide-y divide-zinc-800/60">
             {loading ? (
               <div className="p-6 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-zinc-600" /></div>
             ) : filtered.length === 0 ? (
-              <p className="text-xs text-zinc-500 text-center py-8">{isAr ? 'لا توجد محادثات' : 'No conversations'}</p>
+              <p className="text-xs text-zinc-500 text-center py-8">{searchTerm.trim() ? (isAr ? 'لا توجد نتائج مطابقة' : 'No matching results') : (isAr ? 'لا توجد محادثات' : 'No conversations')}</p>
             ) : filtered.map(c => (
               <button
                 key={c.phone}
