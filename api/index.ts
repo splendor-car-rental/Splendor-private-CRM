@@ -90,21 +90,33 @@ async function handleCorporateDocuments(req: Request, res: Response) {
 }
 
 async function handler(req: Request, res: Response) {
-  if (req.path === '/api/corporate-documents') return handleCorporateDocuments(req, res);
+  // req.path is an Express-only convenience -- this handler runs as a bare
+  // Vercel Node serverless function (no Express wrapping it), so req.path
+  // is not reliably populated and reading .match()/.startsWith() off it
+  // directly throws "Cannot read properties of undefined" for whichever
+  // requests hit that gap (confirmed in production runtime errors: 154
+  // occurrences crashing every one of these routes with a raw 500, with no
+  // JSON body at all -- exactly what a frontend caller then reports as "an
+  // unexpected token", "failed to load", or "nothing happens"). Deriving
+  // the path from req.url instead works the same for both real Express
+  // requests (which also have req.url) and Vercel's raw request object.
+  const path = req.path || (req.url ? req.url.split('?')[0] : '') || '';
 
-  if (req.path === '/api/accounting' || req.path.startsWith('/api/accounting/')) {
+  if (path === '/api/corporate-documents') return handleCorporateDocuments(req, res);
+
+  if (path === '/api/accounting' || path.startsWith('/api/accounting/')) {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleAccountingRequest(req, res, actor);
   }
 
-  if (req.path === '/api/deposits' && req.method === 'POST') {
+  if (path === '/api/deposits' && req.method === 'POST') {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance', 'operations', 'sales']);
     if (!actor) return;
     return handleSafeManualDepositCreate(req, res, actor, recordAccountingAudit);
   }
 
-  const depositMutationMatch = req.path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);
+  const depositMutationMatch = path.match(/^\/api\/deposits\/([^/]+)\/(apply|refund)$/);
   if (depositMutationMatch && req.method === 'POST') {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
@@ -117,20 +129,20 @@ async function handler(req: Request, res: Response) {
     );
   }
 
-  if (req.path === '/api/payments' && req.method === 'POST') {
+  if (path === '/api/payments' && req.method === 'POST') {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'finance']);
     if (!actor) return;
     return handleSafeCustomerPaymentRequest(req, res, actor);
   }
 
-  if (req.path === '/api/tests/run-all') {
+  if (path === '/api/tests/run-all') {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin']);
     if (!actor) return;
     const app = await getExpressApp();
     return app(req, res);
   }
 
-  const plateMatch = req.path.match(/^\/api\/fleet\/([^/]+)\/assign-plate$/);
+  const plateMatch = path.match(/^\/api\/fleet\/([^/]+)\/assign-plate$/);
   if (plateMatch && req.method === 'POST') {
     const actor = await verifiedStaff(req, res, ['ceo', 'admin', 'fleet']);
     if (!actor) return;

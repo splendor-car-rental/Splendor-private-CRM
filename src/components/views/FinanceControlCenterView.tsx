@@ -116,30 +116,40 @@ export const FinanceControlCenterView: React.FC = () => {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    try {
-      const [dash, coa, exp, ar, ap, payableList, journalList, periodList, vehicleList, gaps, reportData, noteList, supplierInvoiceList] = await Promise.all([
-        getJson<FinanceDashboardSummary>('/api/accounting/dashboard'),
-        getJson<AccountingAccount[]>('/api/accounting/chart-of-accounts'),
-        getJson<FinanceExpense[]>('/api/accounting/expenses'),
-        getJson<ARAgingRow[]>('/api/accounting/ar-aging'),
-        getJson<APAgingRow[]>('/api/accounting/ap-aging'),
-        getJson<AccountsPayableEntry[]>('/api/accounting/payables'),
-        getJson<JournalEntry[]>('/api/accounting/journals?limit=500'),
-        getJson<AccountingPeriod[]>('/api/accounting/periods'),
-        getJson<VehicleProfitabilityRow[]>('/api/accounting/vehicle-profitability'),
-        getJson<PostingGap[]>('/api/accounting/posting-gaps'),
-        getJson<FinanceReports>('/api/accounting/reports'),
-        getJson<FinancialNote[]>('/api/accounting/financial-notes'),
-        getJson<SupplierInvoiceLite[]>('/api/supplier-invoices').catch(() => [])
-      ]);
-      setDashboard(dash); setAccounts(coa); setExpenses(exp); setArRows(ar); setApRows(ap); setPayables(payableList);
-      setJournals(journalList); setPeriods(periodList); setVehicleRows(vehicleList); setPostingGaps(gaps); setReports(reportData); setNotes(noteList);
-      setSupplierInvoices(supplierInvoiceList);
-    } catch (error: any) {
-      showToast('تعذر تحميل المركز المالي', error?.message || 'حدث خطأ أثناء تحميل بيانات المحاسبة.', 'error');
-    } finally {
-      setLoading(false);
+    // Each section is fetched independently (Promise.allSettled, not
+    // Promise.all): one broken endpoint used to blank out the ENTIRE
+    // Finance Control Center with a single generic "failed to load" toast,
+    // hiding every other section that loaded fine. Now a failing section
+    // just falls back to empty/zero and is named in the toast, while every
+    // section that DID load renders normally.
+    const sections: Array<{ label: string; run: () => Promise<void> }> = [
+      { label: 'لوحة المؤشرات المالية', run: async () => setDashboard(await getJson<FinanceDashboardSummary>('/api/accounting/dashboard')) },
+      { label: 'دليل الحسابات', run: async () => setAccounts(await getJson<AccountingAccount[]>('/api/accounting/chart-of-accounts')) },
+      { label: 'المصروفات', run: async () => setExpenses(await getJson<FinanceExpense[]>('/api/accounting/expenses')) },
+      { label: 'أعمار ذمم العملاء', run: async () => setArRows(await getJson<ARAgingRow[]>('/api/accounting/ar-aging')) },
+      { label: 'أعمار ذمم الموردين', run: async () => setApRows(await getJson<APAgingRow[]>('/api/accounting/ap-aging')) },
+      { label: 'مستحقات الموردين', run: async () => setPayables(await getJson<AccountsPayableEntry[]>('/api/accounting/payables')) },
+      { label: 'دفتر اليومية', run: async () => setJournals(await getJson<JournalEntry[]>('/api/accounting/journals?limit=500')) },
+      { label: 'الفترات المحاسبية', run: async () => setPeriods(await getJson<AccountingPeriod[]>('/api/accounting/periods')) },
+      { label: 'ربحية المركبات', run: async () => setVehicleRows(await getJson<VehicleProfitabilityRow[]>('/api/accounting/vehicle-profitability')) },
+      { label: 'فجوات الترحيل', run: async () => setPostingGaps(await getJson<PostingGap[]>('/api/accounting/posting-gaps')) },
+      { label: 'التقارير المالية', run: async () => setReports(await getJson<FinanceReports>('/api/accounting/reports')) },
+      { label: 'الإشعارات الدائنة والمدينة', run: async () => setNotes(await getJson<FinancialNote[]>('/api/accounting/financial-notes')) },
+      { label: 'فواتير الموردين', run: async () => setSupplierInvoices(await getJson<SupplierInvoiceLite[]>('/api/supplier-invoices')) }
+    ];
+    const results = await Promise.allSettled(sections.map(s => s.run()));
+    const failed = results
+      .map((result, idx) => ({ result, label: sections[idx].label }))
+      .filter((entry): entry is { result: PromiseRejectedResult; label: string } => entry.result.status === 'rejected');
+    if (failed.length > 0) {
+      console.error('[Finance] Sections failed to load:', failed.map(f => `${f.label}: ${f.result.reason?.message || f.result.reason}`));
+      showToast(
+        'تعذر تحميل بعض أقسام المركز المالي',
+        `الأقسام التالية لم تُحمّل: ${failed.map(f => f.label).join('، ')}. باقي الأقسام تم تحميلها بنجاح.`,
+        'error'
+      );
     }
+    setLoading(false);
   }, [showToast]);
 
   useEffect(() => { void refresh(); }, [refresh]);
