@@ -34,8 +34,6 @@ export class LegacyXlsError extends Error {
 
 const ENDOFCHAIN = 0xfffffffe;
 const FREESECT = 0xffffffff;
-const FATSECT = 0xfffffffd;
-const DIFSECT = 0xfffffffc;
 
 interface CfbDirEntry {
   name: string;

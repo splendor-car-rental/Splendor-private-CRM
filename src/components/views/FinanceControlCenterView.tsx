@@ -416,7 +416,7 @@ export const FinanceControlCenterView: React.FC = () => {
           <Kpi title="مستحقات الموردين" value={money(dashboard?.apOutstanding)} icon={<Building2 className="w-4 h-4" />} />
         </div>
 
-        <div className="overflow-x-auto pb-1"><div className="flex gap-2 min-w-max border-b border-zinc-800 pb-2">{TABS.map(item => <button key={item.id} onClick={() => setTab(item.id)} className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${tab === item.id ? 'bg-blue-500/15 border border-blue-500/40 text-blue-300' : 'border border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'}`}>{item.icon}{item.label}</button>)}</div></div>
+        <div className="overflow-x-auto pb-1"><div className="flex gap-2 min-w-max border-b border-zinc-800 pb-2">{TABS.map(item => <button key={item.id} onClick={() => setTab(item.id)} className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all shrink-0 whitespace-nowrap ${tab === item.id ? 'bg-blue-500/15 border border-blue-500/40 text-blue-300' : 'border border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'}`}>{item.icon}{item.label}</button>)}</div></div>
 
         {tab === 'overview' && <Overview dashboard={dashboard} reports={reports} postingGaps={postingGaps} notes={notes} />}
         {tab === 'operations' && <FinanceLedgerView autoOpenPaymentSignal={autoOpenPaymentSignal} />}
