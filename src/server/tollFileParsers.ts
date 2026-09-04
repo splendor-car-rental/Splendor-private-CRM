@@ -30,6 +30,14 @@
 // by any code that runs in production or touches a real uploaded file.
 import { readSheet } from 'read-excel-file/node';
 import type { Row } from 'read-excel-file/node';
+import { readLegacyXlsGrid } from './legacyXlsReader.js';
+
+/** OLE2/BIFF8 compound-file signature -- see tollImportGuard.ts's detectTollImportFileKind, which classifies both this and OOXML as kind 'excel'; this is the finer-grained check readGridFromBuffer needs to route to the right reader. */
+function isLegacyXlsBuffer(buffer: Buffer): boolean {
+  return buffer.length >= 8
+    && buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0
+    && buffer[4] === 0xa1 && buffer[5] === 0xb1 && buffer[6] === 0x1a && buffer[7] === 0xe1;
+}
 
 export interface ParsedTollRow {
   date: string; // ISO yyyy-mm-dd
@@ -99,8 +107,19 @@ function cellToString(value: unknown): string {
   return String(value);
 }
 
-/** Reads the first sheet of an uploaded workbook as a plain string grid -- the one thing every parser below needs, isolated here so the rest of each parser's logic (header detection, column matching, row parsing) never has to know which library produced it. */
+/**
+ * Reads the first sheet of an uploaded workbook as a plain string grid --
+ * the one thing every parser below needs, isolated here so the rest of
+ * each parser's logic (header detection, column matching, row parsing)
+ * never has to know which library/format produced it. Legacy .xls
+ * (OLE2/BIFF8, still what Salik's own portal sometimes exports) is routed
+ * to legacyXlsReader.ts's dependency-free reader rather than read-excel-file,
+ * which only understands modern .xlsx (OOXML).
+ */
 async function readGridFromBuffer(buffer: Buffer): Promise<string[][]> {
+  if (isLegacyXlsBuffer(buffer)) {
+    return readLegacyXlsGrid(buffer);
+  }
   const rows: Row[] = await readSheet(buffer);
   return rows.map(row => row.map(cellToString));
 }
