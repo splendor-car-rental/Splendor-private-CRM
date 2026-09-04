@@ -12,8 +12,5 @@ export interface SplendorBranch {
 }
 
 export const SOVEREIGN_BRANCHES: SplendorBranch[] = [
-  { id: 'DXB_BB', nameEn: 'Dubai Flagship • Business Bay', nameAr: 'الفرع الرئيسي • الخليج التجاري', code: 'DXB-01' },
-  { id: 'DXB_DIFC', nameEn: 'DIFC Executive Hub & Lounge', nameAr: 'مركز دبي المالي العالمي (DIFC)', code: 'DXB-02' },
-  { id: 'DXB_PALM', nameEn: 'Palm Jumeirah VIP Concierge', nameAr: 'نخلة جميرا (VIP)', code: 'DXB-03' },
-  { id: 'AUH_HUB', nameEn: 'Abu Dhabi Sovereign Hub', nameAr: 'فرع العاصمة أبوظبي', code: 'AUH-01' }
+  { id: 'DXB_BB', nameEn: 'Dubai Flagship • Business Bay', nameAr: 'الفرع الرئيسي • الخليج التجاري', code: 'DXB-01' }
 ];

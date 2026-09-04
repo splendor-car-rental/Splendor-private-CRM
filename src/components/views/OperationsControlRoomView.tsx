@@ -19,7 +19,6 @@ export const OperationsControlRoomView: React.FC = () => {
   } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'deliveries' | 'returns' | 'late' | 'maintenance' | 'incidents'>('deliveries');
-  const [branchFilter, setBranchFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const now = useMemo(() => new Date(), []);
@@ -82,21 +81,6 @@ export const OperationsControlRoomView: React.FC = () => {
               ? 'مراقبة فورية للتسليمات، الإرجاعات، العقود المتأخرة، الأعطال، وفحص المركبات قبل تحولها لملاحظات عملاء'
               : 'Live operational pulse: dispatch management, digital handovers, overdue return intercept, and incident mitigation'}
           </p>
-        </div>
-
-        {/* Branch Selector */}
-        <div className="flex items-center gap-2 self-start sm:self-center">
-          <select
-            value={branchFilter}
-            onChange={e => setBranchFilter(e.target.value)}
-            className="bg-zinc-900/90 border border-blue-900/50 text-xs font-semibold text-zinc-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-blue-500 shadow-inner"
-          >
-            <option value="ALL">{language === 'ar' ? 'جميع الفروع (دبي وأبوظبي)' : 'All Sovereign Branches'}</option>
-            <option value="DXB_BB">{language === 'ar' ? 'الفرع الرئيسي • الخليج التجاري' : 'Flagship • Business Bay'}</option>
-            <option value="DXB_DIFC">{language === 'ar' ? 'فرع مركز دبي المالي (DIFC)' : 'DIFC Executive Lounge'}</option>
-            <option value="DXB_PALM">{language === 'ar' ? 'فرع نخلة جميرا (VIP)' : 'Palm Jumeirah Concierge'}</option>
-            <option value="AUH_HUB">{language === 'ar' ? 'فرع أبوظبي كابيتال' : 'Abu Dhabi Sovereign Hub'}</option>
-          </select>
         </div>
       </div>
 

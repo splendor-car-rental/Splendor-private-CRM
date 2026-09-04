@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   History, Globe, Shield, Tag, Calendar, User, Clock,
   ArrowRightLeft, AlertCircle, CheckCircle2, ExternalLink,
-  DollarSign, Eye, EyeOff, Sparkles, Plus, AlertTriangle, Wrench, Save
+  DollarSign, Eye, EyeOff, Sparkles, Plus, AlertTriangle, Wrench, Save, UploadCloud, Loader2
 } from 'lucide-react';
 import {
   Vehicle, PlateAssignmentHistory, VehicleTimelineEvent, WebsiteVisibility, VehicleLifecycleStatus,
@@ -15,6 +15,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
+import { uploadFile } from '../../lib/upload';
 import {
   VEHICLE_BODY_STYLES, VEHICLE_CLASS_TIERS, VEHICLE_SUV_CLASSES, VEHICLE_PERFORMANCE_CLASSES,
   VEHICLE_RENTAL_SEGMENTS, VEHICLE_USAGE_TYPES, VEHICLE_DRIVETRAINS, VEHICLE_FUEL_TYPES, VEHICLE_ROOF_TYPES,
@@ -33,7 +34,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
 }) => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
-  const { vehicles, assignPlate, publishToWebsite, updateVehicle, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, contracts, reservations } = useCRM();
+  const { vehicles, assignPlate, publishToWebsite, updateVehicle, updateLifecycleStatus, startVehicleMaintenance, logVehicleMaintenance, contracts, reservations, showToast } = useCRM();
   const { currentUser } = useAuth();
 
   const vehicle = vehicles.find(v => v.id === vehicleId);
@@ -52,6 +53,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
   const [editInteriorColor, setEditInteriorColor] = useState(vehicle?.interiorColor || '');
   const [editCountryOfOrigin, setEditCountryOfOrigin] = useState(vehicle?.countryOfOrigin || '');
   const [isSavingBasicInfo, setIsSavingBasicInfo] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   // Classification edit state
   const [editBodyStyle, setEditBodyStyle] = useState<VehicleBodyStyle | undefined>(vehicle?.bodyStyle);
@@ -208,6 +210,31 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
     }
   };
 
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !vehicle) return;
+    setIsUploadingPhoto(true);
+    try {
+      const result = await uploadFile(file, 'vehicles');
+      if (result?.url) {
+        await updateVehicle(vehicle.id, {
+          thumbnail: result.url,
+          images: [result.url, ...(vehicle.images || []).filter(img => img !== result.url)]
+        });
+      }
+    } catch (err: any) {
+      console.error('Vehicle image upload failed:', err);
+      showToast?.(
+        isAr ? 'فشل رفع الصورة' : 'Image Upload Failed',
+        err?.message || (isAr ? 'حدث خطأ أثناء رفع صورة المركبة.' : 'Something went wrong uploading the vehicle image.'),
+        'error'
+      );
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
   const handleSaveClassification = async () => {
     if (!vehicle) return;
     try {
@@ -275,11 +302,28 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
           {/* Top Banner Card */}
           <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <img
-                src={vehicle.thumbnail}
-                alt={vehicle.model}
-                className="w-20 h-16 object-cover rounded-xl border border-zinc-800"
-              />
+              <div className="shrink-0 space-y-1">
+                <label className="relative group cursor-pointer block">
+                  <img
+                    src={vehicle.thumbnail}
+                    alt={vehicle.model}
+                    className="w-20 h-16 object-cover rounded-xl border border-zinc-800"
+                  />
+                  <span className="absolute inset-0 rounded-xl bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    {isUploadingPhoto ? (
+                      <Loader2 className="w-4 h-4 text-white animate-spin" />
+                    ) : (
+                      <UploadCloud className="w-4 h-4 text-white" />
+                    )}
+                  </span>
+                  <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={isUploadingPhoto} />
+                </label>
+                <label className="flex items-center justify-center gap-1 text-[10px] text-[#f5d97f] hover:underline cursor-pointer">
+                  <UploadCloud className="w-2.5 h-2.5" />
+                  <span>{isUploadingPhoto ? (isAr ? 'جارٍ الرفع...' : 'Uploading...') : (isAr ? 'تغيير الصورة' : 'Change Photo')}</span>
+                  <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={isUploadingPhoto} />
+                </label>
+              </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-700 font-mono font-bold text-zinc-100 text-xs">
@@ -327,7 +371,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
           <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto">
             <button
               onClick={() => setActiveTab('overview')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all ${
                 activeTab === 'overview' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -335,7 +379,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             </button>
             <button
               onClick={() => setActiveTab('classification')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all ${
                 activeTab === 'classification' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -343,7 +387,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             </button>
             <button
               onClick={() => setActiveTab('technical')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === 'technical' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -352,7 +396,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             </button>
             <button
               onClick={() => setActiveTab('plates')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === 'plates' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -361,7 +405,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             </button>
             <button
               onClick={() => setActiveTab('website')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === 'website' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -370,7 +414,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             </button>
             <button
               onClick={() => setActiveTab('timeline')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === 'timeline' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -379,7 +423,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             </button>
             <button
               onClick={() => setActiveTab('schedule')}
-              className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+              className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === 'schedule' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
               }`}
             >
@@ -389,7 +433,7 @@ export const VehicleDetailMasterModal: React.FC<VehicleDetailMasterModalProps> =
             {vehicleLtoContract && (
               <button
                 onClick={() => setActiveTab('lto')}
-                className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
+                className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 ${
                   activeTab === 'lto' ? 'bg-[#D4AF37]/20 text-[#f5d97f] border border-[#D4AF37]/40' : 'text-zinc-400 hover:bg-zinc-900'
                 }`}
               >

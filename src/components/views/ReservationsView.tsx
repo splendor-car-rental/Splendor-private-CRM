@@ -262,6 +262,23 @@ export const ReservationsView: React.FC = () => {
             </div>
           </div>
 
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">
+              {language === 'ar' ? 'مبلغ التأمين (اختياري -- غير مقيد بالحد الأدنى الافتراضي للمركبة)' : 'Security Deposit (optional -- not locked to the vehicle\'s default minimum)'}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                step={100}
+                value={form.depositAmount}
+                onChange={(e) => setForm({ ...form, depositAmount: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-40 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono"
+              />
+              <span className="text-zinc-400 font-medium">AED</span>
+            </div>
+          </div>
+
           <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
             <button
               type="button"
