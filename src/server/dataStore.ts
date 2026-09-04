@@ -14,14 +14,14 @@ import {
   EmployeeCustody, EmployeeExpense, SupplierInvoice, OperationalExpense,
   VehicleReceivingRecord, NewDamageAtReturn, TarsRecord, LateFeeWaiver,
   SupplierOperationTypeDef
-} from '../types';
-import { DEFAULT_TOLL_PRICING } from '../lib/tollCalculations';
-import { NOTIFICATION_EVENTS, CUSTOMER_NOTIFICATION_EVENTS } from '../config/notificationEvents';
+} from '../types/index.js';
+import { DEFAULT_TOLL_PRICING } from '../lib/tollCalculations.js';
+import { NOTIFICATION_EVENTS, CUSTOMER_NOTIFICATION_EVENTS } from '../config/notificationEvents.js';
 import {
   DEFAULT_SUPPLIER_OPERATION_TYPES, DEFAULT_RETROACTIVE_PO_REASONS, DEFAULT_EXPENSE_CATEGORIES,
   type RetroactivePOReasonDef, type ExpenseCategoryDef
-} from '../config/procurement';
-import { DEFAULT_CUSTOMER_PAYMENT_METHODS, type CustomerPaymentMethodDef } from '../config/payments';
+} from '../config/procurement.js';
+import { DEFAULT_CUSTOMER_PAYMENT_METHODS, type CustomerPaymentMethodDef } from '../config/payments.js';
 
 export class DataStore {
   public users: User[] = [

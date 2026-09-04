@@ -1,9 +1,9 @@
 import admin from 'firebase-admin';
-import { updateDurable } from './persistence';
-import { globalStore } from './dataStore';
-import { isWhatsAppConfigured } from './whatsapp';
-import { unresolvedCount } from './deadLetterQueue';
-import type { HealthCheckResult } from '../types';
+import { updateDurable } from './persistence.js';
+import { globalStore } from './dataStore.js';
+import { isWhatsAppConfigured } from './whatsapp.js';
+import { unresolvedCount } from './deadLetterQueue.js';
+import type { HealthCheckResult } from '../types/index.js';
 
 // ----------------------------------------------------
 // OPERATIONAL HEALTH MONITORING (Phase 23.7)

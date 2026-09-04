@@ -4,11 +4,11 @@ import {
   PublicVehicleDTO, WebsiteVehiclePublication, PublicWebsiteLeadRequest,
   PublicWebsiteReservationRequest, WhatsAppReservationRequest, WebsiteReconciliationItem, TollTransaction,
   Contract, Reservation, Customer, Lead, AuditLog
-} from '../types';
-import { globalStore } from './dataStore';
-import { updateDurable, createDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { reserveVehicleSlot, AvailabilityConflictError } from './availability';
+} from '../types/index.js';
+import { globalStore } from './dataStore.js';
+import { updateDurable, createDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { reserveVehicleSlot, AvailabilityConflictError } from './availability.js';
 
 /**
  * In-memory idempotency cache for deduplicating rapid duplicate submissions

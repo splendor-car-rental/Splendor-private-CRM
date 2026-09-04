@@ -1,17 +1,17 @@
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { RecordAuditFn } from './businessRules';
-import { fingerprintRequest, runIdempotentCreate, IdempotencyConflictError } from './idempotency';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { RecordAuditFn } from './businessRules.js';
+import { fingerprintRequest, runIdempotentCreate, IdempotencyConflictError } from './idempotency.js';
 import {
   getActiveGatewayAdapter, GatewayNotConfiguredError, type GatewayWebhookEvent
-} from './paymentGatewayAdapter';
-import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './payments';
-import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './deposits';
-import { recordLtoInstallmentPayment, LtoError, type LtoActor } from './leaseToOwn';
+} from './paymentGatewayAdapter.js';
+import { createConfirmedPayment, applyConfirmedPaymentRefund, PaymentError } from './payments.js';
+import { createSecurityDeposit, refundOrReleaseDeposit, DepositError } from './deposits.js';
+import { recordLtoInstallmentPayment, LtoError, type LtoActor } from './leaseToOwn.js';
 import type {
   PaymentIntent, PaymentIntentPurpose, PaymentGatewayEvent, PaymentRefund, Invoice, LtoInstallment
-} from '../types';
+} from '../types/index.js';
 
 /**
  * Payment Gateway business logic (Production-Grade Payment & Settlement

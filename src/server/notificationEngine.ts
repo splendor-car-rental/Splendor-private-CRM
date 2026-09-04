@@ -14,11 +14,11 @@
 // message-log logic, so every event behaves identically regardless of how
 // it was triggered.
 
-import { globalStore } from './dataStore';
-import { sendWhatsAppMessage, getWhatsAppGroupRecipients } from './whatsapp';
-import { getRuleValue } from './businessRules';
-import { recordFailedJob, markAllAlerted, getDeadLetterCache, retryFailedJob } from './deadLetterQueue';
-import { checkOperationalHealth, recordBackgroundJobRun } from './operationalHealth';
+import { globalStore } from './dataStore.js';
+import { sendWhatsAppMessage, getWhatsAppGroupRecipients } from './whatsapp.js';
+import { getRuleValue } from './businessRules.js';
+import { recordFailedJob, markAllAlerted, getDeadLetterCache, retryFailedJob } from './deadLetterQueue.js';
+import { checkOperationalHealth, recordBackgroundJobRun } from './operationalHealth.js';
 
 /** True when the Phase 23.4 emergency kill switch for WhatsApp outbound messaging is tripped. */
 function whatsappOutboundSuspended(): boolean {

@@ -1,4 +1,4 @@
-import { apiFetch } from './apiFetch';
+import { apiFetch } from './apiFetch.js';
 
 /**
  * Distinguishes a successful empty dataset from a failed initial request.

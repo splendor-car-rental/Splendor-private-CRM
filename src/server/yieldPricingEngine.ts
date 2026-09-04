@@ -1,4 +1,4 @@
-import { SeasonalityRule, OccupancyMultiplierRule, YieldPricingQuoteResult, VehicleCategory, Vehicle } from '../types';
+import { SeasonalityRule, OccupancyMultiplierRule, YieldPricingQuoteResult, VehicleCategory, Vehicle } from '../types/index.js';
 
 export class YieldPricingEngine {
   public static readonly DEFAULT_SEASONALITY_RULES: SeasonalityRule[] = [

@@ -1,8 +1,8 @@
-import { createDurable, runDurableTransaction, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
-import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier, UserRole } from '../types';
+import { createDurable, runDurableTransaction, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { BlocklistEntry, BlocklistIdentifierType, BlocklistTier, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // SECURITY BLOCKLIST / WATCHLIST (Splendor Master Rule Set, Module 03)

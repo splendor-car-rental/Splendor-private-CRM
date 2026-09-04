@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { runDurableTransaction, PersistenceError } from './persistence';
+import { runDurableTransaction, PersistenceError } from './persistence.js';
 
 // Durable idempotency for critical, duplicate-sensitive mutations (contract
 // creation, payment recording, ...). Previously the only idempotency

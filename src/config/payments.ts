@@ -1,4 +1,4 @@
-import type { PaymentMethod } from '../types';
+import type { PaymentMethod } from '../types/index.js';
 
 // ============================================================================
 // CUSTOMER-FACING PAYMENT METHODS -- manageable catalog (Collections & Bank

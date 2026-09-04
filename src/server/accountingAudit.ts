@@ -1,8 +1,8 @@
 import admin from 'firebase-admin';
-import { issueNextNumber } from './idGenerator';
-import { appendToAuditChain, type AuditChainFields } from './auditIntegrity';
-import type { AuditLog } from '../types';
-import type { RecordAuditFn } from './businessRules';
+import { issueNextNumber } from './idGenerator.js';
+import { appendToAuditChain, type AuditChainFields } from './auditIntegrity.js';
+import type { AuditLog } from '../types/index.js';
+import type { RecordAuditFn } from './businessRules.js';
 
 /**
  * Durable audit writer for the accounting API boundary.

@@ -1,13 +1,13 @@
 import crypto from 'crypto';
 import admin from 'firebase-admin';
-import { issueNextNumber } from './idGenerator';
-import type { RecordAuditFn } from './businessRules';
-import type { Invoice, Payment, Deposit, SupplierInvoice, Vehicle, Contract } from '../types';
+import { issueNextNumber } from './idGenerator.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { Invoice, Payment, Deposit, SupplierInvoice, Vehicle, Contract } from '../types/index.js';
 import {
   ACCOUNTING_CONTROL_ACCOUNTS,
   DEFAULT_CHART_OF_ACCOUNTS,
   defaultAccountByCode
-} from '../config/accounting';
+} from '../config/accounting.js';
 import {
   accountingPeriodBounds,
   accountingPeriodKey,
@@ -23,7 +23,7 @@ import {
   buildVehicleProfitability,
   money,
   validateJournalLines
-} from '../lib/accounting';
+} from '../lib/accounting.js';
 import type {
   AccountingAccount,
   AccountingPeriod,
@@ -37,7 +37,7 @@ import type {
   PostingGap,
   SafeCustomerPaymentInput,
   SafeCustomerPaymentResult
-} from '../accounting/types';
+} from '../accounting/types.js';
 
 export interface AccountingActor {
   uid: string;

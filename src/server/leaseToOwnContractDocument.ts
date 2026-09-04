@@ -1,13 +1,13 @@
 import admin from 'firebase-admin';
 import puppeteer from 'puppeteer-core';
-import { createDurable } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { globalStore } from './dataStore';
-import { LtoError, type LtoActor } from './leaseToOwn';
-import type { RecordAuditFn } from './businessRules';
-import { LTO_LETTERHEAD_HEADER_JPEG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
-import { escapeHtml } from './htmlEscape';
-import type { Contract, Customer, LtoInstallment, CRMDocument } from '../types';
+import { createDurable } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { globalStore } from './dataStore.js';
+import { LtoError, type LtoActor } from './leaseToOwn.js';
+import type { RecordAuditFn } from './businessRules.js';
+import { LTO_LETTERHEAD_HEADER_JPEG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset.js';
+import { escapeHtml } from './htmlEscape.js';
+import type { Contract, Customer, LtoInstallment, CRMDocument } from '../types/index.js';
 
 // ----------------------------------------------------
 // LEASE-TO-OWN CONTRACT DOCUMENT GENERATION

@@ -1,8 +1,8 @@
 import admin from 'firebase-admin';
-import { createDurable, updateDurable } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { sendWhatsAppMessage } from './whatsapp';
-import type { FailedJob } from '../types';
+import { createDurable, updateDurable } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { sendWhatsAppMessage } from './whatsapp.js';
+import type { FailedJob } from '../types/index.js';
 
 // ----------------------------------------------------
 // DEAD-LETTER QUEUE (Phase 23.7)

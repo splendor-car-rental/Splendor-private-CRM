@@ -1,4 +1,4 @@
-import type { CustomerKycCategory, DocumentCategory } from '../types';
+import type { CustomerKycCategory, DocumentCategory } from '../types/index.js';
 
 /**
  * Which document categories the KYC engine requires per customer

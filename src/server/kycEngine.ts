@@ -6,9 +6,9 @@ import {
   KycDocument,
   KycStatus,
   DocumentCategory
-} from '../types';
-import { globalStore } from './dataStore';
-import { REQUIRED_DOCUMENTS_MAP } from '../config/kycDocuments';
+} from '../types/index.js';
+import { globalStore } from './dataStore.js';
+import { REQUIRED_DOCUMENTS_MAP } from '../config/kycDocuments.js';
 
 export const DIRECT_LICENSE_RECOGNIZED_COUNTRIES = new Set([
   'AE', 'SA', 'KW', 'QA', 'BH', 'OM',

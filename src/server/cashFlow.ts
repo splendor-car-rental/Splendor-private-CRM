@@ -1,6 +1,6 @@
-import { buildCashFlowReport } from '../lib/cashFlow';
-import type { CashFlowReport } from '../accounting/types';
-import { getEffectiveChartOfAccounts, listJournals } from './accounting';
+import { buildCashFlowReport } from '../lib/cashFlow.js';
+import type { CashFlowReport } from '../accounting/types.js';
+import { getEffectiveChartOfAccounts, listJournals } from './accounting.js';
 
 export async function getCashFlowReport(input?: { startDate?: string; endDate?: string }): Promise<CashFlowReport> {
   const today = new Date().toISOString().slice(0, 10);

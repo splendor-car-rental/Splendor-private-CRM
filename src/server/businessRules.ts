@@ -1,12 +1,12 @@
 import admin from 'firebase-admin';
-import { updateDurable, PersistenceError } from './persistence';
+import { updateDurable, PersistenceError } from './persistence.js';
 import {
   DEFAULT_BUSINESS_RULES,
   canDirectEditRuleTier,
   canProposeRuleChange as roleCanProposeRuleChange,
   canReadRuleTier
-} from '../config/businessRules';
-import type { AuditLog, BusinessRule, BusinessRuleVersion, UserRole } from '../types';
+} from '../config/businessRules.js';
+import type { AuditLog, BusinessRule, BusinessRuleVersion, UserRole } from '../types/index.js';
 
 /** The recordAudit() shape from server.ts, reused as-is so this module and approvals.ts can both write into the same immutable, system-wide audit trail rather than a parallel one. */
 export type RecordAuditFn = (log: Omit<AuditLog, 'id' | 'timestamp'>) => Promise<unknown>;

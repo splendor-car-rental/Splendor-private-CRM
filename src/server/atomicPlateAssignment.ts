@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
-import type { PlateAssignmentHistory, Vehicle, VehicleTimelineEvent, AuditLog } from '../types';
-import { globalStore } from './dataStore';
-import { runDurableTransaction } from './persistence';
+import type { PlateAssignmentHistory, Vehicle, VehicleTimelineEvent, AuditLog } from '../types/index.js';
+import { globalStore } from './dataStore.js';
+import { runDurableTransaction } from './persistence.js';
 
 export interface AtomicPlateAssignmentParams {
   vehicleId: string;

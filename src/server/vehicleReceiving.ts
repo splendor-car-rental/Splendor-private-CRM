@@ -1,8 +1,8 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
-import type { VehicleReceivingRecord, ReceivingResult, ReservationSeverity, UserRole } from '../types';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { VehicleReceivingRecord, ReceivingResult, ReservationSeverity, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // VEHICLE RECEIVING FROM SUPPLIER (Splendor Procurement, Phase 1)

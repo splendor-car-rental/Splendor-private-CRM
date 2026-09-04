@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { PaymentGatewayProvider, PaymentIntentPurpose, PaymentIntentStatus, PaymentGatewayEventType } from '../types';
+import type { PaymentGatewayProvider, PaymentIntentPurpose, PaymentIntentStatus, PaymentGatewayEventType } from '../types/index.js';
 
 /**
  * Payment Gateway adapter boundary (Production-Grade Payment & Settlement

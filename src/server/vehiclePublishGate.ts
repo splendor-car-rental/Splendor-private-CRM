@@ -1,4 +1,4 @@
-import type { Vehicle } from '../types';
+import type { Vehicle } from '../types/index.js';
 
 /**
  * SPLENDOR Verified Publish Gate (Vehicle Master Profile mission, section

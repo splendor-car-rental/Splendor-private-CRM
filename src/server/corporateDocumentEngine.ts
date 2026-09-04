@@ -1,9 +1,9 @@
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
-import { issueNextNumber } from './idGenerator';
-import { LTO_LETTERHEAD_HEADER_JPEG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset';
-import { escapeHtml } from './htmlEscape';
-import { applyCorporateStamp } from './corporateDocumentStamp';
+import { issueNextNumber } from './idGenerator.js';
+import { LTO_LETTERHEAD_HEADER_JPEG_BASE64, LTO_LETTERHEAD_FOOTER_PNG_BASE64 } from './assets/ltoLetterheadAsset.js';
+import { escapeHtml } from './htmlEscape.js';
+import { applyCorporateStamp } from './corporateDocumentStamp.js';
 
 /**
  * Corporate stationery is an immutable master asset.

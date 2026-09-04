@@ -1,4 +1,4 @@
-import { TollType, TollSource, FinancialSummary, TollPricingConfig } from '../types';
+import { TollType, TollSource, FinancialSummary, TollPricingConfig } from '../types/index.js';
 
 /**
  * Splendor's default pricing rules for tolls & parking, confirmed with the

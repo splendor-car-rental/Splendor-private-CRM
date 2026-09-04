@@ -1,8 +1,8 @@
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import type { RecordAuditFn } from './businessRules';
-import type { OperationalExpense, ExpenseDocumentationLevel, ProcurementPaymentMethod, UserRole } from '../types';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { OperationalExpense, ExpenseDocumentationLevel, ProcurementPaymentMethod, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // OPERATIONAL EXPENSES: expense-without-invoice, fully-undocumented

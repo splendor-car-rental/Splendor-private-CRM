@@ -1,4 +1,4 @@
-import { apiFetch } from './apiFetch';
+import { apiFetch } from './apiFetch.js';
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

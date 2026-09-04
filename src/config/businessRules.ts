@@ -1,5 +1,5 @@
-import { UserRole } from '../types';
-import type { BusinessRule, BusinessRuleTier } from '../types';
+import { UserRole } from '../types/index.js';
+import type { BusinessRule, BusinessRuleTier } from '../types/index.js';
 
 // ----------------------------------------------------
 // GOVERNANCE & APPROVAL ENGINE -- permission tables (Phase 23.1)

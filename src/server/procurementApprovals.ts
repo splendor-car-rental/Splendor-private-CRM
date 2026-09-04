@@ -1,8 +1,8 @@
 import admin from 'firebase-admin';
-import { createDurable, updateDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import type { RecordAuditFn } from './businessRules';
-import type { UserRole } from '../types';
+import { createDurable, updateDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import type { RecordAuditFn } from './businessRules.js';
+import type { UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // PROCUREMENT APPROVAL ENGINE (Splendor Procurement, Phase 1)

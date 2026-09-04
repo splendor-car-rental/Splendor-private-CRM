@@ -3,111 +3,111 @@ import path from 'path';
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
-import { DataStore, globalStore } from './src/server/dataStore';
-import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction, KycDocument, DocumentCategory } from './src/types';
-import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types';
-import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions';
-import { calculateVatOnNet, extractVatFromGross, applyVat } from './src/config/tax';
-import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations';
-import { formatDate } from './src/lib/dateFormat';
-import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers';
-import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard';
-import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/server/bankImportGuard';
-import { parseBankStatementExcel, parseBankStatementCsv, type ParsedBankStatementFile, type ParsedBankStatementRow } from './src/server/bankStatementParsers';
-import { classifyBankRow, findUnmatchedCrmPayments } from './src/server/bankReconciliation';
-import { SplendorConnectEngine } from './src/server/splendorConnectEngine';
-import { assignPlateAtomically } from './src/server/atomicPlateAssignment';
-import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine';
-import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp';
-import { NOTIFICATION_EVENTS } from './src/config/notificationEvents';
-import { issueNextNumber, resetNumbering } from './src/server/idGenerator';
-import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence';
-import { asyncHandler } from './src/server/asyncHandler';
-import { reserveVehicleSlot, AvailabilityConflictError, placeTemporaryHold, releaseTemporaryHold } from './src/server/availability';
-import { createContractDurable, ContractValidationError } from './src/server/contractOps';
-import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency';
-import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity';
-import { createBlocklistEntry, checkBlocklist, listBlocklistEntries, requestUnblock, BlocklistError } from './src/server/blocklist';
-import { KycEngine } from './src/server/kycEngine';
+import { DataStore, globalStore } from './src/server/dataStore.js';
+import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction, KycDocument, DocumentCategory } from './src/types/index.js';
+import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types/index.js';
+import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions.js';
+import { calculateVatOnNet, extractVatFromGross, applyVat } from './src/config/tax.js';
+import { calculateTollTransaction, analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from './src/lib/tollCalculations.js';
+import { formatDate } from './src/lib/dateFormat.js';
+import { parseSalikExcel, parseSalikPdfText, parseGenericTollExcel, ParsedTollRow } from './src/server/tollFileParsers.js';
+import { TOLL_IMPORT_MAX_FILE_BYTES, detectTollImportFileKind } from './src/server/tollImportGuard.js';
+import { BANK_IMPORT_MAX_FILE_BYTES, detectBankImportFileKind } from './src/server/bankImportGuard.js';
+import { parseBankStatementExcel, parseBankStatementCsv, type ParsedBankStatementFile, type ParsedBankStatementRow } from './src/server/bankStatementParsers.js';
+import { classifyBankRow, findUnmatchedCrmPayments } from './src/server/bankReconciliation.js';
+import { SplendorConnectEngine } from './src/server/splendorConnectEngine.js';
+import { assignPlateAtomically } from './src/server/atomicPlateAssignment.js';
+import { dispatchNotificationEvent, dispatchCustomReminder, dispatchCustomerNotification, runNotificationChecks } from './src/server/notificationEngine.js';
+import { isWhatsAppConfigured, getWhatsAppGroupRecipients } from './src/server/whatsapp.js';
+import { NOTIFICATION_EVENTS } from './src/config/notificationEvents.js';
+import { issueNextNumber, resetNumbering } from './src/server/idGenerator.js';
+import { createDurable, updateDurable, deleteDurable, runDurableBatch, runDurableTransaction, PersistenceError, type BatchOp } from './src/server/persistence.js';
+import { asyncHandler } from './src/server/asyncHandler.js';
+import { reserveVehicleSlot, AvailabilityConflictError, placeTemporaryHold, releaseTemporaryHold } from './src/server/availability.js';
+import { createContractDurable, ContractValidationError } from './src/server/contractOps.js';
+import { runIdempotent, runIdempotentCreate, fingerprintRequest, IdempotencyConflictError } from './src/server/idempotency.js';
+import { appendToAuditChain, verifyAuditChainIntegrity, type AuditChainFields } from './src/server/auditIntegrity.js';
+import { createBlocklistEntry, checkBlocklist, listBlocklistEntries, requestUnblock, BlocklistError } from './src/server/blocklist.js';
+import { KycEngine } from './src/server/kycEngine.js';
 import {
   hydrateBusinessRules, getRuleValue, getRule, listReadableRules,
   evaluateRuleChangeRequest, evaluateRollbackRequest,
   RuleValidationError, RuleNotEditableError, RuleForbiddenError, RuleNotFoundError
-} from './src/server/businessRules';
-import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals';
+} from './src/server/businessRules.js';
+import { createApprovalRequest, decideApprovalRequest, listApprovalRequests, ApprovalError } from './src/server/approvals.js';
 import {
   listManufacturers, listModelsForManufacturer, proposeCatalogUpdate,
   decideCatalogUpdate, listCatalogUpdateRequests, VehicleCatalogError
-} from './src/server/vehicleCatalog';
-import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate';
-import { handleSafeManualDepositCreate } from './src/server/safeManualDepositCreate';
-import { handleSafeLegacyDepositMutation, handleSafeCustomerPaymentRequest } from './src/server/accountingApi';
-import { recordAccountingAudit } from './src/server/accountingAudit';
-import { executeContractExtensionTransaction, ContractExtensionRecoveryError } from './src/server/contractExtensionRecovery';
+} from './src/server/vehicleCatalog.js';
+import { evaluateVehiclePublishReadiness } from './src/server/vehiclePublishGate.js';
+import { handleSafeManualDepositCreate } from './src/server/safeManualDepositCreate.js';
+import { handleSafeLegacyDepositMutation, handleSafeCustomerPaymentRequest } from './src/server/accountingApi.js';
+import { recordAccountingAudit } from './src/server/accountingAudit.js';
+import { executeContractExtensionTransaction, ContractExtensionRecoveryError } from './src/server/contractExtensionRecovery.js';
 import {
   createPaymentIntent, getPaymentIntent, refundPaymentIntent, releaseSecurityDepositHold,
   handleGatewayWebhook, PaymentIntentError
-} from './src/server/paymentIntents';
-import { detectAnomalies } from './src/server/anomalyDetection';
-import { checkOperationalHealth } from './src/server/operationalHealth';
-import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers';
-import { PROCUREMENT_PAYMENT_METHOD_DEFS, DEBT_TYPE_DEFS } from './src/config/procurement';
+} from './src/server/paymentIntents.js';
+import { detectAnomalies } from './src/server/anomalyDetection.js';
+import { checkOperationalHealth } from './src/server/operationalHealth.js';
+import { checkSupplierEligibility, computeSupplierCompleteness, canActivateSupplier } from './src/server/suppliers.js';
+import { PROCUREMENT_PAYMENT_METHOD_DEFS, DEBT_TYPE_DEFS } from './src/config/procurement.js';
 import {
   createPurchaseOrder, PurchaseOrderError, requestPurchaseOrderAmendment,
   requestLineItemCancellation, requestFullPurchaseOrderCancellation, receiveLineItem
-} from './src/server/purchaseOrders';
-import { addSupplierQuote, requestSupplierQuoteSelection, SupplierQuoteError } from './src/server/supplierQuotes';
+} from './src/server/purchaseOrders.js';
+import { addSupplierQuote, requestSupplierQuoteSelection, SupplierQuoteError } from './src/server/supplierQuotes.js';
 import {
   requestSupplierPayment, markSupplierPaymentPaid, requestAdvanceSettlement,
   markAdvanceSettlementCompleted, SupplierPaymentError
-} from './src/server/supplierPayments';
+} from './src/server/supplierPayments.js';
 import {
   requestOpeningBalance, computePartyBalance, requestBalanceOffset,
   raiseCustomerDispute, requestCustomerDisputeResolution, BalanceError
-} from './src/server/balances';
+} from './src/server/balances.js';
 import {
   requestCustomerCreditBalance, requestCustomerRefund, markCustomerRefundExecuted,
   CustomerRefundError
-} from './src/server/customerRefunds';
+} from './src/server/customerRefunds.js';
 import {
   createDebt, addDebtSettlement, requestDebtSettlementReversal,
   requestDebtCorrection, requestDebtCancellation, DebtError
-} from './src/server/debts';
+} from './src/server/debts.js';
 import {
   requestIssueCustodyFloat, recordCustodyReturn, submitEmployeeExpense,
   markEmployeeExpenseRejected, resubmitEmployeeExpense, EmployeeCustodyError
-} from './src/server/employeeCustody';
+} from './src/server/employeeCustody.js';
 import {
   submitSupplierInvoice, markSupplierInvoiceRejected, requestSupplierInvoiceCancellation,
   SupplierInvoiceError
-} from './src/server/supplierInvoices';
+} from './src/server/supplierInvoices.js';
 import {
   submitOperationalExpense, markOperationalExpenseRejected, OperationalExpenseError
-} from './src/server/operationalExpenses';
-import { recordVehicleReceiving, VehicleReceivingError } from './src/server/vehicleReceiving';
+} from './src/server/operationalExpenses.js';
+import { recordVehicleReceiving, VehicleReceivingError } from './src/server/vehicleReceiving.js';
 import {
   createTarsRecord, recordTarsExecution, recordReturnToSupplier, closeTarsReturn,
   computeTarsEscalations, TarsError
-} from './src/server/tars';
-import { computeLateFee, requestLateFeeWaiver, LateFeeError } from './src/server/lateFees';
+} from './src/server/tars.js';
+import { computeLateFee, requestLateFeeWaiver, LateFeeError } from './src/server/lateFees.js';
 import {
   createProcurementApproval, decideProcurementApproval, listProcurementApprovals, getProcurementApproval,
   registerApprovalHandler, ProcurementApprovalError,
   type ProcurementApprovalRequest, type ProcurementApprovalActor
-} from './src/server/procurementApprovals';
-import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue';
-import { getTaxPeriodView, listTaxPeriods, prepareTaxPeriod, requestTaxPeriodReview, TaxPeriodError } from './src/server/taxPeriods';
-import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance';
+} from './src/server/procurementApprovals.js';
+import { getDeadLetterCache, setDeadLetterCache, retryFailedJob, resolveFailedJob, DeadLetterError } from './src/server/deadLetterQueue.js';
+import { getTaxPeriodView, listTaxPeriods, prepareTaxPeriod, requestTaxPeriodReview, TaxPeriodError } from './src/server/taxPeriods.js';
+import { computeMaintenanceScheduleUpdate, startMaintenance, logMaintenanceCompleted, MaintenanceError } from './src/server/maintenance.js';
 import {
   startInspection, updateInspectionDetails, addDamageMarker, reviewDamageLiability,
   registerInspectionPhoto, acknowledgeInspection, completeInspection, voidInspection,
   getInspection, listInspections, InspectionError
-} from './src/server/vehicleInspections';
+} from './src/server/vehicleInspections.js';
 import {
   processInboundWhatsAppMessage, getConversation, listConversations, listConversationMessages,
   assignConversation, setConversationBotActive, sendManualReply, markConversationRead,
   normalizePhone, ConversationError
-} from './src/server/whatsappConversation';
+} from './src/server/whatsappConversation.js';
 import {
   checkLtoEligibility, createLtoApplication, submitLtoApplication, cancelLtoApplication,
   decideLtoApplication, listLtoInstallments, recordLtoInstallmentPayment, runLtoCollectionsSweep,
@@ -115,11 +115,11 @@ import {
   decideLtoTermination, markLtoVehicleRecovered, requestLtoOwnershipTransfer, confirmLtoOwnershipTransfer,
   completeLtoAgreement, getLtoApplicationById, listLtoApplications, getLtoContractView, listLtoContracts,
   getLtoSummaryForCustomer, getLtoSummaryForVehicle, LtoError
-} from './src/server/leaseToOwn';
-import { computeLtoFinancialOffer, LtoPolicyNotConfiguredError } from './src/server/leaseToOwnPolicy';
-import { generateLtoContractDocument } from './src/server/leaseToOwnContractDocument';
-import { canReadRuleTier } from './src/config/businessRules';
-import type { AuditLog } from './src/types';
+} from './src/server/leaseToOwn.js';
+import { computeLtoFinancialOffer, LtoPolicyNotConfiguredError } from './src/server/leaseToOwnPolicy.js';
+import { generateLtoContractDocument } from './src/server/leaseToOwnContractDocument.js';
+import { canReadRuleTier } from './src/config/businessRules.js';
+import type { AuditLog } from './src/types/index.js';
 
 const app = express();
 const PORT = 3000;

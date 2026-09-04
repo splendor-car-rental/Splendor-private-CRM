@@ -1,15 +1,15 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
-import { issueNextNumber } from './idGenerator';
-import { fingerprintRequest, runIdempotent } from './idempotency';
-import type { RecordAuditFn } from './businessRules';
-import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
-import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting';
-import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting';
-import { globalStore } from './dataStore';
-import type { Deposit, PaymentMethod } from '../types';
-import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/types';
+import { issueNextNumber } from './idGenerator.js';
+import { fingerprintRequest, runIdempotent } from './idempotency.js';
+import type { RecordAuditFn } from './businessRules.js';
+import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting.js';
+import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting.js';
+import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting.js';
+import { globalStore } from './dataStore.js';
+import type { Deposit, PaymentMethod } from '../types/index.js';
+import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/types.js';
 
 const JOURNALS = 'accounting_journals';
 const PERIODS = 'accounting_periods';

@@ -1,9 +1,9 @@
-import { createDurable, PersistenceError } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import { LATE_FEE_GRACE_PERIOD_HOURS, LATE_FEE_EXTRA_DAY_CONVERSION_HOURS } from '../config/procurement';
-import { getRuleValue, type RecordAuditFn } from './businessRules';
-import type { LateFeeWaiver, UserRole } from '../types';
+import { createDurable, PersistenceError } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import { LATE_FEE_GRACE_PERIOD_HOURS, LATE_FEE_EXTRA_DAY_CONVERSION_HOURS } from '../config/procurement.js';
+import { getRuleValue, type RecordAuditFn } from './businessRules.js';
+import type { LateFeeWaiver, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // CUSTOMER LATE FEE (Splendor Procurement, Phase 1)

@@ -25,21 +25,21 @@ import {
   requestManualJournal,
   reverseJournal,
   type AccountingActor
-} from './accounting';
-import { recordAtomicAccountingPayment } from './safeAccountingPayment';
-import { createAtomicFinancialNote } from './safeFinancialNote';
-import { allocateCustomerCreditAtomic } from './safeAccountingAllocation';
-import { payAccountsPayableAtomic } from './safePayablePayment';
-import { postSupplierInvoiceToAPAtomic } from './safeSupplierInvoicePosting';
-import { applyDepositToApprovedChargeAtomic, postApprovedChargeAtomic, refundManualDepositAtomic } from './safeDepositAccounting';
-import { postManualDepositReceiptAtomic } from './safeDepositReceipt';
-import { getExtendedPostingGaps } from './extendedPostingGaps';
-import { getCashFlowReport } from './cashFlow';
-import { recordAccountingAudit } from './accountingAudit';
-import { dispatchCustomerNotification, dispatchNotificationEvent } from './notificationEngine';
-import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
-import { accountingPeriodBounds } from '../lib/accounting';
-import type { FinanceExpense, JournalLine, SafeCustomerPaymentInput } from '../accounting/types';
+} from './accounting.js';
+import { recordAtomicAccountingPayment } from './safeAccountingPayment.js';
+import { createAtomicFinancialNote } from './safeFinancialNote.js';
+import { allocateCustomerCreditAtomic } from './safeAccountingAllocation.js';
+import { payAccountsPayableAtomic } from './safePayablePayment.js';
+import { postSupplierInvoiceToAPAtomic } from './safeSupplierInvoicePosting.js';
+import { applyDepositToApprovedChargeAtomic, postApprovedChargeAtomic, refundManualDepositAtomic } from './safeDepositAccounting.js';
+import { postManualDepositReceiptAtomic } from './safeDepositReceipt.js';
+import { getExtendedPostingGaps } from './extendedPostingGaps.js';
+import { getCashFlowReport } from './cashFlow.js';
+import { recordAccountingAudit } from './accountingAudit.js';
+import { dispatchCustomerNotification, dispatchNotificationEvent } from './notificationEngine.js';
+import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting.js';
+import { accountingPeriodBounds } from '../lib/accounting.js';
+import type { FinanceExpense, JournalLine, SafeCustomerPaymentInput } from '../accounting/types.js';
 
 const PROTECTED_CONTROL_ACCOUNT_CODES = new Set<string>(Object.values(ACCOUNTING_CONTROL_ACCOUNTS));
 const VALID_RECEIPT_METHODS = new Set(['cash', 'bank_transfer', 'card', 'pos_card', 'cheque', 'online_link', 'other']);

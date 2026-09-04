@@ -1,4 +1,4 @@
-import type { VehicleCatalogModel, VehicleManufacturer } from '../types';
+import type { VehicleCatalogModel, VehicleManufacturer } from '../types/index.js';
 
 /** UAE-market reference catalog expansion for Splendor operations. */
 const now = '2026-08-30T00:00:00.000Z';

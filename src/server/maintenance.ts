@@ -1,6 +1,6 @@
-import { runDurableTransaction, PersistenceError } from './persistence';
-import { getRuleValue, type RecordAuditFn } from './businessRules';
-import type { Vehicle, VehicleTimelineEvent, UserRole } from '../types';
+import { runDurableTransaction, PersistenceError } from './persistence.js';
+import { getRuleValue, type RecordAuditFn } from './businessRules.js';
+import type { Vehicle, VehicleTimelineEvent, UserRole } from '../types/index.js';
 
 // ----------------------------------------------------
 // PREVENTIVE MAINTENANCE SCHEDULING (Splendor Master Rule Set, Module 09)

@@ -1,4 +1,4 @@
-import { TelematicsPing, TelematicsAlert, GeofenceZone, Vehicle, Contract } from '../types';
+import { TelematicsPing, TelematicsAlert, GeofenceZone, Vehicle, Contract } from '../types/index.js';
 
 export class TelematicsEngine {
   public static readonly SUPERCAR_CRITICAL_SPEED_LIMIT = 200; // km/h

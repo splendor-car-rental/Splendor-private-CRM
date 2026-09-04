@@ -35,7 +35,7 @@
 // Master Rule Set for the LIVE META VERIFICATION = UNVERIFIED / BLOCKED
 // label this carries until real credentials are configured.
 
-import { META_INTERACTIVE_LIMITS } from '../config/whatsappCatalog';
+import { META_INTERACTIVE_LIMITS } from '../config/whatsappCatalog.js';
 
 export function isWhatsAppConfigured(): boolean {
   return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);

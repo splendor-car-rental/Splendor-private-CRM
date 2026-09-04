@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
 import admin from 'firebase-admin';
-import type { RecordAuditFn } from './businessRules';
-import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting';
-import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting';
-import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting';
-import type { Deposit } from '../types';
-import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/types';
+import type { RecordAuditFn } from './businessRules.js';
+import { ACCOUNTING_CONTROL_ACCOUNTS } from '../config/accounting.js';
+import { accountingPeriodKey, assertJournalAccounts, money, validateJournalLines } from '../lib/accounting.js';
+import { getEffectiveChartOfAccounts, type AccountingActor } from './accounting.js';
+import type { Deposit } from '../types/index.js';
+import type { AccountingPeriod, JournalEntry, JournalLine } from '../accounting/types.js';
 
 const JOURNALS = 'accounting_journals';
 const PERIODS = 'accounting_periods';

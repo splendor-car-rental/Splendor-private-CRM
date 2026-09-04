@@ -1,5 +1,5 @@
-import { getRuleValue } from './businessRules';
-import type { AuditLog } from '../types';
+import { getRuleValue } from './businessRules.js';
+import type { AuditLog } from '../types/index.js';
 
 // ----------------------------------------------------
 // ANOMALY DETECTION (Phase 23.6)

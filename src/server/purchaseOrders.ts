@@ -1,14 +1,14 @@
-import { createDurable, updateDurable } from './persistence';
-import { issueNextNumber } from './idGenerator';
-import { PersistenceError } from './persistence';
-import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals';
-import { computeRequiredApprovalTier } from '../config/procurement';
-import type { RecordAuditFn } from './businessRules';
+import { createDurable, updateDurable } from './persistence.js';
+import { issueNextNumber } from './idGenerator.js';
+import { PersistenceError } from './persistence.js';
+import { createProcurementApproval, registerApprovalHandler, type ProcurementApprovalRequest, type ProcurementApprovalActor } from './procurementApprovals.js';
+import { computeRequiredApprovalTier } from '../config/procurement.js';
+import type { RecordAuditFn } from './businessRules.js';
 import type {
   PurchaseOrder, PurchaseOrderLineItem, PurchaseOrderVersionSnapshot, PurchaseOrderKind,
   PurchaseOrderStatus, PurchaseOrderAmendmentRequest, PurchaseOrderLineItemCancellation,
   PurchaseOrderCancellation, RetroactivePOReason, ProcurementOperation, UserRole, SupplierOperationTypeKey
-} from '../types';
+} from '../types/index.js';
 
 // ----------------------------------------------------
 // PURCHASE ORDERS (Splendor Procurement, Phase 1, rules 1-3, 9-13, 54-63)

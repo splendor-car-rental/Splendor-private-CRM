@@ -4,8 +4,8 @@ import type {
   CashFlowReport,
   CashFlowSection,
   JournalEntry
-} from '../accounting/types';
-import { filterPostedJournals, money } from './accounting';
+} from '../accounting/types.js';
+import { filterPostedJournals, money } from './accounting.js';
 
 const EMPTY_SECTION = (): CashFlowSection => ({ inflows: 0, outflows: 0, net: 0 });
 

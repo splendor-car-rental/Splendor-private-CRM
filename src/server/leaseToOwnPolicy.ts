@@ -1,6 +1,6 @@
-import { getRule, getRuleValue } from './businessRules';
-import { applyVat, calculateVatOnNet } from '../config/tax';
-import type { LtoFinancialOffer, LtoInstallmentStatus } from '../types';
+import { getRule, getRuleValue } from './businessRules.js';
+import { applyVat, calculateVatOnNet } from '../config/tax.js';
+import type { LtoFinancialOffer, LtoInstallmentStatus } from '../types/index.js';
 
 /**
  * Lease-to-Own calculation & eligibility policy.

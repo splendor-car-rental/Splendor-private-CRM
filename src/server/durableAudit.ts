@@ -1,7 +1,7 @@
-import type { AuditLog } from '../types';
-import { appendToAuditChain, type AuditChainFields } from './auditIntegrity';
-import { issueNextNumber } from './idGenerator';
-import { createDurable } from './persistence';
+import type { AuditLog } from '../types/index.js';
+import { appendToAuditChain, type AuditChainFields } from './auditIntegrity.js';
+import { issueNextNumber } from './idGenerator.js';
+import { createDurable } from './persistence.js';
 
 export async function recordDurableAudit(
   log: Omit<AuditLog, 'id' | 'timestamp' | 'contentHash' | 'previousHash'>

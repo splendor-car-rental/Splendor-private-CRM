@@ -1,4 +1,4 @@
-import type { VehicleManufacturer, VehicleCatalogModel } from '../types';
+import type { VehicleManufacturer, VehicleCatalogModel } from '../types/index.js';
 
 /**
  * SPLENDOR Master Vehicle Catalog -- seed/reference data.
