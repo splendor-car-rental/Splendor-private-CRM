@@ -141,8 +141,8 @@ export const SecurityBlocklistView: React.FC = () => {
         </h2>
         <p className="text-xs text-zinc-400 mt-0.5">
           {language === 'ar'
-            ? 'المطابقة تتم فقط عبر رقم جواز السفر + الدولة، أو رقم الهوية الإماراتية -- لا يتم الحظر بالاسم أبداً. إزالة الحظر تتطلب موافقة شخص آخر مخوّل.'
-            : 'Matched only by passport number + issuing country, or Emirates ID number -- never by name. Removing a block requires a different, authorized approver.'}
+            ? 'المطابقة تتم فقط عبر رقم جواز السفر + الدولة، أو رقم الهوية الإماراتية، أو رقم الرخصة التجارية للشركات -- لا يتم الحظر بالاسم أبداً. إزالة الحظر تتطلب موافقة شخص آخر مخوّل.'
+            : 'Matched only by passport number + issuing country, Emirates ID number, or a company\'s trade license number -- never by name. Removing a block requires a different, authorized approver.'}
         </p>
       </div>
 
@@ -253,7 +253,13 @@ export const SecurityBlocklistView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <ShieldAlert className={`w-3.5 h-3.5 ${entry.status === 'active' ? 'text-rose-400' : 'text-zinc-600'}`} />
                     <p className="font-semibold text-zinc-100 font-mono">
-                      {entry.identifierType === 'passport' ? (language === 'ar' ? 'جواز سفر' : 'Passport') : entry.identifierType === 'gcc_id' ? (language === 'ar' ? 'هوية خليجية' : 'GCC National ID') : (language === 'ar' ? 'هوية إماراتية' : 'Emirates ID')}: {entry.identifierValue}
+                      {entry.identifierType === 'passport'
+                        ? (language === 'ar' ? 'جواز سفر' : 'Passport')
+                        : entry.identifierType === 'gcc_id'
+                        ? (language === 'ar' ? 'هوية خليجية' : 'GCC National ID')
+                        : entry.identifierType === 'trade_license'
+                        ? (language === 'ar' ? 'رخصة تجارية' : 'Trade License')
+                        : (language === 'ar' ? 'هوية إماراتية' : 'Emirates ID')}: {entry.identifierValue}
                       {entry.identifierCountry ? ` (${entry.identifierCountry})` : ''}
                     </p>
                     <Badge variant={entry.tier === 'full' ? 'rose' : 'amber'} size="sm">
@@ -387,7 +393,7 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           identifierType, identifierValue, identifierCountry: identifierType === 'passport' ? identifierCountry : undefined,
-          customerName: customerName.trim(), nationality, mobile: mobile.trim() || undefined,
+          customerName: customerName.trim(), nationality: identifierType === 'trade_license' ? undefined : nationality, mobile: mobile.trim() || undefined,
           idExpiryDate: idExpiryDate || undefined, incidentDate: incidentDate || undefined,
           tier, conditionalNote: tier === 'conditional' ? conditionalNote : undefined,
           banType, expiryDate: banType === 'temporary' ? expiryDate : undefined, reason
@@ -488,6 +494,7 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
             <option value="emirates_id">{language === 'ar' ? 'هوية إماراتية' : 'Emirates ID'}</option>
             <option value="passport">{language === 'ar' ? 'جواز سفر' : 'Passport'}</option>
             <option value="gcc_id">{language === 'ar' ? 'هوية خليجية' : 'GCC National ID'}</option>
+            <option value="trade_license">{language === 'ar' ? 'رخصة تجارية (شركة)' : 'Trade License (Company)'}</option>
           </select>
         </div>
         {identifierType === 'emirates_id' ? (
@@ -500,7 +507,13 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
           />
         ) : (
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">{identifierType === 'passport' ? (language === 'ar' ? 'رقم الجواز *' : 'Passport number *') : (language === 'ar' ? 'رقم الهوية الخليجية *' : 'GCC National ID number *')}</label>
+            <label className="block text-zinc-400 font-medium mb-1">
+              {identifierType === 'passport'
+                ? (language === 'ar' ? 'رقم الجواز *' : 'Passport number *')
+                : identifierType === 'trade_license'
+                ? (language === 'ar' ? 'رقم الرخصة التجارية *' : 'Trade license number *')
+                : (language === 'ar' ? 'رقم الهوية الخليجية *' : 'GCC National ID number *')}
+            </label>
             <input required value={identifierValue} onChange={e => setIdentifierValue(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
           </div>
         )}
@@ -512,20 +525,26 @@ const NewBlockModal: React.FC<{ isOpen: boolean; entries: BlocklistEntry[]; onCl
           </div>
         )}
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'اسم العميل الكامل *' : 'Customer full name *'}</label>
+          <label className="block text-zinc-400 font-medium mb-1">
+            {identifierType === 'trade_license'
+              ? (language === 'ar' ? 'الاسم القانوني للشركة *' : 'Company legal name *')
+              : (language === 'ar' ? 'اسم العميل الكامل *' : 'Customer full name *')}
+          </label>
           <input required value={customerName} onChange={e => setCustomerName(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
           <p className="text-[10px] text-zinc-500 mt-1">{language === 'ar' ? 'مطلوب مطابقةً لسياسة تسجيل العميل الجديد -- لكنه يُسجَّل للعرض فقط ولا يُستخدم أبداً كمعيار للمطابقة (قاعدة B01).' : 'Required to match customer-registration policy -- recorded for display only and never used to match a block (RULE-B01).'}</p>
         </div>
-        <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الجنسية' : 'Nationality'}</label>
-          <select value={nationality} onChange={e => setNationality(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
-            {ALL_COUNTRIES.map(c => (
-              <option key={c.iso} value={c.nationalityEn}>{language === 'ar' ? c.nationalityAr : c.nationalityEn}</option>
-            ))}
-          </select>
-        </div>
+        {identifierType !== 'trade_license' && (
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الجنسية' : 'Nationality'}</label>
+            <select value={nationality} onChange={e => setNationality(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+              {ALL_COUNTRIES.map(c => (
+                <option key={c.iso} value={c.nationalityEn}>{language === 'ar' ? c.nationalityAr : c.nationalityEn}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <PhoneNumberInput
-          label={language === 'ar' ? 'رقم الهاتف' : 'Mobile Number'}
+          label={identifierType === 'trade_license' ? (language === 'ar' ? 'هاتف التواصل للشركة' : 'Company contact number') : (language === 'ar' ? 'رقم الهاتف' : 'Mobile Number')}
           value={mobile}
           onChange={setMobile}
           isAr={isAr}

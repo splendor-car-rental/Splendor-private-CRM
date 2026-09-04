@@ -3352,6 +3352,21 @@ app.get('/api/corporate-accounts', (req, res) => {
 });
 
 app.post('/api/corporate-accounts', requireRole('ceo', 'admin', 'sales', 'finance'), asyncHandler(async (req, res) => {
+  // RULE-B01/B03 (Splendor Master Rule Set): the same proactive blocklist
+  // check the individual-customer route runs on a passport/Emirates ID,
+  // extended to the corporate track -- matched only by the exact trade
+  // license number, never by the company's name.
+  let blocklistWarning: string | undefined;
+  if (req.body.tradeLicenseNumber && String(req.body.tradeLicenseNumber).trim()) {
+    const match = await checkBlocklist('trade_license', req.body.tradeLicenseNumber);
+    if (match) {
+      if (match.tier === 'full') {
+        return res.status(403).json({ error: 'This company cannot be registered at this time.' });
+      }
+      blocklistWarning = `Conditional block on file (${match.id}): ${match.conditionalNote}`;
+    }
+  }
+
   const newId = await issueNextNumber('corporateaccount');
   const now = new Date().toISOString();
   const actor = await getRequesterActor(req);
@@ -3406,7 +3421,7 @@ app.post('/api/corporate-accounts', requireRole('ceo', 'admin', 'sales', 'financ
     reason: 'New corporate account onboarding'
   });
 
-  res.status(201).json(newAccount);
+  res.status(201).json({ ...newAccount, blocklistWarning });
 }));
 
 app.put('/api/corporate-accounts/:id', requireRole('ceo', 'admin', 'sales', 'finance'), asyncHandler(async (req, res) => {
