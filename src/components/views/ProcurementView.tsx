@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
+import { PhoneText } from '../common/PhoneText';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
 import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver, Debt, DebtSettlementMovement } from '../../types';
@@ -546,7 +547,7 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
                   <StatusBadge status={s.status} />
                 </div>
                 <p className="text-zinc-500 mt-1 font-mono">{s.id}</p>
-                <p className="text-zinc-400 mt-1">{s.phone || '—'}</p>
+                <p className="text-zinc-400 mt-1">{s.phone ? <PhoneText value={s.phone} /> : '—'}</p>
                 <button
                   onClick={() => openSupplierStatement(s)}
                   className="mt-2.5 flex items-center gap-1.5 text-[11px] font-semibold text-blue-300 hover:text-blue-200"

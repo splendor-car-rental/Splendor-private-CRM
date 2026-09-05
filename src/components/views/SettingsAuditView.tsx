@@ -12,6 +12,7 @@ import { AddStaffModal } from '../auth/AddStaffModal';
 import { EditStaffModal } from '../auth/EditStaffModal';
 import { formatDateTime } from '../../lib/dateFormat';
 import { GovernanceView } from './GovernanceView';
+import { MfaSettingsPanel } from './MfaSettingsPanel';
 import { ROLE_RANK } from '../../config/permissions';
 import { User } from '../../types';
 
@@ -29,7 +30,7 @@ export const SettingsAuditView: React.FC = () => {
   const { currentUser, staffDirectory } = useAuth();
   const { auditLogs, showToast, getReconciliationReport } = useCRM();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit' | 'connect' | 'governance'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'roles' | 'audit' | 'connect' | 'governance' | 'security'>('general');
   const [addStaffOpen, setAddStaffOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<User | null>(null);
   const [reconciliationReport, setReconciliationReport] = useState<any[]>([]);
@@ -120,6 +121,17 @@ export const SettingsAuditView: React.FC = () => {
           <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
           <span>{language === 'ar' ? 'الحوكمة والموافقات' : 'Governance & Approvals'}</span>
         </button>
+        {isAdmin && (
+          <button
+            onClick={() => setActiveTab('security')}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              activeTab === 'security' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
+            <span>{language === 'ar' ? 'أمان الحساب (2FA)' : 'Account Security (2FA)'}</span>
+          </button>
+        )}
       </div>
 
       {/* Tab 1: Company Configuration */}
@@ -495,6 +507,9 @@ export const SettingsAuditView: React.FC = () => {
 
       {/* Tab 5: Governance & Approval Engine (Phase 23) */}
       {activeTab === 'governance' && <GovernanceView />}
+
+      {/* Tab 6: Personal 2FA enrollment */}
+      {activeTab === 'security' && isAdmin && <MfaSettingsPanel />}
 
       <AddStaffModal
         isOpen={addStaffOpen}

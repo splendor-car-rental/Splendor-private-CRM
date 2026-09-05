@@ -7,6 +7,7 @@ import {
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
+import { PhoneText } from '../common/PhoneText';
 import { formatAED } from '../../lib/currency';
 import { Customer } from '../../types';
 
@@ -244,7 +245,7 @@ export const VipTierManagementView: React.FC = () => {
                   <tr key={customer.id} className="hover:bg-zinc-900/50 transition-colors">
                     <td className="p-3.5">
                       <div className="font-semibold text-zinc-100">{customer.fullName}</div>
-                      <div className="text-[11px] text-zinc-400 font-mono mt-0.5">{customer.phone} • {customer.id}</div>
+                      <div className="text-[11px] text-zinc-400 font-mono mt-0.5"><PhoneText value={customer.phone} /> • {customer.id}</div>
                     </td>
                     <td className="p-3.5">
                       <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider border ${tier.badgeBg} ${tier.badgeBorder} ${tier.color}`}>

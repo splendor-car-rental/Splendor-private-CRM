@@ -9,6 +9,7 @@ import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { PhoneNumberInput } from '../common/PhoneNumberInput';
+import { PhoneText } from '../common/PhoneText';
 import { EmiratesIdInput } from '../common/EmiratesIdInput';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 import { ALL_COUNTRIES } from '../../lib/customerData';
@@ -281,7 +282,7 @@ export const SecurityBlocklistView: React.FC = () => {
                 </div>
                 {entry.customerName && (
                   <p className="text-zinc-400 mt-1">
-                    {entry.customerName}{entry.nationality ? ` · ${entry.nationality}` : ''}{entry.mobile ? ` · ${formatPhoneNumber(entry.mobile)}` : ''}
+                    {entry.customerName}{entry.nationality ? ` · ${entry.nationality}` : ''}{entry.mobile ? <> · <PhoneText value={formatPhoneNumber(entry.mobile)} /></> : ''}
                   </p>
                 )}
                 <p className="text-zinc-300 mt-1.5">{entry.reason}</p>

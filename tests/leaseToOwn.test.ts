@@ -170,7 +170,7 @@ describe('checkLtoEligibility', () => {
     await seedVehicle('VEH-ELIG-2');
     const result = await lto.checkLtoEligibility(customer.id, 'VEH-ELIG-2');
     expect(result.eligible).toBe(false);
-    expect(result.reasons.some(r => r.includes('KYC is incomplete'))).toBe(true);
+    expect(result.reasons.some(r => r.includes('بيانات التحقق من الهوية غير مكتملة'))).toBe(true);
   });
 
   it('KYC GUARD: blocks when the ID or license has expired', async () => {
@@ -178,7 +178,7 @@ describe('checkLtoEligibility', () => {
     await seedVehicle('VEH-ELIG-3');
     const result = await lto.checkLtoEligibility(customer.id, 'VEH-ELIG-3');
     expect(result.eligible).toBe(false);
-    expect(result.reasons.some(r => r.includes('expired'))).toBe(true);
+    expect(result.reasons.some(r => r.includes('منتهية الصلاحية'))).toBe(true);
   });
 
   it('blocks a blocklisted customer', async () => {
@@ -186,7 +186,7 @@ describe('checkLtoEligibility', () => {
     await seedVehicle('VEH-ELIG-4');
     const result = await lto.checkLtoEligibility(customer.id, 'VEH-ELIG-4');
     expect(result.eligible).toBe(false);
-    expect(result.reasons.some(r => r.includes('blocklisted'))).toBe(true);
+    expect(result.reasons.some(r => r.includes('مدرج في قائمة الحظر'))).toBe(true);
   });
 
   it('blocks an underage customer and never guesses when date of birth is missing', async () => {
@@ -194,12 +194,12 @@ describe('checkLtoEligibility', () => {
     await seedVehicle('VEH-ELIG-5');
     const result = await lto.checkLtoEligibility(tooYoung.id, 'VEH-ELIG-5');
     expect(result.eligible).toBe(false);
-    expect(result.reasons.some(r => r.toLowerCase().includes('age'))).toBe(true);
+    expect(result.reasons.some(r => r.includes('الحد الأدنى للإيجار المنتهي بالتملك'))).toBe(true);
 
     const noDob = await seedCustomer({ id: 'CUST-NODOB', dateOfBirth: undefined });
     const result2 = await lto.checkLtoEligibility(noDob.id, 'VEH-ELIG-5');
     expect(result2.eligible).toBe(false);
-    expect(result2.reasons.some(r => r.includes('cannot be verified'))).toBe(true);
+    expect(result2.reasons.some(r => r.includes('لا يمكن التحقق من العمر'))).toBe(true);
   });
 });
 
@@ -238,7 +238,7 @@ describe('Application lifecycle', () => {
     const customer = await seedCustomer({ idNumber: undefined });
     await seedVehicle('VEH-APP-2');
     const { result: application } = await lto.createLtoApplication(baseApplicationInput(customer.id, 'VEH-APP-2'), SALES, null, undefined, noopAudit);
-    await expect(lto.submitLtoApplication(application.id, SALES, noopAudit)).rejects.toThrow(/not eligible/);
+    await expect(lto.submitLtoApplication(application.id, SALES, noopAudit)).rejects.toThrow(/غير مؤهل/);
     const holds = await db.collection('temporary_holds').get();
     expect(holds.empty).toBe(true);
   });
@@ -355,7 +355,7 @@ describe('Payment recording', () => {
     const target = installments.find(i => i.installmentNumber === 0)!;
     await expect(
       lto.recordLtoInstallmentPayment(target.id, 999999, 'bank_transfer', SALES, null, undefined, noopAudit)
-    ).rejects.toThrow(/exceeds the remaining amount/);
+    ).rejects.toThrow(/تتجاوز المبلغ المتبقي/);
   });
 
   it('rejects further payment against an already-paid installment', async () => {
@@ -367,7 +367,7 @@ describe('Payment recording', () => {
     await lto.recordLtoInstallmentPayment(target.id, 30000, 'bank_transfer', SALES, 'first-pay', undefined, noopAudit);
     await expect(
       lto.recordLtoInstallmentPayment(target.id, 10, 'bank_transfer', SALES, 'second-pay', undefined, noopAudit)
-    ).rejects.toThrow(/already paid/);
+    ).rejects.toThrow(/مدفوع بالفعل/);
   });
 });
 
@@ -400,7 +400,7 @@ describe('Late payment + Default (Clause 3: two consecutive missed months)', () 
     const customer = await seedCustomer();
     await seedVehicle('VEH-DEFAULT-2');
     const { contract } = await approveFullApplication(customer.id, 'VEH-DEFAULT-2');
-    await expect(lto.markLtoDefault(contract.id, CEO, noopAudit)).rejects.toThrow(/below the/);
+    await expect(lto.markLtoDefault(contract.id, CEO, noopAudit)).rejects.toThrow(/أقل من حد التعثّر/);
   });
 });
 

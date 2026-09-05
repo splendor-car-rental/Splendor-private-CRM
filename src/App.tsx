@@ -40,6 +40,7 @@ import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiV
 import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
 import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
 import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
+import { ExecutiveDashboardView } from './components/views/ExecutiveDashboardView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -77,6 +78,7 @@ const MainLayout: React.FC = () => {
       case 'reservations': return <ReservationsView />;
       case 'contracts': return <ContractsOpsView />;
       case 'finance': return <FinanceControlCenterView />;
+      case 'executive-dashboard': return <ExecutiveDashboardView />;
       case 'tax-filing': return <TaxFilingView />;
       case 'reconciliation':
       case 'bank-reconciliation': return <BankReconciliationView />;

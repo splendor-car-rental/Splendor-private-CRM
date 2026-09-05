@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import admin from 'firebase-admin';
+import { isMfaSatisfied } from './mfa.js';
 
 const DEFAULT_EXPECTED_PROJECT_ID = 'splendor-private-crm';
 
@@ -46,7 +47,8 @@ export interface VerifiedActiveStaff {
 export async function getVerifiedActiveStaff(
   req: Request,
   res: Response,
-  allowedRoles: readonly string[]
+  allowedRoles: readonly string[],
+  options?: { skipMfaGate?: boolean }
 ): Promise<VerifiedActiveStaff | null> {
   if (!ensureFirebaseAdmin()) {
     res.status(503).json({ error: 'Server authentication is not configured.' });
@@ -69,6 +71,11 @@ export async function getVerifiedActiveStaff(
 
     if (!data || status !== 'active' || !allowedRoles.includes(role)) {
       res.status(403).json({ error: 'A valid active Splendor staff role is required.' });
+      return null;
+    }
+
+    if (!options?.skipMfaGate && !(await isMfaSatisfied(decoded.uid, role))) {
+      res.status(401).json({ error: 'MFA_REQUIRED' });
       return null;
     }
 

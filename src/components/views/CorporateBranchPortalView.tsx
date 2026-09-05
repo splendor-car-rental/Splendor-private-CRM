@@ -9,6 +9,7 @@ import { useCRM } from '../../context/CRMContext';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
+import { PhoneText } from '../common/PhoneText';
 import { formatAED } from '../../lib/currency';
 import { formatDate } from '../../lib/dateFormat';
 import { SOVEREIGN_BRANCHES } from '../../config/branches';
@@ -437,7 +438,7 @@ export const CorporateBranchPortalView: React.FC = () => {
                   <div className="text-zinc-400 text-[11px]">{selectedCorp.primaryContact.designation || 'Contact Person'}</div>
                   <div className="flex flex-wrap items-center gap-4 text-[11px] text-zinc-400 pt-1 font-mono">
                     {selectedCorp.primaryContact.phone && (
-                      <span className="flex items-center gap-1"><Phone className="w-3 h-3 text-blue-400" /> {selectedCorp.primaryContact.phone}</span>
+                      <span className="flex items-center gap-1"><Phone className="w-3 h-3 text-blue-400" /> <PhoneText value={selectedCorp.primaryContact.phone} /></span>
                     )}
                     {selectedCorp.primaryContact.email && (
                       <span className="flex items-center gap-1"><Mail className="w-3 h-3 text-blue-400" /> {selectedCorp.primaryContact.email}</span>

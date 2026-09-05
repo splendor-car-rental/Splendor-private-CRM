@@ -119,6 +119,7 @@ import {
 import { computeLtoFinancialOffer, LtoPolicyNotConfiguredError } from './src/server/leaseToOwnPolicy.js';
 import { generateLtoContractDocument } from './src/server/leaseToOwnContractDocument.js';
 import { canReadRuleTier } from './src/config/businessRules.js';
+import { isMfaSatisfied, getMfaStatus, startMfaSetup, confirmMfaSetup, verifyMfaCode, disableMfa, MfaError } from './src/server/mfa.js';
 import type { AuditLog } from './src/types/index.js';
 
 const app = express();
@@ -407,6 +408,12 @@ function requireRole(...allowedRoles: string[]) {
       if (!role || !allowedRoles.includes(role)) {
         return res.status(403).json({ error: 'You do not have permission to perform this action.' });
       }
+      // ceo/admin accounts that have enrolled in 2FA (src/server/mfa.ts) must
+      // have a currently-valid /api/mfa/verify within the last MFA_SESSION_HOURS
+      // -- an account that never enrolled is never blocked here (opt-in).
+      if (!(await isMfaSatisfied(uid, role))) {
+        return res.status(401).json({ error: 'MFA_REQUIRED' });
+      }
       next();
     } catch (error) {
       console.error('requireRole check failed:', error);
@@ -424,6 +431,73 @@ async function getRequesterActor(req: express.Request): Promise<{ uid: string; n
   const data = snap.data() as any;
   return { uid, name: data?.name || uid, role: data?.role };
 }
+
+// ----------------------------------------------------
+// Two-Factor Authentication (TOTP) -- ceo/admin only, opt-in per account.
+// Deliberately NOT behind requireRole(): that middleware itself now enforces
+// the MFA gate (see requireRole above), so routing /api/mfa/* through it
+// would make verifying a code require having already verified a code. These
+// five routes instead do their own inline role check via getRequesterActor,
+// which never consults the MFA gate.
+// ----------------------------------------------------
+
+function assertExecutiveActorForMfa(actor: { role: string } | null): asserts actor is { uid: string; name: string; role: string } {
+  if (!actor || !['ceo', 'admin'].includes(actor.role)) {
+    throw new MfaError('المصادقة الثنائية متاحة لحسابات الرئيس التنفيذي والإدارة فقط.');
+  }
+}
+
+app.get('/api/mfa/status', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  if (!actor) return res.status(401).json({ error: 'Could not verify your session.' });
+  if (!['ceo', 'admin'].includes(actor.role)) return res.json({ enabled: false });
+  res.json(await getMfaStatus(actor.uid));
+}));
+
+app.post('/api/mfa/setup', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  try {
+    assertExecutiveActorForMfa(actor);
+    res.json(await startMfaSetup(actor));
+  } catch (error: any) {
+    if (error instanceof MfaError) return res.status(403).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/mfa/confirm', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  try {
+    assertExecutiveActorForMfa(actor);
+    res.json(await confirmMfaSetup(actor, String(req.body?.code || ''), recordAudit));
+  } catch (error: any) {
+    if (error instanceof MfaError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/mfa/verify', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  try {
+    assertExecutiveActorForMfa(actor);
+    res.json(await verifyMfaCode(actor, String(req.body?.code || '')));
+  } catch (error: any) {
+    if (error instanceof MfaError) return res.status(401).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/mfa/disable', asyncHandler(async (req, res) => {
+  const actor = await getRequesterActor(req);
+  try {
+    assertExecutiveActorForMfa(actor);
+    await disableMfa(actor, String(req.body?.code || ''), recordAudit);
+    res.json({ disabled: true });
+  } catch (error: any) {
+    if (error instanceof MfaError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+}));
 
 /**
  * Phase 23.4 Emergency Kill Switch: short-circuits a route with a 503
@@ -3645,14 +3719,15 @@ app.post('/api/inspections/:id/void', requireRole('ceo', 'admin'), asyncHandler(
 // paymentsRefunds gates installment payment recording, matching how every
 // other money-received route in this app is gated.
 function ltoErrorStatus(message: string): number {
-  if (message.includes('not found')) return 404;
-  const isFieldValidation = message.includes('is required') || message.includes('must be') || message.includes('cannot be negative');
+  if (message.includes('not found') || message.includes('غير موجود')) return 404;
+  const isFieldValidation = message.includes('is required') || message.includes('must be') || message.includes('cannot be negative')
+    || message.includes('مطلوب') || message.includes('يجب أن') || message.includes('لا يمكن أن تكون سالبة');
   return isFieldValidation ? 400 : 409;
 }
 
 app.post('/api/lto/eligibility', asyncHandler(async (req, res) => {
   const { customerId, vehicleId } = req.body || {};
-  if (!customerId || !vehicleId) return res.status(400).json({ error: 'customerId and vehicleId are required.' });
+  if (!customerId || !vehicleId) return res.status(400).json({ error: 'العميل والمركبة مطلوبان.' });
   res.json(await checkLtoEligibility(customerId, vehicleId));
 }));
 

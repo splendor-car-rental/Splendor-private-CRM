@@ -4,7 +4,7 @@ import {
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, LogOut, KeyRound, X, Camera,
   TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare, Crown, Calculator, Radio,
-  Activity, Building2, ClipboardList
+  Activity, Building2, ClipboardList, Gauge
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -169,6 +169,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
     {
       title: language === 'ar' ? 'الإدارة المالية' : 'FINANCIAL CONTROL',
       items: [
+        {
+          id: 'executive-dashboard',
+          label: language === 'ar' ? 'لوحة التحليلات التنفيذية' : 'Executive Dashboard',
+          icon: <Gauge className="w-4 h-4 text-amber-400" />,
+          badge: language === 'ar' ? 'تنفيذي' : 'Exec',
+          badgeVariant: 'amber' as const
+        },
         {
           id: 'finance',
           label: t('finance'),
