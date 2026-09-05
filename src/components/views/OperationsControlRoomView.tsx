@@ -206,7 +206,7 @@ export const OperationsControlRoomView: React.FC = () => {
         {/* Content Stream */}
         <div className="overflow-x-auto">
           {activeTab === 'deliveries' && (
-            <table className="w-full text-start text-xs">
+            <table className="w-full text-start text-xs min-w-[820px]">
               <thead className="bg-zinc-900/60 text-zinc-400 font-semibold border-b border-zinc-800">
                 <tr>
                   <th className="p-3.5 text-start">{language === 'ar' ? 'العميل' : 'Customer'}</th>
@@ -268,7 +268,7 @@ export const OperationsControlRoomView: React.FC = () => {
           )}
 
           {activeTab === 'returns' && (
-            <table className="w-full text-start text-xs">
+            <table className="w-full text-start text-xs min-w-[820px]">
               <thead className="bg-zinc-900/60 text-zinc-400 font-semibold border-b border-zinc-800">
                 <tr>
                   <th className="p-3.5 text-start">{language === 'ar' ? 'العميل' : 'Customer'}</th>
@@ -328,7 +328,7 @@ export const OperationsControlRoomView: React.FC = () => {
           )}
 
           {activeTab === 'late' && (
-            <table className="w-full text-start text-xs">
+            <table className="w-full text-start text-xs min-w-[820px]">
               <thead className="bg-zinc-900/60 text-zinc-400 font-semibold border-b border-zinc-800">
                 <tr>
                   <th className="p-3.5 text-start">{language === 'ar' ? 'العميل' : 'Customer'}</th>
@@ -399,7 +399,7 @@ export const OperationsControlRoomView: React.FC = () => {
           )}
 
           {activeTab === 'maintenance' && (
-            <table className="w-full text-start text-xs">
+            <table className="w-full text-start text-xs min-w-[820px]">
               <thead className="bg-zinc-900/60 text-zinc-400 font-semibold border-b border-zinc-800">
                 <tr>
                   <th className="p-3.5 text-start">{language === 'ar' ? 'السيارة' : 'Vehicle'}</th>
@@ -455,7 +455,7 @@ export const OperationsControlRoomView: React.FC = () => {
           )}
 
           {activeTab === 'incidents' && (
-            <table className="w-full text-start text-xs">
+            <table className="w-full text-start text-xs min-w-[680px]">
               <thead className="bg-zinc-900/60 text-zinc-400 font-semibold border-b border-zinc-800">
                 <tr>
                   <th className="p-3.5 text-start">{language === 'ar' ? 'المهمة / البلاغ' : 'Incident / Task'}</th>

@@ -346,7 +346,7 @@ export const SettingsAuditView: React.FC = () => {
       {activeTab === 'audit' && (
         <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden text-xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-start">
+            <table className="w-full text-start min-w-[820px]">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                   <th className="p-4 text-start font-medium">{language === 'ar' ? 'التوقيت' : 'Timestamp'}</th>
@@ -439,7 +439,7 @@ export const SettingsAuditView: React.FC = () => {
 
             {/* Reconciliation Table */}
             <div className="rounded-2xl border border-zinc-800 overflow-hidden mt-4">
-              <table className="w-full text-start">
+              <table className="w-full text-start min-w-[840px]">
                 <thead>
                   <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                     <th className="p-3 text-start font-medium">{language === 'ar' ? 'المركبة' : 'Vehicle'}</th>

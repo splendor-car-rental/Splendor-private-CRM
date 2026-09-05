@@ -270,7 +270,7 @@ export const BankReconciliationView: React.FC = () => {
       {/* Reconciliation Table */}
       <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs text-start">
+          <table className="w-full text-xs text-start min-w-[1040px]">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                 <th className="p-4 text-start font-medium">{language === 'ar' ? 'تاريخ المعاملة' : 'Txn Date'}</th>

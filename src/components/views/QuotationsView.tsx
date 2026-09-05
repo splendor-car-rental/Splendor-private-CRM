@@ -232,7 +232,7 @@ export const QuotationsView: React.FC = () => {
 
             {/* Line Items Table */}
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="w-full text-xs min-w-[480px]">
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-400">
                     <th className="pb-3 text-start font-medium">Description</th>
