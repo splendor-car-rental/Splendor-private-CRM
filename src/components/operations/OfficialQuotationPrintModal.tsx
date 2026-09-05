@@ -248,6 +248,24 @@ export const OfficialQuotationPrintModal: React.FC<OfficialQuotationPrintModalPr
             </div>
           </div>
 
+          {/* Terms & Conditions -- payment, supply, and extension terms as
+              entered for this specific quotation, never a fixed default the
+              customer never sees. */}
+          {(quotation.termsAndConditions || quotation.notes) && (
+            <div className="border border-zinc-400 rounded-lg p-3.5 text-xs bg-zinc-50 space-y-2">
+              <div className="flex items-center gap-1.5 text-[#991b1b] font-bold border-b border-zinc-200 pb-1.5">
+                <FileText className="w-3.5 h-3.5" />
+                <span>الشروط والأحكام / TERMS &amp; CONDITIONS</span>
+              </div>
+              {quotation.termsAndConditions && (
+                <p className="text-zinc-800 whitespace-pre-wrap leading-relaxed">{quotation.termsAndConditions}</p>
+              )}
+              {quotation.notes && (
+                <p className="text-zinc-600 whitespace-pre-wrap leading-relaxed pt-1 border-t border-zinc-200">{quotation.notes}</p>
+              )}
+            </div>
+          )}
+
           {/* Signatures */}
           <div className="grid grid-cols-2 gap-8 pt-3 border-t border-zinc-300">
             <div className="space-y-2">

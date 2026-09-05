@@ -289,7 +289,7 @@ export const FleetCRMView: React.FC = () => {
         </div>
       )}
 
-      {selectedVehicleId && <VehicleDetailMasterModal vehicleId={selectedVehicleId} onClose={() => setSelectedVehicleId(null)} />}
+      {selectedVehicleId && <VehicleDetailMasterModal key={selectedVehicleId} vehicleId={selectedVehicleId} onClose={() => setSelectedVehicleId(null)} />}
       
       {/* Availability conflict checker modal */}
       <Modal 

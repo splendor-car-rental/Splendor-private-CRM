@@ -39,8 +39,8 @@ export const QuotationsView: React.FC = () => {
     securityDeposit: 15000,
     discountAmount: 0,
     validUntil: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0],
-    notes: 'Includes VIP Delivery to client location with bespoke Splendor welcome kit.',
-    termsAndConditions: 'UAE RTA standard master lease agreement.'
+    notes: '',
+    termsAndConditions: ''
   });
 
   const activeQuote = quotations.find(q => q.id === selectedQuotationId) || quotations[0];
@@ -74,9 +74,19 @@ export const QuotationsView: React.FC = () => {
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await createQuotation(form);
+    let created: Quotation;
+    try {
+      created = await createQuotation(form);
+    } catch {
+      // createQuotation already shows an error toast -- keep the form open
+      // (and whatever the user typed) so they can fix it and retry, rather
+      // than silently closing on failure.
+      return;
+    }
     setAddModalOpen(false);
-    setForm(prev => ({ ...prev, discountAmount: 0 }));
+    setForm(prev => ({ ...prev, discountAmount: 0, notes: '', termsAndConditions: '' }));
+    setSelectedQuotationId(created.id);
+    setQuotationToPrint(created);
   };
 
   const handleConvert = async (quote: Quotation) => {
@@ -343,7 +353,7 @@ export const QuotationsView: React.FC = () => {
               >
                 {vehicles.map(v => (
                   <option key={v.id} value={v.id}>
-                    {v.make} {v.model} - {v.dailyRate} AED/day
+                    {v.make} {v.model}
                   </option>
                 ))}
               </select>
@@ -418,6 +428,31 @@ export const QuotationsView: React.FC = () => {
             />
             <p className="text-[10px] text-zinc-500 mt-1">
               A discount above your role's ceiling is automatically capped and routed to a sales-manager approval -- the quotation is still created immediately at the capped, safe total (RULE-P01).
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">Notes (shown to the customer)</label>
+            <textarea
+              rows={2}
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="e.g. VIP delivery to client location, chauffeur included..."
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">Terms & Conditions -- payment, supply, and extension terms</label>
+            <textarea
+              rows={4}
+              value={form.termsAndConditions}
+              onChange={(e) => setForm({ ...form, termsAndConditions: e.target.value })}
+              placeholder="e.g. 50% advance payment on booking confirmation, balance on vehicle handover; vehicle supplied within 24 hours of confirmation; extension requests must be made at least 24 hours before the return date and are subject to availability..."
+              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+            />
+            <p className="text-[10px] text-zinc-500 mt-1">
+              Printed on the official quotation document, under the totals -- edit it for every quotation, it is never a fixed default the customer never sees.
             </p>
           </div>
 

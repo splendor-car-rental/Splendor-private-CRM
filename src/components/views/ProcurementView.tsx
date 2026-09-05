@@ -1342,8 +1342,8 @@ const NewSupplierModal: React.FC<{ isOpen: boolean; onClose: () => void; onCreat
           <input required value={legalName} onChange={e => setLegalName(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
         </div>
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الرخصة التجارية *' : 'Trade license number *'}</label>
-          <input required value={tradeLicenseNumber} onChange={e => setTradeLicenseNumber(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الرخصة التجارية (اختياري)' : 'Trade license number (optional)'}</label>
+          <input value={tradeLicenseNumber} onChange={e => setTradeLicenseNumber(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
         </div>
         <div>
           <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الهاتف *' : 'Phone *'}</label>
