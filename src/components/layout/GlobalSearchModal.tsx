@@ -160,10 +160,17 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
             autoFocus
           />
           {query && (
-            <button onClick={() => setQuery('')} className="p-1 text-zinc-500 hover:text-zinc-300">
+            <button onClick={() => setQuery('')} className="shrink-0 w-9 h-9 flex items-center justify-center text-zinc-500 hover:text-zinc-300" aria-label={language === 'ar' ? 'مسح البحث' : 'Clear search'}>
               <X className="w-4 h-4" />
             </button>
           )}
+          <button
+            onClick={onClose}
+            className="shrink-0 ms-1 w-11 h-11 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 active:bg-zinc-800 transition-colors"
+            aria-label={language === 'ar' ? 'إغلاق البحث' : 'Close search'}
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Results */}
@@ -219,8 +226,8 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ isOpen, on
           )}
         </div>
 
-        {/* Footer shortcuts */}
-        <div className="px-4 py-2 bg-zinc-900/40 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-500">
+        {/* Footer shortcuts -- keyboard-only, hidden on touch/mobile since there's no physical keyboard to use them with */}
+        <div className="hidden sm:flex px-4 py-2 bg-zinc-900/40 border-t border-zinc-800/80 items-center justify-between text-[11px] text-zinc-500">
           <div className="flex items-center gap-2">
             <span>Navigation:</span>
             <span className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">↑↓</span>

@@ -15,7 +15,7 @@ export const ToastContainer: React.FC = () => {
     : value;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2.5 max-w-md w-full pointer-events-none" data-arabic-ui="aggressive">
+    <div className="fixed bottom-6 end-6 z-[100] flex flex-col gap-2.5 max-w-md w-full pointer-events-none" data-arabic-ui="aggressive">
       {toasts.map(toast => {
         const icon = {
           success: <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />,

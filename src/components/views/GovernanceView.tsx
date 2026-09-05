@@ -325,8 +325,8 @@ export const GovernanceView: React.FC = () => {
                   </div>
                 )}
                 {isDecider && r.requestedBy === currentUser.id && (
-                  <span className="text-[10px] text-zinc-500 shrink-0">
-                    {language === 'ar' ? 'بانتظار شخص آخر' : 'Awaiting a different approver'}
+                  <span className="text-[10px] text-zinc-500 shrink-0 max-w-[160px] text-end">
+                    {language === 'ar' ? 'بانتظار موافقة مستخدم آخر مخوّل -- لا يمكنك الموافقة على طلبك الخاص' : "Awaiting approval from another authorized user -- you can't approve your own request"}
                   </span>
                 )}
               </div>

@@ -133,7 +133,7 @@ export const LeaseToOwnView: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex gap-1.5">
+      <div className="flex gap-1.5 flex-wrap">
         {(['applications', 'agreements'] as const).map(t => (
           <button
             key={t}

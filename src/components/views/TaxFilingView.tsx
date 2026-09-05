@@ -212,7 +212,7 @@ export const TaxFilingView: React.FC = () => {
                       <button disabled={busyKey === a.id} onClick={() => decideApproval(a, 'rejected')} className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 disabled:opacity-50" title={isAr ? 'رفض' : 'Reject'}><X className="w-3.5 h-3.5" /></button>
                     </div>
                   )}
-                  {isDecider && a.requestedBy === currentUser.id && <span className="text-[10px] text-zinc-500 shrink-0">{isAr ? 'بانتظار شخص آخر' : 'Awaiting a different approver'}</span>}
+                  {isDecider && a.requestedBy === currentUser.id && <span className="text-[10px] text-zinc-500 shrink-0 max-w-[160px] text-end">{isAr ? 'بانتظار موافقة مستخدم آخر مخوّل -- لا يمكنك الموافقة على طلبك الخاص' : "Awaiting approval from another authorized user -- you can't approve your own request"}</span>}
                 </div>
               ))}
             </div>
