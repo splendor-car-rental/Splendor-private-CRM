@@ -350,6 +350,32 @@ export const QuotationsView: React.FC = () => {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Daily Rate (AED)</label>
+              <input
+                type="number"
+                min="0"
+                value={form.dailyRate}
+                onChange={(e) => setForm({ ...form, dailyRate: Math.max(0, Number(e.target.value)) })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+              />
+              <p className="text-[10px] text-zinc-500 mt-1">
+                Pre-filled from the vehicle's listed rate -- freely editable for a negotiated, seasonal, or monthly-corporate price.
+              </p>
+            </div>
+            <div>
+              <label className="block text-zinc-400 font-medium mb-1">Security Deposit (AED)</label>
+              <input
+                type="number"
+                min="0"
+                value={form.securityDeposit}
+                onChange={(e) => setForm({ ...form, securityDeposit: Math.max(0, Number(e.target.value)) })}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-zinc-400 font-medium mb-1">Start Date</label>

@@ -281,12 +281,19 @@ app.use('/api', (req, res, next) => {
   return requireAuth(req, res, next);
 });
 
-// Vercel starts handling requests as soon as this module is imported. The
-// previous cold-start path launched Firestore hydration in the background,
-// so fleet mutations and availability checks could observe DataStore's
-// initial [] before the real vehicles query completed. Fleet requests now
-// wait for one shared hydration promise. A failed hydration fails closed
-// with 503 and is retryable; it is never represented as an empty fleet.
+// Vercel starts handling requests as soon as this module is imported. On a
+// cold start, hydrateStoreFromFirestore() below runs in the background
+// (fire-and-forget -- see the bottom of this file), so any request routed to
+// that fresh instance before hydration finishes would otherwise read
+// DataStore's initial [] for every collection, not just vehicles: customers,
+// contracts, reservations, quotations, everything. This was originally
+// scoped to only /fleet, which fixed vehicle availability checks but left
+// every other collection racy on a cold instance (e.g. a freshly-added
+// customer intermittently missing from /api/customers depending on which
+// Lambda instance served the request). Every /api request now waits for the
+// same shared hydration promise; a failed hydration fails closed with 503
+// and is retryable, never silently represented as empty data. /health stays
+// exempt so monitoring can always tell a cold instance from a truly down one.
 let storeHydrationPromise: Promise<void> | null = null;
 function ensureStoreHydrated(): Promise<void> {
   if (!storeHydrationPromise) {
@@ -299,7 +306,7 @@ function ensureStoreHydrated(): Promise<void> {
 }
 
 app.use('/api', async (req, res, next) => {
-  if (!req.path.startsWith('/fleet')) return next();
+  if (req.path === '/health') return next();
 
   if (admin.apps.length === 0) {
     return res.status(503).json({ error: 'CRM persistence is not configured.' });
