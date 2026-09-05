@@ -9,6 +9,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { Lead, LeadStatus } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { PhoneText } from '../common/PhoneText';
 
 export const LeadsPipelineView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -137,7 +138,7 @@ export const LeadsPipelineView: React.FC = () => {
                     </div>
 
                     <div className="text-[11px] text-zinc-400 space-y-1">
-                      <p className="truncate flex items-center gap-1"><Phone className="w-3 h-3 text-zinc-500" /> {lead.phone}</p>
+                      <p className="truncate flex items-center gap-1"><Phone className="w-3 h-3 text-zinc-500" /> <PhoneText value={lead.phone} /></p>
                       <p className="truncate font-semibold text-zinc-300">{(lead.estimatedValue || 0).toLocaleString()} AED</p>
                     </div>
 

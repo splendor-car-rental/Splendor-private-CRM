@@ -72,6 +72,7 @@ const INDIVIDUAL_PRESETS = [
 
 const EMPTY_INDIVIDUAL_FORM = {
   fullName: '',
+  fullNameEn: '',
   nationality: 'Emirati',
   idType: 'emirates_id' as 'emirates_id' | 'passport' | 'gcc_id',
   idNumber: '',
@@ -207,6 +208,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
       const payload: Partial<Customer> = {
         type: form.isVIP ? 'vip' : 'individual',
         fullName: form.fullName.trim(),
+        fullNameEn: form.fullNameEn.trim() || undefined,
         nationality: form.nationality,
         idType: form.idType,
         idNumber: form.idNumber.trim(),
@@ -422,13 +424,23 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onCl
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-xs font-medium text-zinc-300 mb-1.5">{isAr ? 'الاسم الكامل' : 'Full Name'} *</label>
             <input
               type="text" required value={form.fullName}
               onChange={e => handleFieldChange('fullName', e.target.value)}
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
               placeholder="e.g. H.E. Sheikh Mansoor Al Qasimi"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-300 mb-1.5">{isAr ? 'الاسم باللغة الإنجليزية' : 'Name (English)'}</label>
+            <input
+              type="text" value={form.fullNameEn}
+              onChange={e => handleFieldChange('fullNameEn', e.target.value)}
+              dir="ltr"
+              className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none"
+              placeholder="e.g. Mansoor Al Qasimi"
             />
           </div>
           <div className="flex items-end pb-2">

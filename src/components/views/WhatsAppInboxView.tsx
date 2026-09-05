@@ -7,6 +7,7 @@ import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { PhoneNumberInput } from '../common/PhoneNumberInput';
+import { PhoneText } from '../common/PhoneText';
 import { formatTime } from '../../lib/dateFormat';
 import type { WhatsAppConversation, WhatsAppConversationMessage, WhatsAppConversationState, WhatsAppConversationPriority } from '../../types';
 
@@ -287,7 +288,7 @@ export const WhatsAppInboxView: React.FC = () => {
                   <div>
                     <p className="text-sm font-bold text-zinc-100">{thread.customerName || thread.phone}</p>
                     <p className="text-[10px] text-zinc-500">
-                      +{thread.phone} {thread.customerId ? `· ${thread.customerId}` : ''} {thread.lastReservationId ? `· ${thread.lastReservationId}` : ''}
+                      <PhoneText value={`+${thread.phone}`} /> {thread.customerId ? `· ${thread.customerId}` : ''} {thread.lastReservationId ? `· ${thread.lastReservationId}` : ''}
                       {thread.customerMatchStatus === 'ambiguous_review' && (
                         <span className="text-rose-400 ms-1">{isAr ? '(تطابق غير مؤكد - يحتاج مراجعة)' : '(ambiguous match - needs review)'}</span>
                       )}

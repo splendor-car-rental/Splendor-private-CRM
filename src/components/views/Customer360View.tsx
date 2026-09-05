@@ -11,6 +11,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { CRMDocument } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { PhoneText } from '../common/PhoneText';
 import { AiConfidenceBadge } from '../common/AiConfidenceBadge';
 import { KycManagerCard } from '../common/KycManagerCard';
 import { AddCustomerModal } from '../modals/AddCustomerModal';
@@ -299,7 +300,7 @@ export const Customer360View: React.FC = () => {
                           <h4 className="text-sm font-semibold text-zinc-200 truncate">{customer.fullName}</h4>
                           {customer.isVIP && <Badge variant="gold" size="sm">VIP</Badge>}
                         </div>
-                        <p className="text-xs text-zinc-400 truncate mt-0.5">{customer.phone}</p>
+                        <p className="text-xs text-zinc-400 truncate mt-0.5"><PhoneText value={customer.phone} /></p>
                       </div>
                       <span className="text-[10px] font-mono text-zinc-400">{customer.id}</span>
                     </div>
@@ -334,6 +335,9 @@ export const Customer360View: React.FC = () => {
                       {(activeCustomer.status || 'ACTIVE').toUpperCase()}
                     </Badge>
                   </div>
+                  {activeCustomer.fullNameEn && (
+                    <p className="text-xs text-zinc-500 mt-0.5" dir="ltr">{activeCustomer.fullNameEn}</p>
+                  )}
                   <p className="text-xs text-zinc-400 mt-1 flex items-center gap-3">
                     <span>{activeCustomer.id}</span>
                     <span>•</span>
@@ -474,7 +478,7 @@ export const Customer360View: React.FC = () => {
                   <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2.5">
                     <h4 className="text-xs uppercase font-bold text-zinc-400 tracking-wider">Contact Coordinates</h4>
                     <div className="text-xs text-zinc-300 space-y-1.5">
-                      <p className="flex items-center gap-2"><Phone className="w-3.5 h-3.5 text-[#D4AF37]" /> {activeCustomer.phone}</p>
+                      <p className="flex items-center gap-2"><Phone className="w-3.5 h-3.5 text-[#D4AF37]" /> <PhoneText value={activeCustomer.phone} /></p>
                       <p className="flex items-center gap-2"><Mail className="w-3.5 h-3.5 text-[#D4AF37]" /> {activeCustomer.email}</p>
                       <p className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-[#D4AF37]" /> {activeCustomer.address}, {activeCustomer.city}, {activeCustomer.country}</p>
                     </div>

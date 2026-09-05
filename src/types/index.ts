@@ -146,6 +146,7 @@ export interface Customer {
   type: CustomerType;
   fullName: string;
   fullNameAr?: string;
+  fullNameEn?: string;
   companyName?: string;
   email: string;
   phone: string;
