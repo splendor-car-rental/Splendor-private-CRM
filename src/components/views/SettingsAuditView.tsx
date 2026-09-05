@@ -75,10 +75,10 @@ export const SettingsAuditView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveTab('general')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
             activeTab === 'general' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -86,7 +86,7 @@ export const SettingsAuditView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('roles')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
             activeTab === 'roles' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -94,7 +94,7 @@ export const SettingsAuditView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('audit')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
             activeTab === 'audit' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -105,30 +105,30 @@ export const SettingsAuditView: React.FC = () => {
             setActiveTab('connect');
             if (reconciliationReport.length === 0) loadReconciliation();
           }}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
             activeTab === 'connect' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <Globe className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
           <span>{language === 'ar' ? 'ربط الموقع العام (SPLENDOR Connect)' : 'SPLENDOR Connect & Website Sync'}</span>
         </button>
         <button
           onClick={() => setActiveTab('governance')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
             activeTab === 'governance' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <Shield className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
           <span>{language === 'ar' ? 'الحوكمة والموافقات' : 'Governance & Approvals'}</span>
         </button>
         {isAdmin && (
           <button
             onClick={() => setActiveTab('security')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'security' ? 'bg-[#D4AF37]/15 text-[#f5d97f] border border-[#D4AF37]/30' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            <Shield className="w-3.5 h-3.5 text-[#D4AF37]" />
+            <Shield className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
             <span>{language === 'ar' ? 'أمان الحساب (2FA)' : 'Account Security (2FA)'}</span>
           </button>
         )}

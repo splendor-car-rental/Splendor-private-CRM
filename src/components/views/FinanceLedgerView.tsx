@@ -166,10 +166,10 @@ export const FinanceLedgerView: React.FC<FinanceLedgerViewProps> = ({ autoOpenPa
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveTab('invoices')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
             activeTab === 'invoices' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -177,7 +177,7 @@ export const FinanceLedgerView: React.FC<FinanceLedgerViewProps> = ({ autoOpenPa
         </button>
         <button
           onClick={() => setActiveTab('deposits')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
             activeTab === 'deposits' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -185,7 +185,7 @@ export const FinanceLedgerView: React.FC<FinanceLedgerViewProps> = ({ autoOpenPa
         </button>
         <button
           onClick={() => setActiveTab('payments')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
             activeTab === 'payments' ? 'bg-zinc-800 text-[#f5d97f] border border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >

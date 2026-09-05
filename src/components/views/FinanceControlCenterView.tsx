@@ -475,7 +475,7 @@ export const FinanceControlCenterView: React.FC = () => {
                     <button disabled={workingId === r.id} onClick={() => decideManualJournalRequest(r.id, 'reject')} className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-300">رفض</button>
                   </div>
                 ) : (
-                  <span className="text-[10px] text-zinc-500 shrink-0">بانتظار شخص آخر مخوّل</span>
+                  <span className="text-[10px] text-zinc-500 shrink-0 max-w-[160px] text-end">بانتظار موافقة مستخدم آخر مخوّل -- لا يمكنك الموافقة على طلبك الخاص</span>
                 )}
               </div>
             ))}
