@@ -29,6 +29,7 @@ import type {
   AccountingPeriod,
   AccountsPayableEntry,
   AccountsPayablePayment,
+  CashFlowForecast,
   FinanceDashboardSummary,
   FinanceExpense,
   FinancialNote,
@@ -1249,6 +1250,36 @@ export async function getFinanceDashboard(): Promise<FinanceDashboardSummary> {
     securityDepositsHeld,
     unpostedSourceCount: gaps.length,
     closedPeriodCount: periods.filter(period => period.status === 'closed').length
+  };
+}
+
+export async function getCashFlowForecast(horizonDays = 30): Promise<CashFlowForecast> {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const horizonEndDate = new Date(now.getTime() + horizonDays * 86_400_000).toISOString().slice(0, 10);
+  const [dashboard, invoices, payables] = await Promise.all([
+    getFinanceDashboard(),
+    collectionData<Invoice>('invoices'),
+    listPayables()
+  ]);
+  const dueWithinHorizon = (dueDate: string) => !!dueDate && dueDate <= horizonEndDate;
+  const isOverdue = (dueDate: string) => !!dueDate && dueDate < today;
+  const openInvoices = invoices.filter(invoice => ['unpaid', 'partially_paid', 'overdue'].includes(invoice.status));
+  const openPayables = payables.filter(payable => ['unpaid', 'partially_paid'].includes(payable.status));
+  const expectedInflows = money(openInvoices.filter(invoice => dueWithinHorizon(invoice.dueDate)).reduce((sum, invoice) => sum + Math.max(0, invoice.balanceDue || 0), 0));
+  const expectedOutflows = money(openPayables.filter(payable => dueWithinHorizon(payable.dueDate)).reduce((sum, payable) => sum + Math.max(0, payable.balance || 0), 0));
+  const overdueInflows = money(openInvoices.filter(invoice => isOverdue(invoice.dueDate)).reduce((sum, invoice) => sum + Math.max(0, invoice.balanceDue || 0), 0));
+  const overdueOutflows = money(openPayables.filter(payable => isOverdue(payable.dueDate)).reduce((sum, payable) => sum + Math.max(0, payable.balance || 0), 0));
+  return {
+    asOf: today,
+    horizonDays,
+    horizonEndDate,
+    currentCash: dashboard.cashPosition,
+    expectedInflows,
+    expectedOutflows,
+    overdueInflows,
+    overdueOutflows,
+    projectedClosingCash: money(dashboard.cashPosition + expectedInflows - expectedOutflows)
   };
 }
 

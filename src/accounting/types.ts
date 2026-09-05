@@ -367,6 +367,18 @@ export interface FinanceDashboardSummary {
   closedPeriodCount: number;
 }
 
+export interface CashFlowForecast {
+  asOf: string;
+  horizonDays: number;
+  horizonEndDate: string;
+  currentCash: number;
+  expectedInflows: number;
+  expectedOutflows: number;
+  overdueInflows: number;
+  overdueOutflows: number;
+  projectedClosingCash: number;
+}
+
 export interface PostingGap {
   sourceType: string;
   sourceId: string;

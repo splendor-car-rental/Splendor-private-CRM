@@ -345,6 +345,40 @@ describe('handleAccountingRequest -- dispatcher routing to the correct engine fu
     expect(Array.isArray(gaps.body)).toBe(true);
   });
 
+  it('GET /api/accounting/executive-dashboard combines the finance dashboard, cash-flow forecast, and vehicle profitability leaders for the Executive KPI Dashboard, and is CEO/admin-only', async () => {
+    const inHorizon = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
+    const beyondHorizon = new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10);
+    seedDoc('invoices', 'INV-CFF-1', {
+      id: 'INV-CFF-1', customerId: 'CUST-CFF-1', customerName: 'Cash Flow Forecast Customer',
+      issueDate: '2026-09-01', dueDate: inHorizon, subtotal: 300, vatAmount: 0, totalAmount: 300,
+      paidAmount: 0, balanceDue: 300, status: 'unpaid', items: [], createdAt: '2026-09-01', updatedAt: '2026-09-01'
+    });
+    seedDoc('invoices', 'INV-CFF-2', {
+      id: 'INV-CFF-2', customerId: 'CUST-CFF-2', customerName: 'Beyond Horizon Customer',
+      issueDate: '2026-09-01', dueDate: beyondHorizon, subtotal: 900, vatAmount: 0, totalAmount: 900,
+      paidAmount: 0, balanceDue: 900, status: 'unpaid', items: [], createdAt: '2026-09-01', updatedAt: '2026-09-01'
+    });
+    seedDoc('accounting_payables', 'AP-CFF-1', {
+      id: 'AP-CFF-1', supplierInvoiceId: 'SINV-CFF-1', supplierId: 'SUP-CFF-1', supplierName: 'Cash Flow Forecast Supplier',
+      invoiceNumber: 'INV-SUP-CFF-1', invoiceDate: '2026-09-01', dueDate: inHorizon, expenseAccountCode: '5170',
+      amountBeforeVat: 200, vatAmount: 0, totalAmount: 200, paidAmount: 0, balance: 200, status: 'unpaid',
+      journalId: 'JRN-SEED-CFF', createdAt: '2026-09-01', updatedAt: '2026-09-01'
+    });
+
+    const res = await call(CEO_ACTOR, 'GET', '/api/accounting/executive-dashboard');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.dashboard).toHaveProperty('cashPosition');
+    expect(res.body.cashFlowForecast.horizonDays).toBe(30);
+    expect(res.body.cashFlowForecast.expectedInflows).toBeGreaterThanOrEqual(300);
+    expect(res.body.cashFlowForecast.expectedInflows).toBeLessThan(1200); // the beyond-horizon invoice must be excluded
+    expect(res.body.cashFlowForecast.expectedOutflows).toBeGreaterThanOrEqual(200);
+    expect(Array.isArray(res.body.topVehicles)).toBe(true);
+    expect(Array.isArray(res.body.bottomVehicles)).toBe(true);
+
+    const financeAttempt = await call(FINANCE_ACTOR, 'GET', '/api/accounting/executive-dashboard');
+    expect(financeAttempt.statusCode).toBe(403);
+  });
+
   it('GET /api/accounting/financial-notes lists credit/debit notes', async () => {
     seedDoc('accounting_financial_notes', 'CRN-1', { id: 'CRN-1', type: 'credit_note', invoiceId: 'INV-1', issueDate: '2026-09-01' });
     const res = await call(FINANCE_ACTOR, 'GET', '/api/accounting/financial-notes');

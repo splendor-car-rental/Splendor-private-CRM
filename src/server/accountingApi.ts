@@ -7,6 +7,7 @@ import {
   decideFinanceExpense,
   decideManualJournal,
   getAPAging,
+  getCashFlowForecast,
   getARAging,
   getCustomerAccountingStatement,
   getEffectiveChartOfAccounts,
@@ -137,6 +138,26 @@ export async function handleAccountingRequest(req: Request, res: Response, actor
     if ((resource === undefined || resource === 'dashboard') && req.method === 'GET') {
       const [dashboard, gaps] = await Promise.all([getFinanceDashboard(), getExtendedPostingGaps()]);
       return res.json({ ...dashboard, unpostedSourceCount: gaps.length });
+    }
+
+    if (resource === 'executive-dashboard' && req.method === 'GET') {
+      assertExecutiveActor(actor);
+      const horizonDays = Number(req.query.horizonDays) || 30;
+      const [dashboard, gaps, vehicleProfitability, cashFlowForecast] = await Promise.all([
+        getFinanceDashboard(),
+        getExtendedPostingGaps(),
+        getVehicleProfitability(),
+        getCashFlowForecast(horizonDays)
+      ]);
+      const rankedVehicles = [...vehicleProfitability].sort((a, b) => b.netProfit - a.netProfit);
+      const topVehicles = rankedVehicles.slice(0, 5);
+      const bottomVehicles = rankedVehicles.slice(5).slice(-5).reverse();
+      return res.json({
+        dashboard: { ...dashboard, unpostedSourceCount: gaps.length },
+        cashFlowForecast,
+        topVehicles,
+        bottomVehicles
+      });
     }
 
     if (resource === 'chart-of-accounts') {
