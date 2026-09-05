@@ -4,7 +4,7 @@ import {
   CalendarCheck, FileSignature, Receipt, Landmark, CheckSquare,
   Sparkles, ShieldCheck, ShieldAlert, Settings, LogOut, KeyRound, X, Camera,
   TicketCheck, BellRing, Truck, ClipboardCheck, MessageCircle, KeySquare, Crown, Calculator, Radio,
-  Activity, Building2, ClipboardList, Gauge
+  Activity, Building2, ClipboardList, Gauge, Undo2
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -259,6 +259,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onMobileClose })
           icon: <ShieldCheck className="w-4 h-4 text-emerald-400" />,
           badge: language === 'ar' ? '12/12 ناجح' : '12/12 Passed',
           badgeVariant: 'emerald' as const
+        },
+        {
+          id: 'corrections-center',
+          label: language === 'ar' ? 'مركز التصحيحات' : 'Corrections Center',
+          icon: <Undo2 className="w-4 h-4 text-amber-400" />,
+          badge: language === 'ar' ? 'تنفيذي' : 'Exec',
+          badgeVariant: 'amber' as const
         },
         {
           id: 'settings',

@@ -191,7 +191,6 @@ interface CRMContextType {
 
   // Management Granular Deletion Engine (CEO & Admin only)
   deleteContract: (id: string, reason?: string) => Promise<void>;
-  deleteVehicle: (id: string, reason?: string) => Promise<void>;
   deleteCustomer: (id: string, reason?: string) => Promise<void>;
   deleteLead: (id: string, reason?: string) => Promise<void>;
   deleteQuotation: (id: string, reason?: string) => Promise<void>;
@@ -1475,22 +1474,6 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Contract Deleted', `Contract ${id} has been permanently deleted.`);
   };
 
-  const deleteVehicle = async (id: string, reason?: string) => {
-    const res = await fetch(`/api/fleet/${id}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason })
-    });
-    try {
-      await parseApiResponse(res, 'Failed to delete vehicle.');
-    } catch (err: any) {
-      showToast('Deletion Failed', err.message, 'error');
-      throw err;
-    }
-    setVehicles(prev => prev.filter(v => v.id !== id));
-    showToast('Vehicle Deleted', `Vehicle ${id} removed from fleet.`);
-  };
-
   const deleteCustomer = async (id: string, reason?: string) => {
     const res = await fetch(`/api/customers/${id}`, {
       method: 'DELETE',
@@ -1721,7 +1704,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchData, showToast, toasts, dismissToast,
       addCustomer, updateCustomer, mergeCustomers, checkDuplicateCustomer, deleteCustomer,
       addLead, updateLead, convertLeadToCustomer, deleteLead,
-      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability, deleteVehicle,
+      addVehicle, updateVehicle, assignPlate, publishToWebsite, updateLifecycleStatus, getReconciliationReport, checkVehicleAvailability,
       createQuotation, convertQuotationToReservation, deleteQuotation,
       createReservation, createContractFromReservation, createContract, deleteReservation, deleteContract,
       addCorporateAccount, updateCorporateAccount, deleteCorporateAccount,
