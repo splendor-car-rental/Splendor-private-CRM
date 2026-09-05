@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { 
-  Car, Plus, Search, Calendar, AlertTriangle, Gauge, Zap, Fuel, 
-  CheckCircle2, BarChart3, Filter, Sparkles, SlidersHorizontal 
+import {
+  Car, Plus, Search, Calendar, AlertTriangle, Gauge, Zap, Fuel,
+  CheckCircle2, BarChart3, Filter, Sparkles, SlidersHorizontal, Wrench
 } from 'lucide-react';
 import { useCRM } from '../../context/CRMContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -17,6 +17,7 @@ export const FleetCRMView: React.FC = () => {
   const { vehicles, contracts, reservations, checkVehicleAvailability, selectedVehicleId, setSelectedVehicleId } = useCRM();
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [maintenanceDueOnly, setMaintenanceDueOnly] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [availabilityModalOpen, setAvailabilityModalOpen] = useState(false);
@@ -32,13 +33,16 @@ export const FleetCRMView: React.FC = () => {
     setAvailResult(await checkVehicleAvailability(testVehicleId, testStartDate, testEndDate));
   };
 
+  const maintenanceDueCount = vehicles.filter(v => v.maintenanceStatus === 'due_soon' || v.maintenanceStatus === 'in_service').length;
+
   const filteredVehicles = vehicles.filter(v => {
     const s = searchTerm.toLowerCase();
-    const matchesSearch = `${v.make || ''} ${v.model || ''}`.toLowerCase().includes(s) || 
-      (v.plateNumber || '').toLowerCase().includes(s) || 
+    const matchesSearch = `${v.make || ''} ${v.model || ''}`.toLowerCase().includes(s) ||
+      (v.plateNumber || '').toLowerCase().includes(s) ||
       (v.vin || '').toLowerCase().includes(s) ||
       (v.exteriorColor || '').toLowerCase().includes(s);
-    return matchesSearch && (categoryFilter === 'all' || v.category === categoryFilter) && (statusFilter === 'all' || v.status === statusFilter);
+    const matchesMaintenance = !maintenanceDueOnly || v.maintenanceStatus === 'due_soon' || v.maintenanceStatus === 'in_service';
+    return matchesSearch && matchesMaintenance && (categoryFilter === 'all' || v.category === categoryFilter) && (statusFilter === 'all' || v.status === statusFilter);
   });
 
   const categoryFilters = [
@@ -63,6 +67,7 @@ export const FleetCRMView: React.FC = () => {
     { label: isAr ? 'عقود نشطة' : 'Active Contracts', value: metrics.activeContracts, icon: Gauge },
     { label: isAr ? 'حجوزات قادمة' : 'Upcoming', value: metrics.upcomingReservations, icon: Calendar },
     { label: isAr ? 'تحت الصيانة' : 'Maintenance', value: metrics.maintenance, icon: AlertTriangle },
+    { label: isAr ? 'مستحقة صيانة قريباً' : 'Due for Service', value: maintenanceDueCount, icon: Wrench, highlight: maintenanceDueCount > 0 },
   ];
 
   return (
@@ -108,16 +113,27 @@ export const FleetCRMView: React.FC = () => {
       </div>
 
       {/* KPI Cards - Royal Blue Accents */}
-      <section aria-label="Fleet Command KPIs" className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-        {kpis.map(({ label, value, icon: Icon }) => (
-          <div key={label} className="rounded-2xl bg-gradient-to-br from-[#071328]/90 to-zinc-950 border border-blue-900/40 p-3.5 shadow-lg">
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[10px] uppercase tracking-wider text-blue-300/80 font-semibold truncate">{label}</span>
-              <Icon className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-            </div>
-            <p className="mt-2 text-xl font-display font-bold text-white">{value}</p>
-          </div>
-        ))}
+      <section aria-label="Fleet Command KPIs" className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-9 gap-3">
+        {kpis.map(({ label, value, icon: Icon, highlight }) => {
+          const isMaintenanceCard = label === (isAr ? 'مستحقة صيانة قريباً' : 'Due for Service');
+          const cardClasses = highlight
+            ? 'rounded-2xl bg-gradient-to-br from-amber-950/60 to-zinc-950 border border-amber-500/50 p-3.5 shadow-lg'
+            : 'rounded-2xl bg-gradient-to-br from-[#071328]/90 to-zinc-950 border border-blue-900/40 p-3.5 shadow-lg';
+          return (
+            <button
+              key={label}
+              type="button"
+              onClick={isMaintenanceCard ? () => setMaintenanceDueOnly(prev => !prev) : undefined}
+              className={`${cardClasses} text-start ${isMaintenanceCard ? 'cursor-pointer' : 'cursor-default'} ${maintenanceDueOnly && isMaintenanceCard ? 'ring-2 ring-amber-400' : ''}`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${highlight ? 'text-amber-300/90' : 'text-blue-300/80'}`}>{label}</span>
+                <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${highlight ? 'text-amber-400' : 'text-blue-400'}`} />
+              </div>
+              <p className="mt-2 text-xl font-display font-bold text-white">{value}</p>
+            </button>
+          );
+        })}
       </section>
 
       {/* Filter and Search Bar - Royal Blue */}
@@ -201,10 +217,20 @@ export const FleetCRMView: React.FC = () => {
                   {vehicle.plateCity} {vehicle.plateNumber}
                 </div>
                 
-                <div className="absolute top-3 right-3">
+                <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
                   {statusBadge}
+                  {vehicle.maintenanceStatus === 'due_soon' && (
+                    <Badge variant="amber" size="sm">
+                      <span className="flex items-center gap-1"><Wrench className="w-3 h-3" /> {isAr ? 'صيانة مستحقة' : 'Service Due'}</span>
+                    </Badge>
+                  )}
+                  {vehicle.maintenanceStatus === 'in_service' && (
+                    <Badge variant="rose" size="sm">
+                      <span className="flex items-center gap-1"><Wrench className="w-3 h-3" /> {isAr ? 'في الورشة' : 'In Workshop'}</span>
+                    </Badge>
+                  )}
                 </div>
-                
+
                 <div className="absolute bottom-3 left-4 right-4">
                   <h3 className="text-lg font-display font-bold text-white group-hover:text-blue-300 transition-colors">
                     {vehicle.make} {vehicle.model}
