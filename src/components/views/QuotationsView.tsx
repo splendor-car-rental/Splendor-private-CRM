@@ -13,6 +13,15 @@ import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { OfficialQuotationPrintModal } from '../operations/OfficialQuotationPrintModal';
 import { downloadElementAsPdf } from '../../lib/pdfDownloader';
 
+// Default payment/supply/extension/deposit/cancellation terms pre-filled into
+// every new quotation -- a starting draft the user asked for, never a locked
+// value: freely editable or removable per quotation, same as any other field.
+const DEFAULT_QUOTATION_TERMS = `١. الدفع: يُشترط سداد 50% من قيمة العقد كدفعة مقدمة لتأكيد الحجز، ويُستحق السداد الكامل للرصيد المتبقي عند استلام المركبة. لا يُعتبر الحجز مؤكدًا نهائيًا إلا بعد استلام الدفعة المقدمة.
+٢. التوريد والتسليم: يتم توريد المركبة بحالة فنية وجمالية ممتازة موثقة بمحضر تسليم مصوّر يوقّعه الطرفان.
+٣. التمديد: تُقدَّم طلبات تمديد مدة الإيجار قبل 24 ساعة على الأقل من تاريخ التسليم المقرر، وتخضع لتوفر المركبة وتُحتسب بذات الفئة السعرية للعقد الأصلي ما لم يُتفق على خلاف ذلك.
+٤. التأمين والمسؤولية: يبقى مبلغ التأمين النقدي محتجزًا طوال مدة العقد ضمانًا لأي أضرار أو مخالفات مرورية أو رسوم طرق تُسجَّل خلال فترة الإيجار، ويُرد بالكامل خلال 7 أيام عمل من تاريخ الإرجاع بعد فحص المركبة والتأكد من خلوّها من أي التزامات.
+٥. الإلغاء: يحق للعميل إلغاء الحجز مجانًا قبل 48 ساعة من موعد التسليم؛ ويُخصم 25% من الدفعة المقدمة كرسوم إدارية عند الإلغاء بعد ذلك، أو في حال عدم الحضور دون إشعار مسبق.`;
+
 export const QuotationsView: React.FC = () => {
   const { language, t } = useLanguage();
   const { 
@@ -41,7 +50,7 @@ export const QuotationsView: React.FC = () => {
     discountAmount: 0,
     validUntil: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0],
     notes: '',
-    termsAndConditions: ''
+    termsAndConditions: DEFAULT_QUOTATION_TERMS
   });
 
   const activeQuote = quotations.find(q => q.id === selectedQuotationId) || quotations[0];
@@ -85,7 +94,7 @@ export const QuotationsView: React.FC = () => {
       return;
     }
     setAddModalOpen(false);
-    setForm(prev => ({ ...prev, discountAmount: 0, notes: '', termsAndConditions: '' }));
+    setForm(prev => ({ ...prev, discountAmount: 0, notes: '', termsAndConditions: DEFAULT_QUOTATION_TERMS }));
     setSelectedQuotationId(created.id);
     setQuotationToPrint(created);
   };
