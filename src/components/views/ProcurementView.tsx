@@ -6,6 +6,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { PhoneText } from '../common/PhoneText';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
 import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver, Debt, DebtSettlementMovement, EmployeeCustody, EmployeeExpense, EmployeeExpenseFundingSource, User } from '../../types';
@@ -2418,8 +2419,13 @@ const SubmitExpenseModal: React.FC<{
             <input type="number" min={0.01} step="0.01" required value={amount} onChange={e => setAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
           </div>
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'التاريخ *' : 'Date *'}</label>
-            <input type="date" required value={date} onChange={e => setDate(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+            <DayMonthYearDateInput
+              label={language === 'ar' ? 'التاريخ' : 'Date'}
+              required
+              value={date}
+              onChange={setDate}
+              isAr={language === 'ar'}
+            />
           </div>
         </div>
         <div>

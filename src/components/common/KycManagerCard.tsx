@@ -7,6 +7,7 @@ import {
 import { Customer, CustomerKycProfile, CustomerKycCategory, KycDocument, DocumentCategory, KycStatus } from '../../types';
 import { Badge } from './Badge';
 import { Modal } from './Modal';
+import { DayMonthYearDateInput } from './DayMonthYearDateInput';
 import { REQUIRED_DOCUMENTS_MAP } from '../../config/kycDocuments';
 import { formatDate } from '../../lib/dateFormat';
 import { apiFetch } from '../../lib/apiFetch';
@@ -531,12 +532,11 @@ export const KycManagerCard: React.FC<KycManagerCardProps> = ({
             {/* Document metadata fields */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs font-semibold text-zinc-400">{isAr ? 'تاريخ انتهاء المستند' : 'Document Expiry Date'}</label>
-                <input
-                  type="date"
+                <DayMonthYearDateInput
+                  label={isAr ? 'تاريخ انتهاء المستند' : 'Document Expiry Date'}
                   value={docExpiryDate}
-                  onChange={(e) => setDocExpiryDate(e.target.value)}
-                  className="w-full mt-1 px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                  onChange={setDocExpiryDate}
+                  isAr={isAr}
                 />
               </div>
               <div>

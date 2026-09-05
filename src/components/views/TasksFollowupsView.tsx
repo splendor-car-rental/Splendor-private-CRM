@@ -10,6 +10,7 @@ import { Task, TaskPriority } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 
 export const TasksFollowupsView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -242,12 +243,11 @@ export const TasksFollowupsView: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-zinc-400 font-medium mb-1">Due Date</label>
-            <input
-              type="date"
+            <DayMonthYearDateInput
+              label={language === 'ar' ? 'تاريخ الاستحقاق' : 'Due Date'}
               value={form.dueDate}
-              onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-              className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+              onChange={(iso) => setForm({ ...form, dueDate: iso })}
+              isAr={language === 'ar'}
             />
           </div>
 

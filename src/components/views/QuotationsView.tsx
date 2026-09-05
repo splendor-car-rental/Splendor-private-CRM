@@ -9,6 +9,7 @@ import { Quotation } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatDate } from '../../lib/dateFormat';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { OfficialQuotationPrintModal } from '../operations/OfficialQuotationPrintModal';
 import { downloadElementAsPdf } from '../../lib/pdfDownloader';
 
@@ -388,21 +389,19 @@ export const QuotationsView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Start Date</label>
-              <input
-                type="date"
+              <DayMonthYearDateInput
+                label={language === 'ar' ? 'تاريخ البداية' : 'Start Date'}
                 value={form.startDate.split('T')[0]}
-                onChange={(e) => setForm({ ...form, startDate: e.target.value + 'T10:00:00Z' })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+                onChange={(iso) => setForm({ ...form, startDate: iso + 'T10:00:00Z' })}
+                isAr={language === 'ar'}
               />
             </div>
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">End Date</label>
-              <input
-                type="date"
+              <DayMonthYearDateInput
+                label={language === 'ar' ? 'تاريخ النهاية' : 'End Date'}
                 value={form.endDate.split('T')[0]}
-                onChange={(e) => setForm({ ...form, endDate: e.target.value + 'T10:00:00Z' })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100"
+                onChange={(iso) => setForm({ ...form, endDate: iso + 'T10:00:00Z' })}
+                isAr={language === 'ar'}
               />
             </div>
             <div>
