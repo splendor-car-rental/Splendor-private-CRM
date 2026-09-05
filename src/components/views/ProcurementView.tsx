@@ -523,7 +523,7 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1.5 border-b border-zinc-800/80 pb-0.5">
+      <div className="flex items-center gap-1.5 border-b border-zinc-800/80 pb-0.5 overflow-x-auto no-scrollbar">
         {[
           { id: 'purchase-orders', label: language === 'ar' ? 'أوامر التوريد' : 'Purchase Orders', icon: <ClipboardList className="w-3.5 h-3.5" /> },
           { id: 'suppliers', label: language === 'ar' ? 'الموردون' : 'Suppliers', icon: <Truck className="w-3.5 h-3.5" /> },
@@ -536,7 +536,7 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
           <button
             key={item.id}
             onClick={() => setTab(item.id as any)}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg font-medium transition-colors border-b-2 ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg font-medium transition-colors border-b-2 whitespace-nowrap shrink-0 ${
               tab === item.id ? 'border-[#D4AF37] text-[#f5d97f]' : 'border-transparent text-zinc-500 hover:text-zinc-300'
             }`}
           >
