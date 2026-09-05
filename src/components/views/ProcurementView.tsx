@@ -6,6 +6,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { PhoneText } from '../common/PhoneText';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
 import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
@@ -1347,8 +1348,13 @@ const NewSupplierModal: React.FC<{ isOpen: boolean; onClose: () => void; onCreat
           <input value={tradeLicenseNumber} onChange={e => setTradeLicenseNumber(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
         </div>
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الهاتف *' : 'Phone *'}</label>
-          <input required value={phone} onChange={e => setPhone(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <PhoneNumberInput
+            label={language === 'ar' ? 'رقم الهاتف' : 'Phone'}
+            required
+            value={phone}
+            onChange={setPhone}
+            isAr={language === 'ar'}
+          />
         </div>
         <p className="text-zinc-500">
           {language === 'ar'

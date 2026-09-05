@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { AuthenticatedImage } from '../common/AuthenticatedImage';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../lib/apiFetch';
@@ -148,9 +149,7 @@ export const EditStaffModal: React.FC<EditStaffModalProps> = ({ isOpen, onClose,
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldPhone')}</label>
-            <input value={phone} onChange={e => setPhone(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-sm focus:outline-none focus:border-[#D4AF37]/60" />
+            <PhoneNumberInput label={t('staffFieldPhone')} value={phone} onChange={setPhone} isAr={language === 'ar'} />
           </div>
           <div>
             <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldBranch')}</label>

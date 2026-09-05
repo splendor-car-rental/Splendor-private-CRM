@@ -6,6 +6,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { CorporateAccount, CorporateAccountBranch } from '../../types';
 import { Modal } from '../common/Modal';
 import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
 import { SOVEREIGN_BRANCHES } from '../../config/branches';
 import { uploadFile, formatFileSize } from '../../lib/upload';
 
@@ -328,12 +329,12 @@ export const AddCorporateAccountModal: React.FC<AddCorporateAccountModalProps> =
               />
             </div>
             <div>
-              <label className="block text-zinc-400 mb-1">{isAr ? 'رقم الهاتف *' : 'Phone Number *'}</label>
-              <input
-                type="text" required value={form.primaryContact.phone}
-                onChange={e => setForm({ ...form, primaryContact: { ...form.primaryContact, phone: e.target.value } })}
-                placeholder="+971 50 000 0000"
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-zinc-100 focus:outline-none focus:border-blue-500 font-mono"
+              <PhoneNumberInput
+                label={isAr ? 'رقم الهاتف' : 'Phone Number'}
+                required
+                value={form.primaryContact.phone}
+                onChange={v => setForm({ ...form, primaryContact: { ...form.primaryContact, phone: v } })}
+                isAr={isAr}
               />
             </div>
             <div>
