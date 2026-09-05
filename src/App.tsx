@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -12,36 +12,47 @@ import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ArabicInterfaceGuard } from './components/common/ArabicInterfaceGuard';
 
-// Views
-import { DashboardView } from './components/views/DashboardView';
-import { Customer360View } from './components/views/Customer360View';
-import { LeadsPipelineView } from './components/views/LeadsPipelineView';
-import { FleetCRMView } from './components/views/FleetCRMView';
-import { QuotationsView } from './components/views/QuotationsView';
-import { ReservationsView } from './components/views/ReservationsView';
-import { ContractsOpsView } from './components/views/ContractsOpsView';
-import { FinanceControlCenterView } from './components/views/FinanceControlCenterView';
-import { TaxFilingView } from './components/views/TaxFilingView';
-import { BankReconciliationView } from './components/views/BankReconciliationView';
-import { TollsParkingView } from './components/views/TollsParkingView';
-import { NotificationWhatsAppCenterView } from './components/views/NotificationWhatsAppCenterView';
-import { TasksFollowupsView } from './components/views/TasksFollowupsView';
-import { AIStudioView } from './components/views/AIStudioView';
-import { TestSuiteRunnerView } from './components/views/TestSuiteRunnerView';
-import { SettingsAuditView } from './components/views/SettingsAuditView';
-import { ProcurementView } from './components/views/ProcurementView';
-import { SecurityBlocklistView } from './components/views/SecurityBlocklistView';
-import { VehicleInspectionsView } from './components/views/VehicleInspectionsView';
-import { WhatsAppInboxView } from './components/views/WhatsAppInboxView';
-import { LeaseToOwnView } from './components/views/LeaseToOwnView';
-import { CorporateDocumentsView } from './components/views/CorporateDocumentsView';
-import { VipTierManagementView } from './components/views/VipTierManagementView';
-import { FleetAcquisitionRoiView } from './components/views/FleetAcquisitionRoiView';
-import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelematicsMapView';
-import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
-import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
-import { ExecutiveDashboardView } from './components/views/ExecutiveDashboardView';
-import { CorrectionsCenterView } from './components/views/CorrectionsCenterView';
+// Views -- lazy-loaded so the browser only downloads the JS for the screen
+// currently open instead of one bundle containing all ~30 screens up front.
+const DashboardView = lazy(() => import('./components/views/DashboardView').then(m => ({ default: m.DashboardView })));
+const Customer360View = lazy(() => import('./components/views/Customer360View').then(m => ({ default: m.Customer360View })));
+const LeadsPipelineView = lazy(() => import('./components/views/LeadsPipelineView').then(m => ({ default: m.LeadsPipelineView })));
+const FleetCRMView = lazy(() => import('./components/views/FleetCRMView').then(m => ({ default: m.FleetCRMView })));
+const QuotationsView = lazy(() => import('./components/views/QuotationsView').then(m => ({ default: m.QuotationsView })));
+const ReservationsView = lazy(() => import('./components/views/ReservationsView').then(m => ({ default: m.ReservationsView })));
+const ContractsOpsView = lazy(() => import('./components/views/ContractsOpsView').then(m => ({ default: m.ContractsOpsView })));
+const FinanceControlCenterView = lazy(() => import('./components/views/FinanceControlCenterView').then(m => ({ default: m.FinanceControlCenterView })));
+const TaxFilingView = lazy(() => import('./components/views/TaxFilingView').then(m => ({ default: m.TaxFilingView })));
+const BankReconciliationView = lazy(() => import('./components/views/BankReconciliationView').then(m => ({ default: m.BankReconciliationView })));
+const TollsParkingView = lazy(() => import('./components/views/TollsParkingView').then(m => ({ default: m.TollsParkingView })));
+const NotificationWhatsAppCenterView = lazy(() => import('./components/views/NotificationWhatsAppCenterView').then(m => ({ default: m.NotificationWhatsAppCenterView })));
+const TasksFollowupsView = lazy(() => import('./components/views/TasksFollowupsView').then(m => ({ default: m.TasksFollowupsView })));
+const AIStudioView = lazy(() => import('./components/views/AIStudioView').then(m => ({ default: m.AIStudioView })));
+const TestSuiteRunnerView = lazy(() => import('./components/views/TestSuiteRunnerView').then(m => ({ default: m.TestSuiteRunnerView })));
+const SettingsAuditView = lazy(() => import('./components/views/SettingsAuditView').then(m => ({ default: m.SettingsAuditView })));
+const ProcurementView = lazy(() => import('./components/views/ProcurementView').then(m => ({ default: m.ProcurementView })));
+const SecurityBlocklistView = lazy(() => import('./components/views/SecurityBlocklistView').then(m => ({ default: m.SecurityBlocklistView })));
+const VehicleInspectionsView = lazy(() => import('./components/views/VehicleInspectionsView').then(m => ({ default: m.VehicleInspectionsView })));
+const WhatsAppInboxView = lazy(() => import('./components/views/WhatsAppInboxView').then(m => ({ default: m.WhatsAppInboxView })));
+const LeaseToOwnView = lazy(() => import('./components/views/LeaseToOwnView').then(m => ({ default: m.LeaseToOwnView })));
+const CorporateDocumentsView = lazy(() => import('./components/views/CorporateDocumentsView').then(m => ({ default: m.CorporateDocumentsView })));
+const VipTierManagementView = lazy(() => import('./components/views/VipTierManagementView').then(m => ({ default: m.VipTierManagementView })));
+const FleetAcquisitionRoiView = lazy(() => import('./components/views/FleetAcquisitionRoiView').then(m => ({ default: m.FleetAcquisitionRoiView })));
+const LiveFleetTelematicsMapView = lazy(() => import('./components/views/LiveFleetTelematicsMapView').then(m => ({ default: m.LiveFleetTelematicsMapView })));
+const OperationsControlRoomView = lazy(() => import('./components/views/OperationsControlRoomView').then(m => ({ default: m.OperationsControlRoomView })));
+const CorporateBranchPortalView = lazy(() => import('./components/views/CorporateBranchPortalView').then(m => ({ default: m.CorporateBranchPortalView })));
+const ExecutiveDashboardView = lazy(() => import('./components/views/ExecutiveDashboardView').then(m => ({ default: m.ExecutiveDashboardView })));
+const CorrectionsCenterView = lazy(() => import('./components/views/CorrectionsCenterView').then(m => ({ default: m.CorrectionsCenterView })));
+
+const ViewLoadingFallback: React.FC = () => {
+  const { language } = useLanguage();
+  return (
+    <div className="flex flex-col items-center justify-center py-24 gap-3 text-zinc-500">
+      <div className="w-8 h-8 rounded-full border-2 border-zinc-700 border-t-[#D4AF37] animate-spin" />
+      <p className="text-xs">{language === 'ar' ? 'جارٍ تحميل الشاشة...' : 'Loading screen...'}</p>
+    </div>
+  );
+};
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -126,7 +137,9 @@ const MainLayout: React.FC = () => {
 
         <main className="flex-1 w-full p-4 sm:p-6 lg:p-8">
           <ErrorBoundary key={activeView}>
-            {renderActiveView()}
+            <Suspense fallback={<ViewLoadingFallback />}>
+              {renderActiveView()}
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
