@@ -156,7 +156,7 @@ export const TollsParkingView: React.FC = () => {
       {/* Transactions Table */}
       <div className="rounded-3xl bg-zinc-900/80 border border-zinc-800 shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs text-start">
+          <table className="w-full text-xs text-start min-w-[1000px]">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/50 text-zinc-400">
                 <th className="p-3 text-start font-medium">{isAr ? 'التاريخ' : 'Date'}</th>
@@ -621,7 +621,7 @@ const ImportModal: React.FC<{
                 </div>
 
                 <div className="max-h-60 overflow-y-auto rounded-xl border border-zinc-800">
-                  <table className="w-full text-[10px]">
+                  <table className="w-full text-[10px] min-w-[600px]">
                     <thead className="sticky top-0 bg-zinc-950">
                       <tr className="text-zinc-500">
                         <th className="p-2 text-start">{isAr ? 'التاريخ' : 'Date'}</th>

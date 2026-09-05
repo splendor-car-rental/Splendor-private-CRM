@@ -307,7 +307,8 @@ export const ContractExtensionModal: React.FC<ContractExtensionModalProps> = ({
 
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+            className="shrink-0 w-11 h-11 flex items-center justify-center rounded-xl text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 active:bg-zinc-800 transition-colors"
+            aria-label={isAr ? 'إغلاق' : 'Close'}
           >
             <X className="w-5 h-5" />
           </button>

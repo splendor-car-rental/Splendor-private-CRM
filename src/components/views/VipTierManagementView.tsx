@@ -226,7 +226,7 @@ export const VipTierManagementView: React.FC = () => {
       {/* Customer VIP Table */}
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden shadow-2xl">
         <div className="overflow-x-auto">
-          <table className="w-full text-start text-xs">
+          <table className="w-full text-start text-xs min-w-[900px]">
             <thead className="bg-zinc-900/80 text-zinc-400 uppercase tracking-wider font-semibold border-b border-zinc-800">
               <tr>
                 <th className="p-3.5 text-start">{language === 'ar' ? 'العميل' : 'Customer'}</th>

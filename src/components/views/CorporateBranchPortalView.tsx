@@ -290,7 +290,7 @@ export const CorporateBranchPortalView: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <table className="w-full text-start text-xs">
+              <table className="w-full text-start text-xs min-w-[720px]">
                 <thead className="bg-zinc-900/40 text-zinc-400 font-semibold border-b border-zinc-800">
                   <tr>
                     <th className="p-3 text-start">{language === 'ar' ? 'اسم الشركة' : 'Legal Entity'}</th>

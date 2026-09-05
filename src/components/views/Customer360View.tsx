@@ -623,7 +623,7 @@ export const Customer360View: React.FC = () => {
                     </div>
 
                     <div className="overflow-x-auto">
-                      <table className="w-full text-xs text-start">
+                      <table className="w-full text-xs text-start min-w-[640px]">
                         <thead>
                           <tr className="border-b border-zinc-800 text-zinc-400">
                             <th className="pb-3 text-start font-medium">{language === 'ar' ? 'النوع' : 'Type'}</th>

@@ -166,7 +166,7 @@ const VehicleRankTable: React.FC<{ title: string; icon: React.ReactNode; rows: V
   <div className="rounded-3xl bg-zinc-900/70 border border-zinc-800 overflow-hidden">
     <div className="px-4 py-3 border-b border-zinc-800 font-bold text-sm text-zinc-100 flex items-center gap-2">{icon} {title}</div>
     <div className="overflow-x-auto">
-      <table className="w-full text-xs">
+      <table className="w-full text-xs min-w-[520px]">
         <thead className="bg-zinc-950/60 text-zinc-500">
           <tr>
             <th className="p-3 text-start font-medium whitespace-nowrap">المركبة</th>

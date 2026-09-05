@@ -713,7 +713,7 @@ function AgreementDetail({ contract, isAr, canDecide, canOperate, busy, setBusy,
           <Loader2 className="w-4 h-4 animate-spin text-zinc-500" />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full text-left min-w-[520px]">
               <thead>
                 <tr className="text-zinc-500 border-b border-zinc-800">
                   <th className="py-1.5 pr-3">#</th>

@@ -47,7 +47,7 @@ export class LtoPolicyNotConfiguredError extends Error {
 function requireConfiguredRule(key: string, label: string): number {
   const rule = getRule(key);
   if (!rule || rule.value === null || rule.value === undefined) {
-    throw new LtoPolicyNotConfiguredError(`سياسة الإيجار المنتهي بالتملك "${label}" (${key}) لم يتم إعدادها بعد. يجب على الرئيس التنفيذي أو الإدارة تحديدها من الإعدادات -> قواعد العمل قبل إتمام هذا الإجراء.`);
+    throw new LtoPolicyNotConfiguredError(`سياسة الإيجار المنتهي بالتملك "${label}" (${key}) لم يتم إعدادها بعد. يجب على الرئيس التنفيذي أو الإدارة تحديدها من الإعدادات -> الحوكمة والموافقات -> القواعد الحساسة قبل إتمام هذا الإجراء.`);
   }
   return rule.value as number;
 }
