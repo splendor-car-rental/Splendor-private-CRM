@@ -256,9 +256,38 @@ function NewApplicationModal({ isAr, customers, vehicles, onClose, onCreated, ca
   const [vehiclePrice, setVehiclePrice] = useState(0);
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [preview, setPreview] = useState<any>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const customer = customers.find((c: any) => c.id === customerId);
   const vehicle = vehicles.find((v: any) => v.id === vehicleId);
+
+  // Live installment preview -- purely informational (server-computed, per
+  // this module's own rule that money is never calculated client-side); a
+  // staff member typing vehicle price/down payment/term sees the resulting
+  // monthly installment immediately instead of only much later at approval.
+  useEffect(() => {
+    if (!vehiclePrice || vehiclePrice <= 0 || !termMonths || termMonths <= 0) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setPreviewLoading(true);
+      try {
+        const result = await callApi('/api/lto/offer-preview', 'POST', { vehiclePrice, downPayment, termMonths, hasFinalPayment: false });
+        setPreview(result);
+        setPreviewError(null);
+      } catch (e) {
+        setPreview(null);
+        setPreviewError(errorText(e));
+      } finally {
+        setPreviewLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [vehiclePrice, downPayment, termMonths, callApi, errorText]);
 
   const submit = async () => {
     if (!customer || !vehicle) return;
@@ -322,10 +351,37 @@ function NewApplicationModal({ isAr, customers, vehicles, onClose, onCreated, ca
             <input type="number" value={termMonths} onChange={e => setTermMonths(Number(e.target.value))} className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-200" />
           </label>
         </div>
+
+        {(previewLoading || preview || previewError) && (
+          <div className={`p-3 rounded-lg border ${previewError ? 'border-amber-500/30 bg-amber-950/20 text-amber-300' : 'border-[#D4AF37]/30 bg-[#D4AF37]/5 text-zinc-200'}`}>
+            {previewLoading ? (
+              <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> {isAr ? 'جارِ حساب القسط...' : 'Calculating installment...'}</span>
+            ) : previewError ? (
+              <span>{previewError}</span>
+            ) : preview ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <p className="text-zinc-500">{isAr ? 'القسط الشهري المتوقع' : 'Expected Monthly Installment'}</p>
+                  <p className="text-sm font-bold text-[#f5d97f]">{money(preview.monthlyInstallment)}</p>
+                </div>
+                <div>
+                  <p className="text-zinc-500">{isAr ? 'إجمالي قيمة العقد' : 'Total Contract Value'}</p>
+                  <p className="font-semibold">{money(preview.totalContractValue)}</p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
         <label className="block">
           <span className="text-zinc-400">{isAr ? 'ملاحظات' : 'Notes'}</span>
           <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-200" />
         </label>
+        <p className="text-[10px] text-zinc-600">
+          {isAr
+            ? 'هذا القسط تقديري وقابل للتغيير عند اعتماد الطلب رسمياً. القيمة النهائية تُحسب دائماً من الخادم، ولا يمكن إدخالها يدوياً.'
+            : 'This installment is a preview and may change at formal approval. The final value is always server-computed, never manually entered.'}
+        </p>
       </div>
     </Modal>
   );

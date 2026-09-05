@@ -47,7 +47,7 @@ export class LtoPolicyNotConfiguredError extends Error {
 function requireConfiguredRule(key: string, label: string): number {
   const rule = getRule(key);
   if (!rule || rule.value === null || rule.value === undefined) {
-    throw new LtoPolicyNotConfiguredError(`Lease-to-Own financial policy "${label}" (${key}) has not been configured yet. A CEO/Admin must set it in Settings -> Business Rules before this action can proceed.`);
+    throw new LtoPolicyNotConfiguredError(`سياسة الإيجار المنتهي بالتملك "${label}" (${key}) لم يتم إعدادها بعد. يجب على الرئيس التنفيذي أو الإدارة تحديدها من الإعدادات -> قواعد العمل قبل إتمام هذا الإجراء.`);
   }
   return rule.value as number;
 }
@@ -72,17 +72,17 @@ export interface LtoOfferInput {
  * processing fee has never been set by a CEO/Admin.
  */
 export function computeLtoFinancialOffer(input: LtoOfferInput): LtoFinancialOffer {
-  if (input.vehiclePrice <= 0) throw new Error('Vehicle price must be greater than zero.');
-  if (input.downPayment < 0 || input.downPayment >= input.vehiclePrice) throw new Error('Down payment must be zero or more, and less than the vehicle price.');
-  if (input.termMonths <= 0) throw new Error('Term (months) must be greater than zero.');
+  if (input.vehiclePrice <= 0) throw new Error('سعر المركبة يجب أن يكون أكبر من صفر.');
+  if (input.downPayment < 0 || input.downPayment >= input.vehiclePrice) throw new Error('الدفعة المقدمة يجب أن تكون صفراً أو أكثر، وأقل من سعر المركبة.');
+  if (input.termMonths <= 0) throw new Error('مدة العقد (بالأشهر) يجب أن تكون أكبر من صفر.');
   const finalPayment = input.hasFinalPayment ? (input.finalPaymentAmount || 0) : 0;
-  if (finalPayment < 0 || finalPayment >= input.vehiclePrice) throw new Error('Final payment must be zero or more, and less than the vehicle price.');
+  if (finalPayment < 0 || finalPayment >= input.vehiclePrice) throw new Error('الدفعة الختامية يجب أن تكون صفراً أو أكثر، وأقل من سعر المركبة.');
 
-  const monthlyMarkupRatePercent = requireConfiguredRule('ltoMonthlyMarkupRatePercent', 'Monthly markup rate (%)');
-  const processingFeeAed = requireConfiguredRule('ltoProcessingFeeAed', 'Processing fee (AED)');
+  const monthlyMarkupRatePercent = requireConfiguredRule('ltoMonthlyMarkupRatePercent', 'نسبة الهامش الشهري (%)');
+  const processingFeeAed = requireConfiguredRule('ltoProcessingFeeAed', 'رسوم المعالجة (درهم)');
 
   const financedAmount = input.vehiclePrice - input.downPayment - finalPayment;
-  if (financedAmount <= 0) throw new Error('Down payment plus final payment must be less than the vehicle price -- there must be a financed amount to spread across the term.');
+  if (financedAmount <= 0) throw new Error('مجموع الدفعة المقدمة والدفعة الختامية يجب أن يكون أقل من سعر المركبة -- يجب أن يتبقى مبلغ ممول يُوزَّع على مدة العقد.');
 
   const totalMarkup = financedAmount * (monthlyMarkupRatePercent / 100);
   const monthlyPrincipalPortion = Math.round((financedAmount / input.termMonths) * 100) / 100;
@@ -121,7 +121,7 @@ export function computeOutstandingBalance(installments: { status: LtoInstallment
  * Throws LtoPolicyNotConfiguredError if the transfer fee has never been set.
  */
 export function computeSettlementAmount(outstandingBalance: number, adjustments = 0): { ownershipTransferFee: number; finalSettlementAmount: number } {
-  const ownershipTransferFee = requireConfiguredRule('ltoOwnershipTransferFeeAed', 'Ownership transfer processing fee (AED)');
+  const ownershipTransferFee = requireConfiguredRule('ltoOwnershipTransferFeeAed', 'رسوم معالجة نقل الملكية (درهم)');
   const finalSettlementAmount = Math.round((outstandingBalance + ownershipTransferFee + adjustments) * 100) / 100;
   return { ownershipTransferFee, finalSettlementAmount };
 }

@@ -57,23 +57,23 @@ function toRuleChangeActor(actor: LtoActor): RuleChangeActor {
 
 async function loadApplication(id: string): Promise<LtoApplication> {
   const snap = await admin.firestore().collection(LTO_APPLICATIONS).doc(id).get();
-  if (!snap.exists) throw new LtoError(`Lease-to-Own application ${id} not found.`);
+  if (!snap.exists) throw new LtoError(`طلب الإيجار المنتهي بالتملك ${id} غير موجود.`);
   return snap.data() as LtoApplication;
 }
 
 async function loadContract(id: string): Promise<Contract> {
   const snap = await admin.firestore().collection('contracts').doc(id).get();
-  if (!snap.exists) throw new LtoError(`Contract ${id} not found.`);
+  if (!snap.exists) throw new LtoError(`العقد ${id} غير موجود.`);
   const contract = snap.data() as Contract;
   if (contract.contractType !== 'lease_to_own' || !contract.lto) {
-    throw new LtoError(`Contract ${id} is not a Lease-to-Own agreement.`);
+    throw new LtoError(`العقد ${id} ليس اتفاقية إيجار منتهٍ بالتملك.`);
   }
   return contract;
 }
 
 async function loadSettlementRequest(id: string): Promise<LtoSettlementRequest> {
   const snap = await admin.firestore().collection(LTO_SETTLEMENTS).doc(id).get();
-  if (!snap.exists) throw new LtoError(`Settlement request ${id} not found.`);
+  if (!snap.exists) throw new LtoError(`طلب التسوية ${id} غير موجود.`);
   return snap.data() as LtoSettlementRequest;
 }
 
@@ -137,46 +137,46 @@ export async function checkLtoEligibility(customerId: string, vehicleId: string)
   const vehicle = globalStore.vehicles.find(v => v.id === vehicleId);
 
   if (!customer) {
-    return { eligible: false, reasons: ['Customer not found.'], checkedAt: new Date().toISOString() };
+    return { eligible: false, reasons: ['العميل غير موجود.'], checkedAt: new Date().toISOString() };
   }
 
-  if (customer.status === 'blocklisted') reasons.push('Customer is blocklisted.');
+  if (customer.status === 'blocklisted') reasons.push('العميل مدرج في قائمة الحظر.');
 
   if ((customer.idType === 'emirates_id' || customer.idType === 'passport') && customer.idNumber) {
     const match = await checkBlocklist(customer.idType, customer.idNumber, customer.idType === 'passport' ? customer.nationality : undefined);
-    if (match && match.tier === 'full') reasons.push(`Customer matches a full blocklist entry (${match.id}).`);
+    if (match && match.tier === 'full') reasons.push(`العميل مطابق لسجل حظر كامل (${match.id}).`);
   }
 
   const now = Date.now();
   if (!customer.idNumber || !customer.idExpiryDate || !customer.licenseNumber || !customer.licenseExpiryDate) {
-    reasons.push('KYC is incomplete -- ID and driving license details must be on file.');
+    reasons.push('بيانات التحقق من الهوية غير مكتملة -- يجب توفير بيانات الهوية ورخصة القيادة.');
   } else {
-    if (new Date(customer.idExpiryDate).getTime() < now) reasons.push('Customer\'s ID has expired.');
-    if (new Date(customer.licenseExpiryDate).getTime() < now) reasons.push('Customer\'s driving license has expired.');
+    if (new Date(customer.idExpiryDate).getTime() < now) reasons.push('هوية العميل منتهية الصلاحية.');
+    if (new Date(customer.licenseExpiryDate).getTime() < now) reasons.push('رخصة قيادة العميل منتهية الصلاحية.');
   }
 
   const minAge = getLtoMinCustomerAgeYears();
   if (!customer.dateOfBirth) {
-    reasons.push('Date of birth is not on file -- age cannot be verified.');
+    reasons.push('تاريخ الميلاد غير مسجل -- لا يمكن التحقق من العمر.');
   } else {
     const age = calculateAgeYears(customer.dateOfBirth);
-    if (age === null) reasons.push('Date of birth on file is invalid -- age cannot be verified.');
-    else if (age < minAge) reasons.push(`Customer is under the minimum Lease-to-Own age of ${minAge}.`);
+    if (age === null) reasons.push('تاريخ الميلاد المسجل غير صحيح -- لا يمكن التحقق من العمر.');
+    else if (age < minAge) reasons.push(`عمر العميل أقل من الحد الأدنى للإيجار المنتهي بالتملك (${minAge} سنة).`);
   }
 
   if (!vehicle) {
-    reasons.push('Vehicle not found.');
+    reasons.push('المركبة غير موجودة.');
   } else {
-    if (vehicle.lifecycleStatus && vehicle.lifecycleStatus !== 'ACTIVE') reasons.push(`Vehicle is not active in the fleet (lifecycle: ${vehicle.lifecycleStatus}).`);
-    if (vehicle.status !== 'available') reasons.push(`Vehicle is not currently available (status: ${vehicle.status}).`);
-    if (vehicle.ltoStatus) reasons.push(`Vehicle is already on a Lease-to-Own track (${vehicle.ltoStatus}).`);
+    if (vehicle.lifecycleStatus && vehicle.lifecycleStatus !== 'ACTIVE') reasons.push(`المركبة غير نشطة في الأسطول (الحالة: ${vehicle.lifecycleStatus}).`);
+    if (vehicle.status !== 'available') reasons.push(`المركبة غير متاحة حالياً (الحالة: ${vehicle.status}).`);
+    if (vehicle.ltoStatus) reasons.push(`المركبة مرتبطة بالفعل بمسار إيجار منتهٍ بالتملك (${vehicle.ltoStatus}).`);
   }
 
   const existingActiveLto = globalStore.contracts.find(c =>
     c.customerId === customerId && c.contractType === 'lease_to_own' && c.lto &&
     ['active', 'settlement_requested', 'default', 'termination_requested', 'ownership_transfer_pending'].includes(c.lto.ltoStatus)
   );
-  if (existingActiveLto) reasons.push(`Customer already has an active Lease-to-Own agreement (${existingActiveLto.id}).`);
+  if (existingActiveLto) reasons.push(`يوجد للعميل بالفعل اتفاقية إيجار منتهٍ بالتملك نشطة (${existingActiveLto.id}).`);
 
   return { eligible: reasons.length === 0, reasons, checkedAt: new Date().toISOString() };
 }
@@ -203,10 +203,10 @@ export async function createLtoApplication(
   fingerprint: string | undefined,
   recordAudit: RecordAuditFn
 ): Promise<IdempotentOutcome<LtoApplication>> {
-  if (!input.customerId || !input.vehicleId) throw new LtoError('A customer and a vehicle are required.');
-  if (!input.requestedTermMonths || input.requestedTermMonths <= 0) throw new LtoError('A requested term (months) greater than zero is required.');
-  if (!input.vehiclePrice || input.vehiclePrice <= 0) throw new LtoError('A vehicle price greater than zero is required.');
-  if (input.requestedDownPayment < 0) throw new LtoError('Down payment cannot be negative.');
+  if (!input.customerId || !input.vehicleId) throw new LtoError('العميل والمركبة مطلوبان.');
+  if (!input.requestedTermMonths || input.requestedTermMonths <= 0) throw new LtoError('مدة العقد المطلوبة (بالأشهر) يجب أن تكون أكبر من صفر.');
+  if (!input.vehiclePrice || input.vehiclePrice <= 0) throw new LtoError('سعر المركبة يجب أن يكون أكبر من صفر.');
+  if (input.requestedDownPayment < 0) throw new LtoError('الدفعة المقدمة لا يمكن أن تكون سالبة.');
 
   return runIdempotentCreate('lto-application-create', idempotencyKey, fingerprint, async () => {
     const id = await issueNextNumber('LtoApplication');
@@ -242,12 +242,12 @@ export async function createLtoApplication(
 /** DRAFT -> SUBMITTED. Runs eligibility, places a temporary hold on the vehicle (via the existing hold mechanism), and opens an approval request through the existing Four-Eyes/SoD engine. Refuses to submit an ineligible application. */
 export async function submitLtoApplication(applicationId: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<LtoApplication> {
   const application = await loadApplication(applicationId);
-  if (application.status !== 'draft') throw new LtoError(`Application ${applicationId} is ${application.status}, not draft -- it cannot be submitted again.`);
+  if (application.status !== 'draft') throw new LtoError(`الطلب ${applicationId} في حالة ${application.status}، وليس مسودة -- لا يمكن إرساله مرة أخرى.`);
 
   const eligibility = await checkLtoEligibility(application.customerId, application.vehicleId);
   if (!eligibility.eligible) {
     await updateDurable(LTO_APPLICATIONS, applicationId, { eligibilityCheck: eligibility, updatedAt: new Date().toISOString() });
-    throw new LtoError(`Application is not eligible: ${eligibility.reasons.join(' ')}`);
+    throw new LtoError(`الطلب غير مؤهل: ${eligibility.reasons.join(' ')}`);
   }
 
   const now = new Date();
@@ -263,7 +263,7 @@ export async function submitLtoApplication(applicationId: string, actor: LtoActo
     });
   } catch (err) {
     if (err instanceof AvailabilityConflictError) {
-      throw new LtoError('The selected vehicle has a scheduling conflict and cannot be held for this Lease-to-Own application.');
+      throw new LtoError('يوجد تعارض في جدولة المركبة المختارة، ولا يمكن حجزها لهذا الطلب.');
     }
     throw err;
   }
@@ -307,7 +307,7 @@ export async function submitLtoApplication(applicationId: string, actor: LtoActo
 export async function cancelLtoApplication(applicationId: string, reason: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<LtoApplication> {
   const application = await loadApplication(applicationId);
   if (application.status === 'approved' || application.status === 'rejected' || application.status === 'cancelled') {
-    throw new LtoError(`Application ${applicationId} is already ${application.status} and cannot be cancelled.`);
+    throw new LtoError(`الطلب ${applicationId} في حالة ${application.status} بالفعل، ولا يمكن إلغاؤه.`);
   }
   if (application.temporaryHoldId) await releaseTemporaryHold(application.temporaryHoldId);
 
@@ -344,9 +344,9 @@ export async function decideLtoApplication(
 ): Promise<{ application: LtoApplication; contract?: Contract }> {
   const application = await loadApplication(applicationId);
   if (application.status !== 'submitted' && application.status !== 'under_review') {
-    throw new LtoError(`Application ${applicationId} is ${application.status}, not awaiting a decision.`);
+    throw new LtoError(`الطلب ${applicationId} في حالة ${application.status}، وليس بانتظار قرار.`);
   }
-  if (!application.approvalRequestId) throw new LtoError('This application was never submitted through the approval workflow.');
+  if (!application.approvalRequestId) throw new LtoError('لم يتم إرسال هذا الطلب من خلال مسار الموافقات على الإطلاق.');
 
   await decideApprovalRequest(application.approvalRequestId, decision, note, toRuleChangeActor(decider), recordAudit);
 
@@ -375,7 +375,7 @@ export async function decideLtoApplication(
     return { application: updated };
   }
 
-  if (!offerInput) throw new LtoError('Financial offer terms (term months, down payment, final payment) are required to approve an application.');
+  if (!offerInput) throw new LtoError('شروط العرض المالي (المدة بالأشهر، الدفعة المقدمة، الدفعة الختامية) مطلوبة للموافقة على الطلب.');
   const offer = computeLtoFinancialOffer({ ...offerInput, vehiclePrice: application.vehiclePrice });
   updated = { ...updated, offer };
   await updateDurable(LTO_APPLICATIONS, applicationId, updated as unknown as Record<string, unknown>);
@@ -462,8 +462,8 @@ async function createLtoAgreementFromApplication(
 ): Promise<Contract> {
   const vehicle = globalStore.vehicles.find(v => v.id === application.vehicleId);
   const customer = globalStore.customers.find(c => c.id === application.customerId);
-  if (!vehicle) throw new LtoError('Vehicle not found.');
-  if (!customer) throw new LtoError('Customer not found.');
+  if (!vehicle) throw new LtoError('المركبة غير موجودة.');
+  if (!customer) throw new LtoError('العميل غير موجود.');
 
   const contractId = await issueNextNumber('Contract');
   const now = new Date();
@@ -527,7 +527,7 @@ async function createLtoAgreementFromApplication(
     ));
   } catch (err) {
     if (err instanceof AvailabilityConflictError) {
-      throw new LtoError('The vehicle is no longer available -- a conflicting booking exists for this period.');
+      throw new LtoError('المركبة لم تعد متاحة -- يوجد حجز متعارض لهذه الفترة.');
     }
     throw err;
   }
@@ -601,7 +601,7 @@ export async function recordLtoInstallmentPayment(
   fingerprint: string | undefined,
   recordAudit: RecordAuditFn
 ): Promise<IdempotentOutcome<{ installment: LtoInstallment; contract: Contract }>> {
-  if (amount <= 0) throw new LtoError('Payment amount must be greater than zero.');
+  if (amount <= 0) throw new LtoError('مبلغ الدفعة يجب أن يكون أكبر من صفر.');
 
   return runIdempotentCreate(`lto-payment:${installmentId}`, idempotencyKey, fingerprint, async () => {
     const paymentId = await issueNextNumber('Payment');
@@ -609,20 +609,20 @@ export async function recordLtoInstallmentPayment(
 
     const result = await runDurableTransaction(async (tx, db) => {
       const instSnap = await tx.get(installmentRef);
-      if (!instSnap.exists) throw new LtoError(`Installment ${installmentId} not found.`);
+      if (!instSnap.exists) throw new LtoError(`القسط ${installmentId} غير موجود.`);
       const installment = instSnap.data() as LtoInstallment;
 
       const contractRef = db.collection('contracts').doc(installment.contractId);
       const contractSnap = await tx.get(contractRef);
-      if (!contractSnap.exists) throw new LtoError(`Contract ${installment.contractId} not found.`);
+      if (!contractSnap.exists) throw new LtoError(`العقد ${installment.contractId} غير موجود.`);
       const contract = contractSnap.data() as Contract;
-      if (!contract.lto) throw new LtoError(`Contract ${installment.contractId} is not a Lease-to-Own agreement.`);
+      if (!contract.lto) throw new LtoError(`العقد ${installment.contractId} ليس اتفاقية إيجار منتهٍ بالتملك.`);
 
       if (installment.status === 'paid' || installment.status === 'settled') {
-        throw new LtoError(`Installment ${installmentId} is already ${installment.status} -- no further payment is accepted.`);
+        throw new LtoError(`القسط ${installmentId} مدفوع بالفعل (${installment.status}) -- لا يُقبل أي دفع إضافي.`);
       }
       if (amount > installment.remainingAmount + 0.01) {
-        throw new LtoError(`Payment of ${amount} exceeds the remaining amount of ${installment.remainingAmount} on this installment.`);
+        throw new LtoError(`الدفعة البالغة ${amount} تتجاوز المبلغ المتبقي وقدره ${installment.remainingAmount} على هذا القسط.`);
       }
 
       const now = new Date().toISOString();
@@ -762,7 +762,7 @@ export async function runLtoCollectionsSweep(): Promise<{ remindersSent: number;
 
 export async function requestLtoEarlySettlement(contractId: string, adjustments: number, adjustmentReason: string | undefined, actor: LtoActor, recordAudit: RecordAuditFn): Promise<LtoSettlementRequest> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'active') throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- early settlement can only be requested on an active agreement.`);
+  if (contract.lto!.ltoStatus !== 'active') throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- لا يمكن طلب التسوية المبكرة إلا لاتفاقية نشطة.`);
 
   const installments = await listInstallments(contractId);
   const outstandingBalance = computeOutstandingBalance(installments.map(i => ({ status: computeInstallmentStatus(i), remainingAmount: i.remainingAmount })));
@@ -803,8 +803,8 @@ export async function requestLtoEarlySettlement(contractId: string, adjustments:
 
 export async function decideLtoEarlySettlement(settlementRequestId: string, decision: 'approved' | 'rejected', note: string, decider: LtoActor, recordAudit: RecordAuditFn): Promise<LtoSettlementRequest> {
   const request = await loadSettlementRequest(settlementRequestId);
-  if (request.status !== 'pending') throw new LtoError(`Settlement request ${settlementRequestId} is already ${request.status}.`);
-  if (!request.approvalRequestId) throw new LtoError('This settlement request was never submitted through the approval workflow.');
+  if (request.status !== 'pending') throw new LtoError(`طلب التسوية ${settlementRequestId} في حالة ${request.status} بالفعل.`);
+  if (!request.approvalRequestId) throw new LtoError('لم يتم إرسال طلب التسوية هذا من خلال مسار الموافقات على الإطلاق.');
 
   await decideApprovalRequest(request.approvalRequestId, decision, note, toRuleChangeActor(decider), recordAudit);
 
@@ -871,13 +871,13 @@ export async function decideLtoEarlySettlement(settlementRequestId: string, deci
 /** Flags a contract as default-eligible per Splendor's own contract template Clause 3 (N consecutive missed months). Never terminates the contract or recovers the vehicle itself -- a human (RBAC/SoD via requestLtoTermination/decideLtoTermination) always decides that. */
 export async function markLtoDefault(contractId: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<Contract> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'active') throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- only an active agreement can be flagged as default.`);
+  if (contract.lto!.ltoStatus !== 'active') throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- لا يمكن وضع علامة تعثّر إلا على اتفاقية نشطة.`);
 
   const installments = await listInstallments(contractId);
   const missedStreak = countConsecutiveMissedInstallments(installments.filter(i => !i.isFinalPayment));
   const threshold = getLtoConsecutiveMissedInstallmentsForDefault();
   if (missedStreak < threshold) {
-    throw new LtoError(`Contract ${contractId} has ${missedStreak} consecutive missed installment(s), below the ${threshold}-month default threshold.`);
+    throw new LtoError(`العقد ${contractId} لديه ${missedStreak} قسط/أقساط متتالية فائتة، وهو أقل من حد التعثّر البالغ ${threshold} شهر.`);
   }
 
   const now = new Date().toISOString();
@@ -895,8 +895,8 @@ export async function markLtoDefault(contractId: string, actor: LtoActor, record
 
 export async function requestLtoTermination(contractId: string, reason: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<Contract> {
   const contract = await loadContract(contractId);
-  if (!['active', 'default'].includes(contract.lto!.ltoStatus)) throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- termination can only be requested on an active or defaulted agreement.`);
-  if (!reason || !reason.trim()) throw new LtoError('A reason is required to request termination.');
+  if (!['active', 'default'].includes(contract.lto!.ltoStatus)) throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- لا يمكن طلب الإنهاء إلا على اتفاقية نشطة أو متعثّرة.`);
+  if (!reason || !reason.trim()) throw new LtoError('السبب مطلوب لطلب الإنهاء.');
 
   await createApprovalRequest({
     type: 'lto_termination', entityType: 'Contract', entityId: contractId,
@@ -912,13 +912,13 @@ export async function requestLtoTermination(contractId: string, reason: string, 
 /** Approving termination does NOT itself execute any legal or recovery action -- per this mission's explicit instruction, no automatic legal/repossession step is taken. It only records the decision and marks the agreement/vehicle so staff can proceed with the (human, off-system) recovery process, then call markLtoVehicleRecovered() once the vehicle is physically back. */
 export async function decideLtoTermination(contractId: string, decision: 'approved' | 'rejected', note: string, decider: LtoActor, recordAudit: RecordAuditFn): Promise<Contract> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'termination_requested') throw new LtoError(`Contract ${contractId} has no pending termination request.`);
+  if (contract.lto!.ltoStatus !== 'termination_requested') throw new LtoError(`العقد ${contractId} ليس لديه طلب إنهاء معلّق.`);
 
   // Find the most recent pending lto_termination approval request for this contract.
   const approvalsSnap = await admin.firestore().collection('approval_requests')
     .where('entityType', '==', 'Contract').where('entityId', '==', contractId).get();
   const pending = approvalsSnap.docs.map(d => d.data() as any).filter(r => r.type === 'lto_termination' && r.status === 'pending').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  if (!pending) throw new LtoError('No pending termination approval request found for this contract.');
+  if (!pending) throw new LtoError('لا يوجد طلب موافقة إنهاء معلّق لهذا العقد.');
 
   await decideApprovalRequest(pending.id, decision, note, toRuleChangeActor(decider), recordAudit);
 
@@ -936,7 +936,7 @@ export async function decideLtoTermination(contractId: string, decision: 'approv
 /** Staff confirms the vehicle has been physically recovered after termination -- returns it to the normal rental pool. Never automatic. */
 export async function markLtoVehicleRecovered(contractId: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<Vehicle> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'terminated') throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- vehicle recovery only applies after termination.`);
+  if (contract.lto!.ltoStatus !== 'terminated') throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- استرداد المركبة ينطبق فقط بعد الإنهاء.`);
 
   await patchVehicle(contract.vehicleId, { status: 'available' }, ['ltoStatus', 'ltoContractId']);
   await recordAudit({
@@ -945,7 +945,7 @@ export async function markLtoVehicleRecovered(contractId: string, actor: LtoActo
     newValue: `Vehicle recovered after terminated Lease-to-Own contract ${contractId}, returned to available rental fleet.`
   });
   const vehicle = globalStore.vehicles.find(v => v.id === contract.vehicleId);
-  if (!vehicle) throw new LtoError('Vehicle not found after recovery update.');
+  if (!vehicle) throw new LtoError('المركبة غير موجودة بعد تحديث الاسترداد.');
   return vehicle;
 }
 
@@ -956,7 +956,7 @@ export async function markLtoVehicleRecovered(contractId: string, actor: LtoActo
 /** LEASE_COMPLETED -> SETTLEMENT_CONFIRMED implicitly (ltoStatus:'settled' already means this) -> OWNERSHIP_TRANSFER_PENDING. */
 export async function requestLtoOwnershipTransfer(contractId: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<Contract> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'settled') throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- ownership transfer can only start once the agreement is fully settled.`);
+  if (contract.lto!.ltoStatus !== 'settled') throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- لا يمكن بدء نقل الملكية إلا بعد تسوية الاتفاقية بالكامل.`);
 
   const now = new Date().toISOString();
   await patchContract(contractId, { lto: { ...contract.lto, ltoStatus: 'ownership_transfer_pending' }, updatedAt: now });
@@ -981,7 +981,7 @@ export async function requestLtoOwnershipTransfer(contractId: string, actor: Lto
  */
 export async function confirmLtoOwnershipTransfer(contractId: string, documentPath: string | undefined, actor: LtoActor, recordAudit: RecordAuditFn): Promise<Contract> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'ownership_transfer_pending') throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- no ownership transfer is pending.`);
+  if (contract.lto!.ltoStatus !== 'ownership_transfer_pending') throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- لا يوجد نقل ملكية معلّق.`);
 
   const now = new Date().toISOString();
   await patchContract(contractId, { lto: { ...contract.lto, ltoStatus: 'ownership_transferred', ownershipTransferredAt: now }, updatedAt: now });
@@ -1007,7 +1007,7 @@ export async function confirmLtoOwnershipTransfer(contractId: string, documentPa
 
 export async function completeLtoAgreement(contractId: string, actor: LtoActor, recordAudit: RecordAuditFn): Promise<Contract> {
   const contract = await loadContract(contractId);
-  if (contract.lto!.ltoStatus !== 'ownership_transferred') throw new LtoError(`Contract ${contractId} is ${contract.lto!.ltoStatus} -- completion requires a confirmed ownership transfer.`);
+  if (contract.lto!.ltoStatus !== 'ownership_transferred') throw new LtoError(`العقد ${contractId} في حالة ${contract.lto!.ltoStatus} -- الإتمام يتطلب تأكيد نقل الملكية.`);
 
   const now = new Date().toISOString();
   await patchContract(contractId, { lto: { ...contract.lto, ltoStatus: 'completed' }, status: 'completed', updatedAt: now });

@@ -3645,14 +3645,15 @@ app.post('/api/inspections/:id/void', requireRole('ceo', 'admin'), asyncHandler(
 // paymentsRefunds gates installment payment recording, matching how every
 // other money-received route in this app is gated.
 function ltoErrorStatus(message: string): number {
-  if (message.includes('not found')) return 404;
-  const isFieldValidation = message.includes('is required') || message.includes('must be') || message.includes('cannot be negative');
+  if (message.includes('not found') || message.includes('غير موجود')) return 404;
+  const isFieldValidation = message.includes('is required') || message.includes('must be') || message.includes('cannot be negative')
+    || message.includes('مطلوب') || message.includes('يجب أن') || message.includes('لا يمكن أن تكون سالبة');
   return isFieldValidation ? 400 : 409;
 }
 
 app.post('/api/lto/eligibility', asyncHandler(async (req, res) => {
   const { customerId, vehicleId } = req.body || {};
-  if (!customerId || !vehicleId) return res.status(400).json({ error: 'customerId and vehicleId are required.' });
+  if (!customerId || !vehicleId) return res.status(400).json({ error: 'العميل والمركبة مطلوبان.' });
   res.json(await checkLtoEligibility(customerId, vehicleId));
 }));
 
