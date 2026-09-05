@@ -114,6 +114,13 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
+  const [statementSupplier, setStatementSupplier] = useState<Supplier | null>(null);
+  const [statementData, setStatementData] = useState<{
+    totalInvoiced: number; totalPaid: number; outstanding: number;
+    payables: Array<{ id: string; invoiceNumber: string; invoiceDate: string; dueDate: string; totalAmount: number; paidAmount: number; balance: number; status: string }>;
+    payments: Array<{ id: string; amount: number; settlementAccountCode: string; reference?: string; paidAt: string; paidByName: string }>;
+  } | null>(null);
+  const [statementLoading, setStatementLoading] = useState(false);
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [amendmentModalPo, setAmendmentModalPo] = useState<PurchaseOrder | null>(null);
   const [amendmentsByPo, setAmendmentsByPo] = useState<Record<string, PurchaseOrderAmendmentRequest[]>>({});
@@ -279,6 +286,22 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
       showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', e?.message || '');
     } finally {
       setBusyKey(null);
+    }
+  };
+
+  const openSupplierStatement = async (supplier: Supplier) => {
+    setStatementSupplier(supplier);
+    setStatementData(null);
+    setStatementLoading(true);
+    try {
+      const res = await apiFetch(`/api/accounting/suppliers/${encodeURIComponent(supplier.id)}/statement`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to load supplier statement.');
+      setStatementData(data);
+    } catch (e: any) {
+      showToast(language === 'ar' ? 'تعذر تحميل كشف الحساب' : 'Failed to load statement', e?.message || '');
+    } finally {
+      setStatementLoading(false);
     }
   };
 
@@ -524,6 +547,13 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
                 </div>
                 <p className="text-zinc-500 mt-1 font-mono">{s.id}</p>
                 <p className="text-zinc-400 mt-1">{s.phone || '—'}</p>
+                <button
+                  onClick={() => openSupplierStatement(s)}
+                  className="mt-2.5 flex items-center gap-1.5 text-[11px] font-semibold text-blue-300 hover:text-blue-200"
+                >
+                  <Wallet className="w-3 h-3" />
+                  {language === 'ar' ? 'كشف حساب' : 'Statement'}
+                </button>
               </div>
             ))}
             {suppliers.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا يوجد موردون بعد.' : 'No suppliers yet.'}</p>}
@@ -1075,6 +1105,49 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
         onClose={() => setCorrectionModalDebt(null)}
         onCreated={async () => { setCorrectionModalDebt(null); await load(); }}
       />
+      <Modal
+        isOpen={Boolean(statementSupplier)}
+        onClose={() => { setStatementSupplier(null); setStatementData(null); }}
+        title={language === 'ar' ? `كشف حساب ${statementSupplier?.legalName || ''}` : `Statement — ${statementSupplier?.legalName || ''}`}
+        subtitle={language === 'ar' ? 'مبني على الفواتير والسدادات المحاسبية الفعلية المرحّلة' : 'Built from the actual posted accounting invoices and payments'}
+        maxWidth="2xl"
+      >
+        {statementLoading ? (
+          <div className="p-8 text-center text-xs text-zinc-500 flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />{language === 'ar' ? 'جارِ التحميل...' : 'Loading...'}</div>
+        ) : !statementData ? (
+          <div className="p-8 text-center text-xs text-zinc-500">{language === 'ar' ? 'تعذر تحميل الكشف.' : 'Could not load the statement.'}</div>
+        ) : (
+          <div className="space-y-4 text-xs">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800"><p className="text-[10px] text-zinc-500">{language === 'ar' ? 'إجمالي الفواتير' : 'Total Invoiced'}</p><p className="text-sm font-bold text-zinc-100 mt-1">{statementData.totalInvoiced.toLocaleString()} AED</p></div>
+              <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800"><p className="text-[10px] text-zinc-500">{language === 'ar' ? 'إجمالي المسدد' : 'Total Paid'}</p><p className="text-sm font-bold text-emerald-400 mt-1">{statementData.totalPaid.toLocaleString()} AED</p></div>
+              <div className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800"><p className="text-[10px] text-zinc-500">{language === 'ar' ? 'الرصيد المستحق' : 'Outstanding'}</p><p className={`text-sm font-bold mt-1 ${statementData.outstanding > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{statementData.outstanding.toLocaleString()} AED</p></div>
+            </div>
+            <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800 overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-zinc-800 font-bold text-zinc-100">{language === 'ar' ? 'الفواتير المرحلة' : 'Posted Invoices'}</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px] min-w-[560px]">
+                  <thead><tr className="text-zinc-500 border-b border-zinc-800"><th className="p-2.5 text-start">{language === 'ar' ? 'الفاتورة' : 'Invoice'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'الاستحقاق' : 'Due'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'الإجمالي' : 'Total'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'المسدد' : 'Paid'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'المتبقي' : 'Balance'}</th></tr></thead>
+                  <tbody>{statementData.payables.map(p => <tr key={p.id} className="border-b border-zinc-800/50 text-zinc-300"><td className="p-2.5 font-mono">{p.invoiceNumber}</td><td className="p-2.5">{p.dueDate}</td><td className="p-2.5">{p.totalAmount.toLocaleString()}</td><td className="p-2.5">{p.paidAmount.toLocaleString()}</td><td className="p-2.5">{p.balance.toLocaleString()}</td></tr>)}
+                    {statementData.payables.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-zinc-500">{language === 'ar' ? 'لا توجد فواتير مرحلة لهذا المورد.' : 'No posted invoices for this supplier.'}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800 overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-zinc-800 font-bold text-zinc-100">{language === 'ar' ? 'سجل السدادات' : 'Payment History'}</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px] min-w-[480px]">
+                  <thead><tr className="text-zinc-500 border-b border-zinc-800"><th className="p-2.5 text-start">{language === 'ar' ? 'التاريخ' : 'Date'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'المبلغ' : 'Amount'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'المرجع' : 'Reference'}</th><th className="p-2.5 text-start">{language === 'ar' ? 'بواسطة' : 'By'}</th></tr></thead>
+                  <tbody>{statementData.payments.map(p => <tr key={p.id} className="border-b border-zinc-800/50 text-zinc-300"><td className="p-2.5">{p.paidAt?.slice(0, 10)}</td><td className="p-2.5">{p.amount.toLocaleString()}</td><td className="p-2.5 font-mono">{p.reference || '—'}</td><td className="p-2.5">{p.paidByName}</td></tr>)}
+                    {statementData.payments.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-zinc-500">{language === 'ar' ? 'لا توجد سدادات مسجلة لهذا المورد.' : 'No payments recorded for this supplier.'}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
