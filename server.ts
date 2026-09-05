@@ -9121,8 +9121,22 @@ export async function hydrateStoreFromFirestore() {
   let totalDocs = 0;
   const failures: Array<{ collectionName: string; error: unknown }> = [];
 
-  await Promise.all(
-    Object.entries(FIRESTORE_COLLECTION_BY_FIELD).map(async ([field, collectionName]) => {
+  // Firing all ~50 collection reads at once via a single Promise.all was
+  // enough concurrent Firestore connections from ONE cold start alone to
+  // trip RESOURCE_EXHAUSTED -- and every fresh deploy replaces every warm
+  // Lambda instance at once, so real traffic right after a deploy means
+  // several cold starts doing this simultaneously, multiplying the burst
+  // further. Reproduced live: dozens of collections failing with "8
+  // RESOURCE_EXHAUSTED: Quota exceeded" within the same second, cascading
+  // into 503s across nearly every screen. Capping concurrency bounds the
+  // peak connections any single cold start opens, independent of Firestore's
+  // billing plan.
+  const HYDRATION_CONCURRENCY = 8;
+  const collectionEntries = Object.entries(FIRESTORE_COLLECTION_BY_FIELD);
+  for (let i = 0; i < collectionEntries.length; i += HYDRATION_CONCURRENCY) {
+    const chunk = collectionEntries.slice(i, i + HYDRATION_CONCURRENCY);
+    await Promise.all(
+      chunk.map(async ([field, collectionName]) => {
       try {
         const snap = await admin.firestore().collection(collectionName).get();
         const records = snap.docs.map(d => ({ ...(d.data() as any), id: d.id }));
@@ -9172,8 +9186,9 @@ export async function hydrateStoreFromFirestore() {
         failures.push({ collectionName, error });
         console.error(`[hydrate] Failed to load "${collectionName}" from Firestore:`, error);
       }
-    })
-  );
+      })
+    );
+  }
 
   if (failures.length > 0) {
     throw new Error(`Firestore hydration failed for ${failures.length} collection(s).`);
