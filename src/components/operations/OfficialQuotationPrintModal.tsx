@@ -29,7 +29,7 @@ export const OfficialQuotationPrintModal: React.FC<OfficialQuotationPrintModalPr
   const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
 
   const handlePrint = () => {
-    printElementDirectly('official-quotation-proposal-document', `عرض أسعار وتأجير رسمي #${quotation.id}`);
+    printElementDirectly('official-quotation-proposal-document', `عرض سعر تأجير سيارات رسمي #${quotation.id}`);
   };
 
   const handleDownloadPdf = async () => {
@@ -68,7 +68,7 @@ export const OfficialQuotationPrintModal: React.FC<OfficialQuotationPrintModalPr
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={isAr ? `عرض أسعار ومطالبة رسمية #${quotation.id}` : `Official Quotation & Proposal #${quotation.id}`}
+      title={isAr ? `عرض سعر تأجير سيارات رسمي #${quotation.id}` : `Official Car Rental Quotation #${quotation.id}`}
       subtitle={isAr ? 'عرض أسعار فاخر صادر عن شركة سبلندر لتأجير السيارات' : 'Official Luxury Rental Quotation — Splendor Car Rental'}
       maxWidth="4xl"
     >
@@ -130,10 +130,10 @@ export const OfficialQuotationPrintModal: React.FC<OfficialQuotationPrintModalPr
           <div className="flex flex-col sm:flex-row items-center justify-between border-b border-zinc-300 pb-3 gap-3">
             <div className="text-center sm:text-right">
               <h2 className="text-xl sm:text-2xl font-black text-[#991b1b]">
-                عرض أسعار وتأجير رسمي
+                عرض سعر تأجير سيارات رسمي
               </h2>
               <p className="text-xs font-bold text-zinc-600 uppercase font-sans tracking-widest">
-                OFFICIAL LUXURY VEHICLE PROPOSAL
+                OFFICIAL CAR RENTAL QUOTATION
               </p>
             </div>
 
