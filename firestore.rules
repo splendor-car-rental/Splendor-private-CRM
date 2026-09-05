@@ -90,6 +90,10 @@ service cloud.firestore {
     match /lto_installments/{id} { allow read: if hasRole(['ceo', 'admin', 'operations', 'sales', 'finance']); allow write: if false; }
     match /lto_settlement_requests/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
 
+    // Two-factor auth secrets/recovery-code hashes -- server (Admin SDK) only,
+    // never read or written directly by any client, including the account owner.
+    match /user_mfa/{uid} { allow read, write: if false; }
+
     // No recursive catch-all: every unknown/new collection is denied by default.
   }
 }

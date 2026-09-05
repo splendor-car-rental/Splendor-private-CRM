@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, AlertCircle, LogOut, Loader2, Check } from 'lucide-react';
+import { Lock, Mail, AlertCircle, LogOut, Loader2, Check, ShieldCheck } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 import { SplendorLogo } from '../common/SplendorLogo';
 import splendorLogoImage from '../../assets/splendor-logo.png';
@@ -197,6 +197,97 @@ export const AccessPendingScreen: React.FC<AccessPendingScreenProps> = ({ email,
           <LogOut className="w-3.5 h-3.5" />
           {t('authPendingSignOut')}
         </button>
+      </div>
+    </div>
+  );
+};
+
+interface MfaChallengeScreenProps {
+  onVerify: (code: string) => Promise<void>;
+  onSignOut: () => void;
+}
+
+/**
+ * Shown after a successful email/password sign-in when the account has 2FA
+ * enabled (src/server/mfa.ts). This screen is a UX convenience only -- the
+ * real gate is server-side (requireRole / getVerifiedActiveStaff both call
+ * isMfaSatisfied), so every /api/* call would fail with 401 MFA_REQUIRED
+ * regardless of whether this screen is somehow bypassed on the client.
+ */
+export const MfaChallengeScreen: React.FC<MfaChallengeScreenProps> = ({ onVerify, onSignOut }) => {
+  const { language, direction } = useLanguage();
+  const isAr = language === 'ar';
+  const [code, setCode] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!code.trim() || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onVerify(code.trim());
+    } catch (err: any) {
+      setError(err?.message || (isAr ? 'رمز غير صحيح.' : 'Invalid code.'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div dir={direction} className={`min-h-screen bg-zinc-950 flex items-center justify-center p-4 ${isAr ? 'font-arabic' : ''}`}>
+      <div className="w-full max-w-sm">
+        <form
+          onSubmit={handleSubmit}
+          className="bg-zinc-900/80 border border-zinc-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-5 text-center"
+        >
+          <div className="w-12 h-12 rounded-2xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 flex items-center justify-center mx-auto">
+            <ShieldCheck className="w-6 h-6 text-[#D4AF37]" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-zinc-100">{isAr ? 'التحقق بخطوتين' : 'Two-Factor Verification'}</h2>
+            <p className="text-xs text-zinc-400 mt-1">
+              {isAr ? 'أدخل الرمز المكوّن من 6 أرقام من تطبيق المصادقة، أو أحد رموز الاسترداد.' : 'Enter the 6-digit code from your authenticator app, or a recovery code.'}
+            </p>
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs text-start">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <input
+            type="text"
+            inputMode="numeric"
+            autoFocus
+            dir="ltr"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="123456"
+            className="w-full text-center tracking-[0.4em] text-lg px-3.5 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/60 focus:ring-1 focus:ring-[#D4AF37]/40 transition-colors font-mono"
+          />
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-bold text-sm shadow-md shadow-[#D4AF37]/25 hover:brightness-110 active:scale-[0.99] transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+            <span>{isAr ? 'تحقق' : 'Verify'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="inline-flex items-center gap-2 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors mx-auto"
+          >
+            <LogOut className="w-3 h-3" />
+            {isAr ? 'تسجيل الخروج' : 'Sign out'}
+          </button>
+        </form>
       </div>
     </div>
   );

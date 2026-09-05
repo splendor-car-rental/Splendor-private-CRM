@@ -11,7 +11,8 @@ import {
 import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { User, UserRole } from '../types';
-import { AuthLoadingScreen, LoginScreen, AccessPendingScreen } from '../components/auth/AuthScreens';
+import { AuthLoadingScreen, LoginScreen, AccessPendingScreen, MfaChallengeScreen } from '../components/auth/AuthScreens';
+import { apiFetch } from '../lib/apiFetch';
 
 interface AuthContextType {
   firebaseUser: FirebaseUser | null;
@@ -84,6 +85,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authLoading, setAuthLoading] = useState(true);
   const [authErrorKey, setAuthErrorKey] = useState<string | null>(null);
   const [staffDirectory, setStaffDirectory] = useState<User[]>([]);
+  // 'n/a' -- role doesn't use 2FA (or status hasn't loaded yet), never blocks.
+  // 'required' -- account has 2FA enabled and the server hasn't seen a
+  // recent /api/mfa/verify; MfaChallengeScreen blocks rendering the app.
+  // This is a UX convenience only: the actual enforcement is server-side
+  // (requireRole/getVerifiedActiveStaff both call isMfaSatisfied), so every
+  // API call fails closed regardless of this client-side state.
+  const [mfaState, setMfaState] = useState<'n/a' | 'checking' | 'required' | 'satisfied'>('n/a');
 
   useEffect(() => {
     let profileUnsubscribe: (() => void) | null = null;
@@ -152,6 +160,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, [firebaseUser]);
 
+  useEffect(() => {
+    if (!profile || !['ceo', 'admin'].includes(profile.role)) {
+      setMfaState('n/a');
+      return;
+    }
+    let cancelled = false;
+    setMfaState('checking');
+    (async () => {
+      try {
+        const res = await apiFetch('/api/mfa/status');
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        setMfaState(data?.enabled ? 'required' : 'n/a');
+      } catch {
+        // Fail-open on this client-side convenience check only -- a network
+        // hiccup here must not lock a CEO/Admin out of even seeing the app;
+        // the real gate (isMfaSatisfied on every API call) still applies.
+        if (!cancelled) setMfaState('n/a');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [profile?.id, profile?.role]);
+
+  const verifyMfaCode = useCallback(async (code: string) => {
+    const res = await apiFetch('/api/mfa/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Verification failed.');
+    setMfaState('satisfied');
+  }, []);
+
   const login = useCallback(async (email: string, password: string, rememberMe: boolean) => {
     setAuthErrorKey(null);
     try {
@@ -198,6 +240,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   if (!profile) {
     return <AccessPendingScreen email={firebaseUser.email} onSignOut={logout} />;
+  }
+
+  if (mfaState === 'checking') {
+    return <AuthLoadingScreen />;
+  }
+
+  if (mfaState === 'required') {
+    return <MfaChallengeScreen onVerify={verifyMfaCode} onSignOut={logout} />;
   }
 
   return (
