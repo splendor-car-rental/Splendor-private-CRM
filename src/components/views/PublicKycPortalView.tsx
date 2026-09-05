@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { DocumentCategory } from '../../types';
 import { Badge } from '../common/Badge';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 
 const DOCUMENT_OPTIONS: { category: DocumentCategory; titleEn: string; titleAr: string; descEn: string; descAr: string }[] = [
   {
@@ -248,12 +249,11 @@ export const PublicKycPortalView: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-zinc-400">Expiry Date (Optional)</label>
-                <input
-                  type="date"
+                <DayMonthYearDateInput
+                  label="Expiry Date (Optional)"
                   value={expiryDate}
-                  onChange={(e) => setExpiryDate(e.target.value)}
-                  className="w-full mt-1.5 px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                  onChange={setExpiryDate}
+                  isAr={false}
                 />
               </div>
             </div>

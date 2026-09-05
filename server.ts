@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import admin from 'firebase-admin';
 import { DataStore, globalStore } from './src/server/dataStore.js';
+import { contractDeletionBlockReason, reservationDeletionBlockReason } from './src/server/correctionsGuards.js';
 import type { Lead, Contract, Customer, CorporateAccount, Quotation, Reservation, TollType, ReceivedAmountClassification, UserRole, Vehicle, BankTransactionStatus, BankTransaction, KycDocument, DocumentCategory } from './src/types/index.js';
 import { RECEIVED_AMOUNT_CLASSIFICATIONS } from './src/types/index.js';
 import { ROLE_RANK, TOLL_PRICING_EDIT_ROLES } from './src/config/permissions.js';
@@ -280,12 +281,19 @@ app.use('/api', (req, res, next) => {
   return requireAuth(req, res, next);
 });
 
-// Vercel starts handling requests as soon as this module is imported. The
-// previous cold-start path launched Firestore hydration in the background,
-// so fleet mutations and availability checks could observe DataStore's
-// initial [] before the real vehicles query completed. Fleet requests now
-// wait for one shared hydration promise. A failed hydration fails closed
-// with 503 and is retryable; it is never represented as an empty fleet.
+// Vercel starts handling requests as soon as this module is imported. On a
+// cold start, hydrateStoreFromFirestore() below runs in the background
+// (fire-and-forget -- see the bottom of this file), so any request routed to
+// that fresh instance before hydration finishes would otherwise read
+// DataStore's initial [] for every collection, not just vehicles: customers,
+// contracts, reservations, quotations, everything. This was originally
+// scoped to only /fleet, which fixed vehicle availability checks but left
+// every other collection racy on a cold instance (e.g. a freshly-added
+// customer intermittently missing from /api/customers depending on which
+// Lambda instance served the request). Every /api request now waits for the
+// same shared hydration promise; a failed hydration fails closed with 503
+// and is retryable, never silently represented as empty data. /health stays
+// exempt so monitoring can always tell a cold instance from a truly down one.
 let storeHydrationPromise: Promise<void> | null = null;
 function ensureStoreHydrated(): Promise<void> {
   if (!storeHydrationPromise) {
@@ -298,7 +306,7 @@ function ensureStoreHydrated(): Promise<void> {
 }
 
 app.use('/api', async (req, res, next) => {
-  if (!req.path.startsWith('/fleet')) return next();
+  if (req.path === '/health') return next();
 
   if (admin.apps.length === 0) {
     return res.status(503).json({ error: 'CRM persistence is not configured.' });
@@ -2938,8 +2946,20 @@ app.post('/api/contracts/:id/extend', requireRole('ceo', 'admin', 'operations', 
 app.delete('/api/contracts/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const contractId = req.params.id;
   const index = globalStore.contracts.findIndex(c => c.id === contractId);
-  if (index === -1) return res.status(404).json({ error: 'Contract not found' });
+  if (index === -1) return res.status(404).json({ error: 'العقد غير موجود.' });
   const contract = globalStore.contracts[index];
+
+  // Real deletion is only safe for an incomplete contract that never became
+  // a binding financial record. Anything past that point (approved, signed,
+  // active, settlement_pending, completed, cancelled, or with money
+  // attached) must be corrected via the audited lifecycle -- cancel the
+  // contract and/or reverse the payment -- never physically deleted.
+  const contractBlockReason = contractDeletionBlockReason(
+    contract,
+    globalStore.payments.filter(p => p.contractId === contractId),
+    globalStore.deposits.filter(d => d.contractId === contractId)
+  );
+  if (contractBlockReason) return res.status(409).json({ error: contractBlockReason });
 
   const actor = await getRequesterActor(req);
   const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
@@ -2976,38 +2996,11 @@ app.delete('/api/contracts/:id', requireRole('ceo', 'admin'), asyncHandler(async
   res.json({ success: true, message: `Contract ${contractId} successfully deleted.` });
 }));
 
-app.delete('/api/fleet/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
-  const vehicleId = req.params.id;
-  const index = globalStore.vehicles.findIndex(v => v.id === vehicleId);
-  if (index === -1) return res.status(404).json({ error: 'Vehicle not found' });
-  const vehicle = globalStore.vehicles[index];
-
-  // Check if vehicle has active contracts
-  const activeContracts = globalStore.contracts.filter(c => c.vehicleId === vehicleId && c.status === 'active');
-  if (activeContracts.length > 0) {
-    return res.status(409).json({ error: `Cannot delete vehicle with active contract (${activeContracts[0].id}). Please complete or cancel the contract first.` });
-  }
-
-  const actor = await getRequesterActor(req);
-  const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
-
-  await deleteDurable('vehicles', vehicleId);
-  globalStore.vehicles.splice(index, 1);
-
-  await recordAudit({
-    userId: actor?.uid || 'USR-001',
-    userName: actor?.name || 'Administrator',
-    userRole: (actor?.role as any) || 'admin',
-    entityType: 'Vehicle',
-    entityId: vehicleId,
-    action: 'delete',
-    previousValue: JSON.stringify({ make: vehicle.make, model: vehicle.model, plate: vehicle.plateNumber }),
-    newValue: 'Vehicle permanently removed from fleet inventory.',
-    reason
-  });
-
-  res.json({ success: true, message: `Vehicle ${vehicleId} successfully deleted.` });
-}));
+// Note: there is deliberately no DELETE /api/fleet/:id -- vehicle master
+// records must never be physically deleted (deleteDurable() enforces this
+// for the 'vehicles' collection). A vehicle sold, disposed of, or its
+// ownership transferred is corrected via PUT /api/fleet/:id/lifecycle
+// (audited, keeps the vehicle's full history) instead.
 
 app.delete('/api/customers/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const customerId = req.params.id;
@@ -3365,8 +3358,15 @@ app.delete('/api/quotations/:id', requireRole('ceo', 'admin'), asyncHandler(asyn
 app.delete('/api/reservations/:id', requireRole('ceo', 'admin'), asyncHandler(async (req, res) => {
   const resId = req.params.id;
   const index = globalStore.reservations.findIndex(r => r.id === resId);
-  if (index === -1) return res.status(404).json({ error: 'Reservation not found' });
+  if (index === -1) return res.status(404).json({ error: 'الحجز غير موجود.' });
   const reservation = globalStore.reservations[index];
+
+  // Real deletion is only safe for a mistaken booking that was never
+  // fulfilled and never took a deposit. A confirmed/active reservation, or
+  // one with money already collected, must be corrected via cancellation
+  // (and deposit refund) rather than physically deleted.
+  const reservationBlockReason = reservationDeletionBlockReason(reservation);
+  if (reservationBlockReason) return res.status(409).json({ error: reservationBlockReason });
 
   const actor = await getRequesterActor(req);
   const reason = (req.body?.reason || req.query?.reason || 'Granular deletion by authorized management') as string;
@@ -3397,6 +3397,65 @@ app.delete('/api/reservations/:id', requireRole('ceo', 'admin'), asyncHandler(as
   });
 
   res.json({ success: true, message: `Reservation ${resId} successfully deleted.` });
+}));
+
+// ----------------------------------------------------
+// CEO/ADMIN CORRECTIONS CENTER ("التصحيحات")
+// ----------------------------------------------------
+// Read-only lists that back a single CEO-only screen for correcting mistakes
+// without weakening the guards above: an incomplete (draft/review) contract
+// or a mistaken (pending/cancelled/no_show, no deposit collected) reservation
+// can be truly deleted; the `deletable` flag mirrors exactly what the guarded
+// DELETE routes above will accept, so the UI never offers a delete button
+// that the server would then reject.
+app.get('/api/corrections/contracts', requireRole('ceo', 'admin'), asyncHandler(async (_req, res) => {
+  const items = globalStore.contracts
+    .filter(c => c.status === 'draft' || c.status === 'review')
+    .map(c => {
+      const blockReason = contractDeletionBlockReason(
+        c,
+        globalStore.payments.filter(p => p.contractId === c.id),
+        globalStore.deposits.filter(d => d.contractId === c.id)
+      );
+      return {
+        id: c.id,
+        contractNumber: c.contractNumber,
+        customerName: c.customerName,
+        vehicleName: c.vehicleName,
+        vehiclePlate: c.vehiclePlate,
+        status: c.status,
+        grandTotal: c.grandTotal,
+        createdAt: c.createdAt,
+        deletable: !blockReason,
+        blockReason
+      };
+    })
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  res.json({ contracts: items });
+}));
+
+app.get('/api/corrections/reservations', requireRole('ceo', 'admin'), asyncHandler(async (_req, res) => {
+  const items = globalStore.reservations
+    .filter(r => r.status === 'pending' || r.status === 'cancelled' || r.status === 'no_show')
+    .map(r => {
+      const blockReason = reservationDeletionBlockReason(r);
+      return {
+        id: r.id,
+        customerName: r.customerName,
+        customerPhone: r.customerPhone,
+        vehicleName: r.vehicleName,
+        vehiclePlate: r.vehiclePlate,
+        status: r.status,
+        depositStatus: r.depositStatus,
+        totalAmount: r.totalAmount,
+        pickupDateTime: r.pickupDateTime,
+        createdAt: r.createdAt,
+        deletable: !blockReason,
+        blockReason
+      };
+    })
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  res.json({ reservations: items });
 }));
 
 // ----------------------------------------------------

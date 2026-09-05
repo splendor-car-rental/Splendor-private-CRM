@@ -80,8 +80,13 @@ export const DEFAULT_EXPENSE_CATEGORIES: ExpenseCategoryDef[] = [
 // ---- Supplier field completeness tiers (rules 5-7) ----
 export const SUPPLIER_FIELD_TIERS: Record<SupplierFieldKey, SupplierFieldTier> = {
   legalName: 'core_mandatory',
-  tradeLicenseNumber: 'core_mandatory',
   phone: 'core_mandatory',
+  // Owner decision (real business review, superseding the earlier starter
+  // default): a trade license is often not on hand yet when a supplier
+  // relationship first starts, and requiring it blocked adding a supplier
+  // at all -- never held back activation or PO eligibility now; still
+  // trackable/completable later like tax registration or bank details.
+  tradeLicenseNumber: 'required_to_complete',
   taxRegistrationNumber: 'required_to_complete',
   bankDetails: 'required_to_complete',
   email: 'required_to_complete',
@@ -99,15 +104,15 @@ export const SUPPLIER_FIELD_TIERS: Record<SupplierFieldKey, SupplierFieldTier> =
 // beyond the always-blocking core_mandatory fields; kept deliberately narrow
 // so this never blocks a real operation the business didn't intend to gate.
 export const SUPPLIER_OPERATION_BLOCKING_FIELDS: Record<SupplierOperationTypeKey, SupplierFieldKey[]> = {
-  vehicle_supply_rental: ['legalName', 'tradeLicenseNumber', 'phone', 'bankDetails'],
-  spare_parts: ['legalName', 'tradeLicenseNumber', 'phone'],
-  maintenance_repair: ['legalName', 'tradeLicenseNumber', 'phone'],
-  tires: ['legalName', 'tradeLicenseNumber', 'phone'],
-  operating_materials: ['legalName', 'tradeLicenseNumber', 'phone'],
-  equipment: ['legalName', 'tradeLicenseNumber', 'phone'],
-  services: ['legalName', 'tradeLicenseNumber', 'phone'],
-  other_purchases: ['legalName', 'tradeLicenseNumber', 'phone'],
-  other: ['legalName', 'tradeLicenseNumber', 'phone']
+  vehicle_supply_rental: ['legalName', 'phone', 'bankDetails'],
+  spare_parts: ['legalName', 'phone'],
+  maintenance_repair: ['legalName', 'phone'],
+  tires: ['legalName', 'phone'],
+  operating_materials: ['legalName', 'phone'],
+  equipment: ['legalName', 'phone'],
+  services: ['legalName', 'phone'],
+  other_purchases: ['legalName', 'phone'],
+  other: ['legalName', 'phone']
 };
 
 // ---- PO approval -- INTERIM SINGLE TIER, see "decisions needing approval" ----

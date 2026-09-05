@@ -23,7 +23,7 @@ export type ViewKey =
   | 'purchase-orders' | 'security' | 'inspections' | 'whatsapp-inbox'
   | 'lease-to-own' | 'vip-tiers' | 'fleet-acquisition-roi' | 'live-radar'
   | 'operations-control-room' | 'corporate-branches' | 'corporate-documents'
-  | 'executive-dashboard';
+  | 'executive-dashboard' | 'corrections-center';
 
 const ALL_VIEWS: ViewKey[] = [
   'dashboard', 'customers', 'leads', 'fleet', 'quotations', 'reservations',
@@ -31,7 +31,7 @@ const ALL_VIEWS: ViewKey[] = [
   'ai-studio', 'test-suite', 'settings', 'procurement', 'purchase-orders', 'security',
   'inspections', 'whatsapp-inbox', 'lease-to-own', 'vip-tiers', 'fleet-acquisition-roi',
   'live-radar', 'operations-control-room', 'corporate-branches', 'corporate-documents',
-  'executive-dashboard'
+  'executive-dashboard', 'corrections-center'
 ];
 
 export const ROLE_VIEWS: Record<UserRole, ViewKey[]> = {

@@ -41,6 +41,7 @@ import { LiveFleetTelematicsMapView } from './components/views/LiveFleetTelemati
 import { OperationsControlRoomView } from './components/views/OperationsControlRoomView';
 import { CorporateBranchPortalView } from './components/views/CorporateBranchPortalView';
 import { ExecutiveDashboardView } from './components/views/ExecutiveDashboardView';
+import { CorrectionsCenterView } from './components/views/CorrectionsCenterView';
 
 const MainLayout: React.FC = () => {
   const { language } = useLanguage();
@@ -79,6 +80,7 @@ const MainLayout: React.FC = () => {
       case 'contracts': return <ContractsOpsView />;
       case 'finance': return <FinanceControlCenterView />;
       case 'executive-dashboard': return <ExecutiveDashboardView />;
+      case 'corrections-center': return <CorrectionsCenterView />;
       case 'tax-filing': return <TaxFilingView />;
       case 'reconciliation':
       case 'bank-reconciliation': return <BankReconciliationView />;

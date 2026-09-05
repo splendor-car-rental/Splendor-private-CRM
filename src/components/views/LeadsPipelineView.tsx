@@ -10,6 +10,7 @@ import { Lead, LeadStatus } from '../../types';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { PhoneText } from '../common/PhoneText';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
 
 export const LeadsPipelineView: React.FC = () => {
   const { language, t } = useLanguage();
@@ -224,14 +225,12 @@ export const LeadsPipelineView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 font-medium mb-1">Phone Number *</label>
-              <input
-                type="text"
+              <PhoneNumberInput
+                label="Phone Number"
                 required
                 value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-[#D4AF37]/50"
-                placeholder="+971 50 000 0000"
+                onChange={(v) => setForm({ ...form, phone: v })}
+                isAr={language === 'ar'}
               />
             </div>
             <div>

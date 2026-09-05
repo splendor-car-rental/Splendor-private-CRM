@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { canEditTollPricing } from '../../config/permissions';
 import { analyzeTollsFinancials, DEFAULT_TOLL_PRICING } from '../../lib/tollCalculations';
 import { TollTransaction, TollType, TollImportBatch } from '../../types';
@@ -376,12 +377,11 @@ const ManualEntryModal: React.FC<{
             </select>
           </div>
           <div>
-            <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{isAr ? 'التاريخ' : 'Date'}</label>
-            <input
-              type="date"
+            <DayMonthYearDateInput
+              label={isAr ? 'التاريخ' : 'Date'}
               value={date}
-              onChange={e => setDate(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:outline-none focus:border-[#D4AF37]/60"
+              onChange={setDate}
+              isAr={isAr}
             />
           </div>
         </div>

@@ -228,12 +228,20 @@ export const SecurityBlocklistView: React.FC = () => {
             </div>
           </div>
           <div>
-            <label className="block text-[11px] text-zinc-400 mb-1">{language === 'ar' ? 'من تاريخ' : 'From date'}</label>
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none" />
+            <DayMonthYearDateInput
+              label={language === 'ar' ? 'من تاريخ' : 'From date'}
+              value={dateFrom}
+              onChange={setDateFrom}
+              isAr={language === 'ar'}
+            />
           </div>
           <div>
-            <label className="block text-[11px] text-zinc-400 mb-1">{language === 'ar' ? 'إلى تاريخ' : 'To date'}</label>
-            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs focus:border-[#D4AF37]/60 focus:outline-none" />
+            <DayMonthYearDateInput
+              label={language === 'ar' ? 'إلى تاريخ' : 'To date'}
+              value={dateTo}
+              onChange={setDateTo}
+              isAr={language === 'ar'}
+            />
           </div>
           {(searchText || dateFrom || dateTo) && (
             <button

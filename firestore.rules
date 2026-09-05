@@ -94,6 +94,13 @@ service cloud.firestore {
     // never read or written directly by any client, including the account owner.
     match /user_mfa/{uid} { allow read, write: if false; }
 
+    // Employee custody/float balances and expense claims -- real money moving
+    // through staff hands, so reads are limited the same as other finance
+    // collections (management + finance only); every mutation stays
+    // server-side through the Four-Eyes approval engine.
+    match /employee_custodies/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+    match /employee_expenses/{id} { allow read: if hasRole(['ceo', 'admin', 'finance']); allow write: if false; }
+
     // No recursive catch-all: every unknown/new collection is denied by default.
   }
 }

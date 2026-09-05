@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../lib/apiFetch';
@@ -19,7 +20,7 @@ interface AddStaffModalProps {
  * source code.
  */
 export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, onCreated }) => {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const { currentUser } = useAuth();
   // A CEO/Admin can only grant a role at their own rank or below -- never
   // more authority than they themselves hold (also enforced server-side).
@@ -101,9 +102,7 @@ export const AddStaffModal: React.FC<AddStaffModalProps> = ({ isOpen, onClose, o
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldPhone')}</label>
-            <input value={phone} onChange={e => setPhone(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-100 text-sm focus:outline-none focus:border-[#D4AF37]/60" />
+            <PhoneNumberInput label={t('staffFieldPhone')} value={phone} onChange={setPhone} isAr={language === 'ar'} />
           </div>
           <div>
             <label className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">{t('staffFieldBranch')}</label>

@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck, Calculator, HandCoins, Wallet, Undo2 } from 'lucide-react';
+import { Truck, ClipboardList, ShieldCheck, Plus, Check, X, Loader2, Search, Ban, PackageCheck, FileEdit, History, Timer, AlertTriangle, ArrowLeftRight, CheckCheck, Calculator, HandCoins, Wallet, Undo2, Coins, RotateCcw } from 'lucide-react';
 import { apiFetch } from '../../lib/apiFetch';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useCRM } from '../../context/CRMContext';
 import { Badge } from '../common/Badge';
 import { PhoneText } from '../common/PhoneText';
+import { PhoneNumberInput } from '../common/PhoneNumberInput';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 import { Modal } from '../common/Modal';
 import { formatDate, formatDateTime } from '../../lib/dateFormat';
-import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver, Debt, DebtSettlementMovement } from '../../types';
+import type { Supplier, PurchaseOrder, SupplierOperationTypeDef, PurchaseOrderAmendmentRequest, PurchaseOrderLineItem, TarsRecord, Contract, LateFeeWaiver, Debt, DebtSettlementMovement, EmployeeCustody, EmployeeExpense, EmployeeExpenseFundingSource, User } from '../../types';
 
 /**
  * Splendor Procurement, Phase 1 -- operator-facing surface.
@@ -77,7 +79,9 @@ const STATUS_BADGE: Record<string, { variant: any; label: string; labelAr: strin
   paid: { variant: 'emerald', label: 'Paid', labelAr: 'مدفوع بالكامل' },
   active: { variant: 'emerald', label: 'Active', labelAr: 'نشط' },
   pending_completion: { variant: 'amber', label: 'Pending completion', labelAr: 'بانتظار الاستكمال' },
-  inactive: { variant: 'zinc', label: 'Inactive', labelAr: 'غير نشط' }
+  inactive: { variant: 'zinc', label: 'Inactive', labelAr: 'غير نشط' },
+  pending_review: { variant: 'amber', label: 'Pending review', labelAr: 'بانتظار المراجعة' },
+  rejected: { variant: 'rose', label: 'Rejected', labelAr: 'مرفوض' }
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -91,16 +95,16 @@ interface ProcurementViewProps {
    * "Procurement & Suppliers" vs "Purchase Orders") that both render this
    * shared workspace open on the tab their label actually promised, instead
    * of always defaulting to Purchase Orders regardless of which was clicked. */
-  initialTab?: 'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts';
+  initialTab?: 'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts' | 'custody';
 }
 
 export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = 'purchase-orders' }) => {
   const { language } = useLanguage();
-  const { currentUser } = useAuth();
+  const { currentUser, staffDirectory } = useAuth();
   const { showToast, customers } = useCRM();
   const isDecider = currentUser.role === 'ceo' || currentUser.role === 'admin';
 
-  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts'>(initialTab);
+  const [tab, setTab] = useState<'suppliers' | 'purchase-orders' | 'approvals' | 'tars' | 'late-fees' | 'debts' | 'custody'>(initialTab);
   const [loading, setLoading] = useState(true);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
@@ -112,6 +116,9 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
   const [debts, setDebts] = useState<Debt[]>([]);
   const [debtTypeDefs, setDebtTypeDefs] = useState<Array<{ key: string; labelEn: string; labelAr: string }>>([]);
   const [paymentMethodDefs, setPaymentMethodDefs] = useState<Array<{ key: string; labelEn: string; labelAr: string }>>([]);
+  const [employeeCustodies, setEmployeeCustodies] = useState<EmployeeCustody[]>([]);
+  const [employeeExpenses, setEmployeeExpenses] = useState<EmployeeExpense[]>([]);
+  const [expenseCategoryDefs, setExpenseCategoryDefs] = useState<Array<{ key: string; labelEn: string; labelAr: string }>>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
@@ -129,6 +136,10 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
   const [newDebtModalOpen, setNewDebtModalOpen] = useState(false);
   const [settlementModalDebt, setSettlementModalDebt] = useState<Debt | null>(null);
   const [correctionModalDebt, setCorrectionModalDebt] = useState<Debt | null>(null);
+  const [issueCustodyModalOpen, setIssueCustodyModalOpen] = useState(false);
+  const [returnModalCustody, setReturnModalCustody] = useState<EmployeeCustody | null>(null);
+  const [submitExpenseModalOpen, setSubmitExpenseModalOpen] = useState(false);
+  const [resubmitModalExpense, setResubmitModalExpense] = useState<EmployeeExpense | null>(null);
 
   // Late-fee calculator state -- purely a display tool until "Request
   // Waiver" is pressed; nothing here is persisted by typing into it.
@@ -150,7 +161,7 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes, lateFeeWaiversRes, debtsRes, debtTypesRes, paymentMethodsRes] = await Promise.all([
+      const [suppliersRes, posRes, approvalsRes, typesRes, tarsRes, tarsEscalationsRes, contractsRes, lateFeeWaiversRes, debtsRes, debtTypesRes, paymentMethodsRes, custodiesRes, expensesRes, expenseCategoriesRes] = await Promise.all([
         apiFetch('/api/suppliers'),
         apiFetch('/api/purchase-orders'),
         apiFetch('/api/procurement/approvals'),
@@ -161,7 +172,10 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
         apiFetch('/api/late-fee-waivers'),
         apiFetch('/api/debts'),
         apiFetch('/api/procurement/debt-types'),
-        apiFetch('/api/procurement/payment-methods')
+        apiFetch('/api/procurement/payment-methods'),
+        apiFetch('/api/employee-custodies'),
+        apiFetch('/api/employee-expenses'),
+        apiFetch('/api/procurement/expense-categories')
       ]);
       if (suppliersRes.ok) setSuppliers(await suppliersRes.json());
       let pos: PurchaseOrder[] = [];
@@ -184,6 +198,9 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
       if (debtsRes.ok) setDebts(await debtsRes.json());
       if (debtTypesRes.ok) setDebtTypeDefs(await debtTypesRes.json());
       if (paymentMethodsRes.ok) setPaymentMethodDefs(await paymentMethodsRes.json());
+      if (custodiesRes.ok) setEmployeeCustodies(await custodiesRes.json());
+      if (expensesRes.ok) setEmployeeExpenses(await expensesRes.json());
+      if (expenseCategoriesRes.ok) setExpenseCategoryDefs(await expenseCategoriesRes.json());
 
       // Only fetch amendment history for POs that actually have any --
       // most never do, so this stays cheap rather than N fetches per load.
@@ -513,6 +530,7 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
           { id: 'tars', label: 'TARS', icon: <Timer className="w-3.5 h-3.5" /> },
           { id: 'late-fees', label: language === 'ar' ? 'رسوم التأخير' : 'Late Fees', icon: <HandCoins className="w-3.5 h-3.5" /> },
           { id: 'debts', label: language === 'ar' ? 'الديون' : 'Debts', icon: <Wallet className="w-3.5 h-3.5" /> },
+          { id: 'custody', label: language === 'ar' ? 'عهدة الموظفين' : 'Employee Custody', icon: <Coins className="w-3.5 h-3.5" /> },
           { id: 'approvals', label: `${language === 'ar' ? 'الموافقات' : 'Approvals'} (${pendingApprovals.length})`, icon: <ShieldCheck className="w-3.5 h-3.5" /> }
         ].map(item => (
           <button
@@ -974,6 +992,117 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
         </div>
       )}
 
+      {tab === 'custody' && (
+        <div className="space-y-6">
+          <div>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <Coins className="w-4 h-4 text-[#D4AF37]" />
+                {language === 'ar' ? 'عهدة الموظفين النقدية' : 'Employee Custody Floats'}
+              </h3>
+              <button
+                onClick={() => setIssueCustodyModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {language === 'ar' ? 'صرف/تعزيز عهدة' : 'Issue/Top-up Float'}
+              </button>
+            </div>
+            <p className="text-zinc-500 mb-3">
+              {language === 'ar'
+                ? 'صرف مبلغ إلى عهدة موظف يمر بموافقة رباعية العين مثل أي حركة مالية أخرى؛ رد الباقي هو مجرد توثيق لواقعة (لا يحتاج موافقة).'
+                : 'Issuing cash into an employee float goes through the same Four-Eyes approval as any other disbursement; returning leftover cash just records a fact (no approval needed).'}
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {employeeCustodies.map(c => (
+                <div key={c.id} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold text-zinc-100 truncate">{c.employeeName}</p>
+                    <span className="font-mono text-[#f5d97f] font-bold">{c.currentBalance.toLocaleString()} AED</span>
+                  </div>
+                  <p className="text-zinc-500 mt-1 font-mono">{c.id}</p>
+                  <div className="mt-2.5 space-y-1">
+                    {c.movements.slice(-3).reverse().map(m => (
+                      <p key={m.id} className="text-zinc-600 text-[10px]">
+                        {m.type} {m.type === 'expense' || m.type === 'amount_returned' ? '−' : '+'}{m.amount.toLocaleString()} · {m.recordedByName}
+                      </p>
+                    ))}
+                  </div>
+                  {c.currentBalance > 0 && (
+                    <button
+                      onClick={() => setReturnModalCustody(c)}
+                      className="mt-2.5 flex items-center gap-1.5 text-[11px] font-semibold text-sky-300 hover:text-sky-200"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      {language === 'ar' ? 'تسجيل رد مبلغ' : 'Record a Return'}
+                    </button>
+                  )}
+                </div>
+              ))}
+              {employeeCustodies.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد عُهد نقدية بعد.' : 'No custody floats yet.'}</p>}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <HandCoins className="w-4 h-4 text-[#D4AF37]" />
+                {language === 'ar' ? 'مصروفات الموظفين' : 'Employee Expenses'}
+              </h3>
+              <button
+                onClick={() => setSubmitExpenseModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#b39029] text-zinc-950 font-semibold shadow-md shadow-[#D4AF37]/20 hover:brightness-110 active:scale-95 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {language === 'ar' ? 'تسجيل مصروف' : 'Submit Expense'}
+              </button>
+            </div>
+            <div className="space-y-2.5">
+              {employeeExpenses.map(e => (
+                <div key={e.id} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-zinc-100 font-mono">{e.id}</p>
+                      <StatusBadge status={e.status} />
+                      <Badge variant="zinc" size="sm">{e.fundingSource === 'custody_float' ? (language === 'ar' ? 'من العهدة' : 'Custody Float') : (language === 'ar' ? 'من مال الموظف' : 'Employee\'s Own Money')}</Badge>
+                      {e.duplicateWarning && <Badge variant="amber" size="sm">{language === 'ar' ? 'تكرار محتمل' : 'Possible duplicate'}</Badge>}
+                    </div>
+                    <p className="text-zinc-400">{e.employeeName} · {formatDate(e.date)}</p>
+                  </div>
+                  <p className="text-zinc-500 mt-1">{e.category === 'other' ? e.categoryOther : e.category}{e.vendorOrPartyName ? ` — ${e.vendorOrPartyName}` : ''}</p>
+                  <div className="mt-2 flex items-center gap-4 flex-wrap">
+                    <p className="text-zinc-400">{language === 'ar' ? 'المبلغ:' : 'Amount:'} <span className="font-mono text-[#f5d97f]">{e.amount.toLocaleString()} AED</span></p>
+                    {typeof e.amountOwedToEmployee === 'number' && (
+                      <p className="text-zinc-400">{language === 'ar' ? 'مستحق للموظف:' : 'Owed to employee:'} <span className="font-mono text-emerald-400">{e.amountOwedToEmployee.toLocaleString()} AED</span></p>
+                    )}
+                  </div>
+                  {e.duplicateWarning && (
+                    <p className="text-amber-400 mt-1.5 text-[11px]">
+                      {language === 'ar' ? `تشبه المصروف ${e.duplicateWarning.possibleDuplicateOfExpenseId} -- للمراجعة فقط، لم يُمنع.` : `Resembles expense ${e.duplicateWarning.possibleDuplicateOfExpenseId} -- flagged for review only, never blocked.`}
+                    </p>
+                  )}
+                  {e.status === 'rejected' && (e.rejectionHistory || []).length > 0 && (
+                    <div className="mt-2 p-2 rounded-lg bg-rose-950/20 border border-rose-500/30">
+                      {(e.rejectionHistory || []).slice(-1).map((r, i) => (
+                        <p key={i} className="text-rose-300 text-[11px]">{r.reason} — {r.rejectedByName}</p>
+                      ))}
+                      <button
+                        onClick={() => setResubmitModalExpense(e)}
+                        className="mt-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-sky-300 hover:text-sky-200"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        {language === 'ar' ? 'إعادة تقديم' : 'Resubmit'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {employeeExpenses.length === 0 && <p className="text-zinc-500">{language === 'ar' ? 'لا توجد مصروفات موظفين بعد.' : 'No employee expenses yet.'}</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab === 'approvals' && (
         <div className="space-y-6">
           <div>
@@ -1106,6 +1235,31 @@ export const ProcurementView: React.FC<ProcurementViewProps> = ({ initialTab = '
         onClose={() => setCorrectionModalDebt(null)}
         onCreated={async () => { setCorrectionModalDebt(null); await load(); }}
       />
+      <IssueCustodyModal
+        isOpen={issueCustodyModalOpen}
+        onClose={() => setIssueCustodyModalOpen(false)}
+        staffDirectory={staffDirectory}
+        existingCustodies={employeeCustodies}
+        onCreated={async () => { setIssueCustodyModalOpen(false); await load(); }}
+      />
+      <CustodyReturnModal
+        custody={returnModalCustody}
+        onClose={() => setReturnModalCustody(null)}
+        onCreated={async () => { setReturnModalCustody(null); await load(); }}
+      />
+      <SubmitExpenseModal
+        isOpen={submitExpenseModalOpen}
+        onClose={() => setSubmitExpenseModalOpen(false)}
+        staffDirectory={staffDirectory}
+        employeeCustodies={employeeCustodies}
+        expenseCategoryDefs={expenseCategoryDefs}
+        onCreated={async () => { setSubmitExpenseModalOpen(false); await load(); }}
+      />
+      <ResubmitExpenseModal
+        expense={resubmitModalExpense}
+        onClose={() => setResubmitModalExpense(null)}
+        onCreated={async () => { setResubmitModalExpense(null); await load(); }}
+      />
       <Modal
         isOpen={Boolean(statementSupplier)}
         onClose={() => { setStatementSupplier(null); setStatementData(null); }}
@@ -1190,12 +1344,17 @@ const NewSupplierModal: React.FC<{ isOpen: boolean; onClose: () => void; onCreat
           <input required value={legalName} onChange={e => setLegalName(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
         </div>
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الرخصة التجارية *' : 'Trade license number *'}</label>
-          <input required value={tradeLicenseNumber} onChange={e => setTradeLicenseNumber(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الرخصة التجارية (اختياري)' : 'Trade license number (optional)'}</label>
+          <input value={tradeLicenseNumber} onChange={e => setTradeLicenseNumber(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
         </div>
         <div>
-          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'رقم الهاتف *' : 'Phone *'}</label>
-          <input required value={phone} onChange={e => setPhone(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <PhoneNumberInput
+            label={language === 'ar' ? 'رقم الهاتف' : 'Phone'}
+            required
+            value={phone}
+            onChange={setPhone}
+            isAr={language === 'ar'}
+          />
         </div>
         <p className="text-zinc-500">
           {language === 'ar'
@@ -1993,6 +2152,361 @@ const DebtCorrectionModal: React.FC<{
           </button>
           <button type="submit" disabled={submitting || newAmount <= 0 || !reason.trim()} className="px-5 py-2 rounded-xl bg-sky-500 text-zinc-950 font-semibold disabled:opacity-50">
             {language === 'ar' ? 'إرسال طلب التصحيح' : 'Submit correction request'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const IssueCustodyModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  staffDirectory: User[];
+  existingCustodies: EmployeeCustody[];
+  onCreated: () => void;
+}> = ({ isOpen, onClose, staffDirectory, existingCustodies, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [employeeId, setEmployeeId] = useState('');
+  const [amount, setAmount] = useState<number>(0);
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) { setEmployeeId(''); setAmount(0); setReason(''); }
+  }, [isOpen]);
+
+  const activeStaff = staffDirectory.filter(u => u.status === 'active');
+  const employee = activeStaff.find(u => u.id === employeeId);
+  const existing = existingCustodies.find(c => c.employeeId === employeeId);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!employee || amount <= 0 || !reason.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch('/api/employee-custodies/issue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employeeId: employee.id, employeeName: employee.name, amount, reason: reason.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to request this issuance.');
+      showToast(language === 'ar' ? 'تم إرسال طلب الصرف للموافقة' : 'Issuance request sent for approval', `${employee.name} — ${amount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل الطلب' : 'Request failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={language === 'ar' ? 'صرف/تعزيز عهدة موظف' : 'Issue/Top-up Employee Float'}
+      subtitle={language === 'ar'
+        ? 'يفتح عهدة جديدة عند أول صرف لهذا الموظف، أو يعزز الرصيد الحالي. يمر بموافقة رباعية العين قبل التنفيذ.'
+        : 'Opens a new float on this employee\'s first issuance, or tops up the existing one. Goes through Four-Eyes approval before it takes effect.'}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الموظف *' : 'Employee *'}</label>
+          <select required value={employeeId} onChange={e => setEmployeeId(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر موظفاً --' : '-- Select an employee --'}</option>
+            {activeStaff.map(u => <option key={u.id} value={u.id}>{language === 'ar' && u.nameAr ? u.nameAr : u.name} — {u.role}</option>)}
+          </select>
+          {existing && (
+            <p className="text-[10px] text-zinc-500 mt-1">
+              {language === 'ar' ? `يملك عهدة حالية (${existing.id}) برصيد ${existing.currentBalance.toLocaleString()} AED — سيُضاف هذا المبلغ إليها.` : `Already has a float (${existing.id}) with a balance of ${existing.currentBalance.toLocaleString()} AED — this amount will be added to it.`}
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ *' : 'Amount *'}</label>
+          <input type="number" min={0.01} step="0.01" required value={amount} onChange={e => setAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'السبب *' : 'Reason *'}</label>
+          <input required value={reason} onChange={e => setReason(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !employee || amount <= 0 || !reason.trim()} className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'إرسال للموافقة' : 'Submit for approval'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const CustodyReturnModal: React.FC<{
+  custody: EmployeeCustody | null;
+  onClose: () => void;
+  onCreated: () => void;
+}> = ({ custody, onClose, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [amount, setAmount] = useState<number>(0);
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (custody) { setAmount(custody.currentBalance); setNote(''); }
+  }, [custody]);
+
+  if (!custody) return null;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (amount <= 0 || amount > custody.currentBalance) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/employee-custodies/${encodeURIComponent(custody.id)}/return`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, note: note.trim() || undefined })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to record this return.');
+      showToast(language === 'ar' ? 'تم تسجيل الرد' : 'Return recorded', `${amount.toLocaleString()} AED — ${language === 'ar' ? 'المتبقي:' : 'remaining:'} ${data.currentBalance.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل التسجيل' : 'Recording failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={!!custody}
+      onClose={onClose}
+      title={language === 'ar' ? 'تسجيل رد مبلغ من العهدة' : 'Record a Custody Return'}
+      subtitle={language === 'ar' ? `${custody.employeeName} — الرصيد الحالي: ${custody.currentBalance.toLocaleString()} AED` : `${custody.employeeName} — current balance: ${custody.currentBalance.toLocaleString()} AED`}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ المرتجع *' : 'Amount returned *'}</label>
+          <input type="number" min={0.01} max={custody.currentBalance} step="0.01" required value={amount} onChange={e => setAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          <p className="text-[10px] text-zinc-500 mt-1">{language === 'ar' ? 'لا يمكن أن يتجاوز الرصيد الحالي -- ولا يحتاج موافقة، فهو توثيق لواقعة.' : 'Cannot exceed the current balance -- no approval needed, this just records a fact.'}</p>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'ملاحظة' : 'Note'}</label>
+          <input value={note} onChange={e => setNote(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || amount <= 0 || amount > custody.currentBalance} className="px-5 py-2 rounded-xl bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'تسجيل' : 'Record'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const SubmitExpenseModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  staffDirectory: User[];
+  employeeCustodies: EmployeeCustody[];
+  expenseCategoryDefs: Array<{ key: string; labelEn: string; labelAr: string }>;
+  onCreated: () => void;
+}> = ({ isOpen, onClose, staffDirectory, employeeCustodies, expenseCategoryDefs, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [employeeId, setEmployeeId] = useState('');
+  const [fundingSource, setFundingSource] = useState<EmployeeExpenseFundingSource | ''>('');
+  const [category, setCategory] = useState('');
+  const [categoryOther, setCategoryOther] = useState('');
+  const [amount, setAmount] = useState<number>(0);
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [vendorOrPartyName, setVendorOrPartyName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setEmployeeId(''); setFundingSource(''); setCategory(''); setCategoryOther('');
+      setAmount(0); setDate(new Date().toISOString().slice(0, 10)); setVendorOrPartyName('');
+    }
+  }, [isOpen]);
+
+  const activeStaff = staffDirectory.filter(u => u.status === 'active');
+  const employee = activeStaff.find(u => u.id === employeeId);
+  const custody = employeeCustodies.find(c => c.employeeId === employeeId);
+  const valid = !!employee && !!fundingSource && !!category && (category !== 'other' || categoryOther.trim()) && amount > 0 && !!date && (fundingSource !== 'custody_float' || !!custody);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!valid || !employee) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch('/api/employee-expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId: employee.id,
+          employeeName: employee.name,
+          custodyId: fundingSource === 'custody_float' ? custody?.id : undefined,
+          fundingSource,
+          category,
+          categoryOther: category === 'other' ? categoryOther.trim() : undefined,
+          amount,
+          date,
+          vendorOrPartyName: vendorOrPartyName.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to submit this expense.');
+      showToast(language === 'ar' ? 'تم تسجيل المصروف للمراجعة' : 'Expense submitted for review', `${employee.name} — ${amount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشل التسجيل' : 'Submission failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={language === 'ar' ? 'تسجيل مصروف موظف' : 'Submit an Employee Expense'}
+      subtitle={language === 'ar'
+        ? 'يبقى معلقاً حتى الموافقة -- لا يُخصم من العهدة إلا بعد الاعتماد.'
+        : 'Stays pending until approved -- never debits the float until it is.'}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الموظف *' : 'Employee *'}</label>
+          <select required value={employeeId} onChange={e => setEmployeeId(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر موظفاً --' : '-- Select an employee --'}</option>
+            {activeStaff.map(u => <option key={u.id} value={u.id}>{language === 'ar' && u.nameAr ? u.nameAr : u.name} — {u.role}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'مصدر التمويل *' : 'Funding source *'}</label>
+          <select required value={fundingSource} onChange={e => setFundingSource(e.target.value as EmployeeExpenseFundingSource)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر مصدراً --' : '-- Select a source --'}</option>
+            <option value="custody_float">{language === 'ar' ? 'من عهدة الموظف' : 'From employee\'s custody float'}</option>
+            <option value="employee_own_money">{language === 'ar' ? 'من مال الموظف الخاص' : 'Employee\'s own money'}</option>
+          </select>
+          {fundingSource === 'custody_float' && employeeId && !custody && (
+            <p className="text-[10px] text-rose-400 mt-1">{language === 'ar' ? 'لا توجد عهدة مفتوحة لهذا الموظف بعد.' : 'This employee has no open custody float yet.'}</p>
+          )}
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الفئة *' : 'Category *'}</label>
+          <select required value={category} onChange={e => setCategory(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100">
+            <option value="">{language === 'ar' ? '-- اختر فئة --' : '-- Select a category --'}</option>
+            {expenseCategoryDefs.map(c => <option key={c.key} value={c.key}>{language === 'ar' ? c.labelAr : c.labelEn}</option>)}
+          </select>
+        </div>
+        {category === 'other' && (
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'وصف الفئة الأخرى *' : 'Describe the other category *'}</label>
+            <input required value={categoryOther} onChange={e => setCategoryOther(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ *' : 'Amount *'}</label>
+            <input type="number" min={0.01} step="0.01" required value={amount} onChange={e => setAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+          </div>
+          <div>
+            <DayMonthYearDateInput
+              label={language === 'ar' ? 'التاريخ' : 'Date'}
+              required
+              value={date}
+              onChange={setDate}
+              isAr={language === 'ar'}
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'الجهة/المورد' : 'Vendor/party'}</label>
+          <input value={vendorOrPartyName} onChange={e => setVendorOrPartyName(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || !valid} className="px-5 py-2 rounded-xl bg-[#D4AF37] text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'تسجيل للمراجعة' : 'Submit for review'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+const ResubmitExpenseModal: React.FC<{
+  expense: EmployeeExpense | null;
+  onClose: () => void;
+  onCreated: () => void;
+}> = ({ expense, onClose, onCreated }) => {
+  const { language } = useLanguage();
+  const { showToast } = useCRM();
+  const [amount, setAmount] = useState<number>(0);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (expense) setAmount(expense.amount);
+  }, [expense]);
+
+  if (!expense) return null;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (amount <= 0) return;
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/employee-expenses/${encodeURIComponent(expense.id)}/resubmit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to resubmit this expense.');
+      showToast(language === 'ar' ? 'تمت إعادة التقديم' : 'Resubmitted', `${expense.id} — ${amount.toLocaleString()} AED`);
+      onCreated();
+    } catch (err: any) {
+      showToast(language === 'ar' ? 'فشلت إعادة التقديم' : 'Resubmission failed', err?.message || '');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={!!expense}
+      onClose={onClose}
+      title={language === 'ar' ? 'إعادة تقديم مصروف' : 'Resubmit an Expense'}
+      subtitle={language === 'ar' ? `${expense.id} -- سجل الرفض السابق يبقى محفوظاً.` : `${expense.id} -- the prior rejection stays on its history.`}
+      maxWidth="sm"
+    >
+      <form onSubmit={submit} className="space-y-4 text-xs">
+        <div>
+          <label className="block text-zinc-400 font-medium mb-1">{language === 'ar' ? 'المبلغ *' : 'Amount *'}</label>
+          <input type="number" min={0.01} step="0.01" required value={amount} onChange={e => setAmount(Number(e.target.value))} className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-100" />
+        </div>
+        <div className="pt-3 border-t border-zinc-800 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400">
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button type="submit" disabled={submitting || amount <= 0} className="px-5 py-2 rounded-xl bg-sky-500 text-zinc-950 font-semibold disabled:opacity-50">
+            {language === 'ar' ? 'إعادة تقديم' : 'Resubmit'}
           </button>
         </div>
       </form>

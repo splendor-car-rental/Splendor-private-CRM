@@ -13,6 +13,7 @@ import { formatDate, formatDateTime, formatPhoneNumber } from '../../lib/dateFor
 import { downloadElementAsPdf, printElementDirectly } from '../../lib/pdfDownloader';
 import { OfficialLetterheadLayout } from '../common/OfficialLetterheadLayout';
 import { CorporateStampMark } from '../common/CorporateStampMark';
+import { DayMonthYearDateInput } from '../common/DayMonthYearDateInput';
 
 interface ContractExtensionModalProps {
   isOpen: boolean;
@@ -456,19 +457,14 @@ export const ContractExtensionModal: React.FC<ContractExtensionModalProps> = ({
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-zinc-300 mb-1.5">
-                      {isAr ? 'تاريخ نهاية العقد الجديد * (يوم/شهر/سنة)' : 'New End Date * (DD/MM/YYYY)'}
-                    </label>
-                    <input
-                      type="date"
+                    <DayMonthYearDateInput
+                      label={isAr ? 'تاريخ نهاية العقد الجديد' : 'New End Date'}
+                      required
                       value={newEndDate}
                       min={currentContract?.endDateTime ? currentContract.endDateTime.split('T')[0] : undefined}
-                      onChange={e => setNewEndDate(e.target.value)}
-                      className="w-full bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm rounded-xl p-3 focus:outline-none focus:border-[#D4AF37] font-bold"
+                      onChange={setNewEndDate}
+                      isAr={isAr}
                     />
-                    <p className="text-[11px] text-zinc-500 mt-1 font-mono">
-                      {isAr ? 'المحدد:' : 'Selected:'} <strong className="text-amber-300 font-bold">{formatDate(newEndDate)}</strong>
-                    </p>
                   </div>
 
                   <div>

@@ -62,7 +62,21 @@ vi.mock('firebase-admin', () => {
     delete: async () => { collectionOf(collectionName).delete(id); }
   });
   const firestoreObj: any = {
-    collection: (name: string) => ({ doc: (id: string) => makeDocRef(name, id), where: () => firestoreObj.collection(name) }),
+    // get() on the collection itself (not a doc) is needed because
+    // server.ts's hydrateStoreFromFirestore() now runs on every /api
+    // request, not just /fleet -- it sweeps every collection with a plain
+    // collection().get(). Nothing in this suite seeds those collections
+    // through this mock, so an empty snapshot is the correct, real-Firestore
+    // equivalent behavior (never an error).
+    collection: (name: string) => ({
+      doc: (id: string) => makeDocRef(name, id),
+      where: () => firestoreObj.collection(name),
+      get: async () => {
+        const col = collectionOf(name);
+        const docs = Array.from(col.entries()).map(([id, data]) => ({ id, data: () => data }));
+        return { empty: docs.length === 0, docs };
+      }
+    }),
     runTransaction: async (fn: any) => {
       const applySet = (ref: any, data: any, opts?: { merge?: boolean }) => {
         const col = collectionOf(ref.__collection);
